@@ -161,6 +161,7 @@ object AgentNotifications {
       .setContentTitle(title).setContentText(body)
       .setStyle(NotificationCompat.BigTextStyle().bigText(body))
       .setAutoCancel(true)
+      .setGroup(data["alert_group"]?.takeIf { it.isNotBlank() } ?: ALERT_TAG)
       .setContentIntent(contentIntent(context, scheme, data["alert_path"], id))
       .build()
     manager(context).notify(ALERT_TAG, id, notification)
