@@ -90,7 +90,7 @@ overrides:
 packageExtensionsChecksum: sha256-SDIQJ+DI66crEuHZ0SJCq0oT4qzlp9dMr+bXmMLLF/w=
 
 patchedDependencies:
-  '@clerk/expo@4.6.8': a82bb41039ee88a290a87d4ab58be7be4c49fa338603b17ea646e1ec140a1cfb
+  '@clerk/expo@4.6.8': b8b22ab733de5bea846ad9e88046c10582352fe9ad86f314f368b2a823f0f281
   '@effect/vitest@4.0.0-rc.115': 172bd95ef73a13d322888984415d5d18d9d2aa8e13fa529eac235efac837e902
   '@expo/metro-config@58.0.3': 67ae02f2d1fdab8a58132bf0c0f7d10c6021294333579929d62cf19b4aa87991
   '@ff-labs/fff-node@0.9.4': c4e3cc2420ceb9dc650f9d189e9c24baf7e83f342998bacda5f459a4ce7927a8
@@ -240,7 +240,7 @@ importers:
     dependencies:
       '@clerk/expo':
         specifier: 4.6.8
-        version: 4.6.8(patch_hash=a82bb41039ee88a290a87d4ab58be7be4c49fa338603b17ea646e1ec140a1cfb)(cc2f4072e85ff6a3028cf53a494cd590)
+        version: 4.6.8(patch_hash=b8b22ab733de5bea846ad9e88046c10582352fe9ad86f314f368b2a823f0f281)(cc2f4072e85ff6a3028cf53a494cd590)
       '@effect/atom-react':
         specifier: 4.0.0-rc.115
         version: 4.0.0-rc.115(effect@4.0.0-rc.115(patch_hash=0dfc4bb8ebd80fb3e06b91ef61346f5259517ab0f2437644fe95ae531084b1f5))(react@19.2.3)(scheduler@0.27.0)
@@ -12074,7 +12074,7 @@ snapshots:
       electron-store: 8.2.0
       react-dom: 19.2.6(react@19.2.6)
 
-  '@clerk/expo@4.6.8(patch_hash=a82bb41039ee88a290a87d4ab58be7be4c49fa338603b17ea646e1ec140a1cfb)(cc2f4072e85ff6a3028cf53a494cd590)':
+  '@clerk/expo@4.6.8(patch_hash=b8b22ab733de5bea846ad9e88046c10582352fe9ad86f314f368b2a823f0f281)(cc2f4072e85ff6a3028cf53a494cd590)':
     dependencies:
       '@clerk/clerk-js': 6.32.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@clerk/react': 6.16.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
