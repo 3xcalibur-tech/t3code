@@ -44,7 +44,7 @@ export function useDeregisterEnvironment() {
     pending.current = true;
     try {
       const confirmed = await requestConfirmDialog(
-        `Deregister ${environment.label}?\nYou’ll lose T3 Connect access to this device. To reconnect, set up T3 Connect on that device again.`,
+        `Deregister ${environment.label}?\nThis device will be removed from T3 Connect. To reconnect, set up T3 Connect on that device again.`,
         { variant: "destructive" },
       );
       if (confirmed !== true) return;

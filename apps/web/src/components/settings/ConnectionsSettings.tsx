@@ -113,7 +113,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { QRCodeSvg } from "../ui/qr-code";
 import { Spinner } from "../ui/spinner";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1649,6 +1649,7 @@ function SavedBackendListRow({
             environmentId={environmentId}
             serverConfig={environment.serverConfig}
           />
+          <MenuSeparator />
           {environment.entry.target._tag === "RelayConnectionTarget" ? (
             <MenuItem
               variant="destructive"

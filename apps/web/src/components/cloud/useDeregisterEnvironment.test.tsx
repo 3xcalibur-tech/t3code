@@ -83,7 +83,7 @@ describe("environment deregistration", () => {
       status: "confirming",
       variant: "destructive",
       message:
-        "Deregister Old laptop?\nYou’ll lose T3 Connect access to this device. To reconnect, set up T3 Connect on that device again.",
+        "Deregister Old laptop?\nThis device will be removed from T3 Connect. To reconnect, set up T3 Connect on that device again.",
     });
     expect(fixture.deregister).not.toHaveBeenCalled();
     await confirm(false);
