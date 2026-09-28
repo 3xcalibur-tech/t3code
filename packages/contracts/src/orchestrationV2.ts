@@ -488,6 +488,24 @@ export const OrchestrationV2DelegatedCompletionCohort = Schema.Struct({
 export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
+/** Background work that restart recovery cancelled; the next provider turn is told once. */
+export const OrchestrationV2RestartCancelledBackgroundWork = Schema.Struct({
+  kind: Schema.Literals(["subagent", "shell", "monitor", "task"]),
+  label: TrimmedNonEmptyString,
+  /** Stable identity (turn item or provider task id) so same-named work is not merged. */
+  id: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2RestartCancelledBackgroundWork =
+  typeof OrchestrationV2RestartCancelledBackgroundWork.Type;
+
+/** Replaces a run's recorded restart-cancelled work without touching its lifecycle. */
+export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
+  runId: RunId,
+  restartCancelledBackgroundWork: Schema.Array(OrchestrationV2RestartCancelledBackgroundWork),
+});
+export type OrchestrationV2RunBackgroundWorkCancelled =
+  typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
+
 export const OrchestrationV2Run = Schema.Struct({
   id: RunId,
   threadId: ThreadId,
@@ -509,6 +527,13 @@ export const OrchestrationV2Run = Schema.Struct({
   contextHandoffId: Schema.NullOr(ContextHandoffId),
   /** Links server-generated restart continuations to the interrupted run. */
   restartContinuationOfRunId: Schema.optional(RunId),
+  /**
+   * Set by restart recovery on the thread's latest started run. Delivered to
+   * the provider with the first later run that reaches a provider turn.
+   */
+  restartCancelledBackgroundWork: Schema.optional(
+    Schema.Array(OrchestrationV2RestartCancelledBackgroundWork),
+  ),
   sourcePlanRef: Schema.optional(
     Schema.Struct({
       threadId: ThreadId,
@@ -1379,6 +1404,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("run.background-work-cancelled"),
+    payload: OrchestrationV2RunBackgroundWorkCancelled,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run-attempt.created"),
     payload: OrchestrationV2RunAttempt,
   }),
@@ -2158,6 +2188,11 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("run.updated"),
     payload: OrchestrationV2RunJson,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("run.background-work-cancelled"),
+    payload: OrchestrationV2RunBackgroundWorkCancelled,
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
