@@ -44,7 +44,7 @@ export function useDeregisterEnvironment() {
     pending.current = true;
     try {
       const confirmed = await requestConfirmDialog(
-        `Deregister ${environment.label}?\nThis removes the device from your T3 Connect account, revokes its T3 Connect access on all your devices, removes its managed tunnel, and frees a host slot. Saved local connections are kept. To use T3 Connect again, register it from the host.`,
+        `Deregister ${environment.label}?\nThis device will be removed from T3 Connect.`,
         { variant: "destructive" },
       );
       if (confirmed !== true) return;

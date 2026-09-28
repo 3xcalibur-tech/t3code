@@ -77,16 +77,13 @@ async function confirm(confirmed: boolean) {
 }
 
 describe("environment deregistration", () => {
-  it("requires confirmation with the account-wide consequences, and cancel does nothing", async () => {
+  it("names the device in its confirmation, and cancel does nothing", async () => {
     const operation = controller.deregisterEnvironment(environment);
     expect(readConfirmDialogState()).toMatchObject({
       status: "confirming",
       variant: "destructive",
-      message: expect.stringContaining("Deregister Old laptop?"),
+      message: "Deregister Old laptop?\nThis device will be removed from T3 Connect.",
     });
-    const state = readConfirmDialogState();
-    expect(state.status !== "idle" && state.message).toContain("on all your devices");
-    expect(state.status !== "idle" && state.message).toContain("Saved local connections are kept");
     expect(fixture.deregister).not.toHaveBeenCalled();
     await confirm(false);
     await operation;
