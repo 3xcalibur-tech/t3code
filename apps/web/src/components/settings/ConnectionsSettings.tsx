@@ -173,6 +173,7 @@ import {
   ServerUpdatesAction,
   type ServerUpdateTarget,
 } from "../ServerUpdateAction";
+import { useDeregisterEnvironment } from "../cloud/useDeregisterEnvironment";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import {
@@ -1429,6 +1430,8 @@ type SavedBackendListRowProps = {
   removingEnvironmentId: EnvironmentId | null;
   onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
   onRemove: (environment: EnvironmentPresentation) => void;
+  onDeregister: (environment: EnvironmentPresentation) => void;
+  deregisteringId: EnvironmentId | null;
 };
 
 /**
@@ -1471,13 +1474,15 @@ function savedBackendStatus(environment: EnvironmentPresentation): {
 /**
  * One added machine in the Environments list. The switch is the main action;
  * the update icon appears only when that machine can take an update; the
- * row menu holds the icon override, trace ID, and removal.
+ * row menu holds the icon override, deregistration, trace ID, and local removal.
  */
 function SavedBackendListRow({
   environment,
   removingEnvironmentId,
   onSetEnabled,
   onRemove,
+  onDeregister,
+  deregisteringId,
 }: SavedBackendListRowProps) {
   const environmentId = environment.environmentId;
   const unsupported = environment.connection.phase === "unsupported";
@@ -1643,6 +1648,15 @@ function SavedBackendListRow({
             environmentId={environmentId}
             serverConfig={environment.serverConfig}
           />
+          {environment.entry.target._tag === "RelayConnectionTarget" ? (
+            <MenuItem
+              variant="destructive"
+              disabled={deregisteringId !== null}
+              onClick={() => onDeregister(environment)}
+            >
+              {deregisteringId === environmentId ? "Deregistering…" : "Deregister device"}
+            </MenuItem>
+          ) : null}
           {errorTraceId ? (
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
           ) : null}
@@ -1807,7 +1821,11 @@ function EmptyRemoteEnvironments({ cloudEnabled = true }: { readonly cloudEnable
 function CloudRemoteEnvironmentRows({
   primaryEnvironmentId,
   savedEnvironments,
+  onDeregister,
+  deregisteringId,
 }: {
+  readonly onDeregister: ReturnType<typeof useDeregisterEnvironment>["deregisterEnvironment"];
+  readonly deregisteringId: EnvironmentId | null;
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
 }) {
@@ -1816,6 +1834,8 @@ function CloudRemoteEnvironmentRows({
       primaryEnvironmentId={primaryEnvironmentId}
       savedEnvironments={savedEnvironments}
       empty={<EmptyRemoteEnvironments />}
+      onDeregister={onDeregister}
+      deregisteringId={deregisteringId}
     />
   ) : savedEnvironments.length === 0 ? (
     <EmptyRemoteEnvironments cloudEnabled={false} />
@@ -1823,6 +1843,7 @@ function CloudRemoteEnvironmentRows({
 }
 
 export function ConnectionsSettings() {
+  const { deregisterEnvironment, deregisteringId } = useDeregisterEnvironment();
   const desktopBridge = window.desktopBridge;
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { environments } = useEnvironments();
@@ -3755,11 +3776,15 @@ export function ConnectionsSettings() {
             removingEnvironmentId={removingSavedEnvironmentId}
             onSetEnabled={handleSetSavedBackendEnabled}
             onRemove={handleRemoveSavedBackend}
+            onDeregister={deregisterEnvironment}
+            deregisteringId={deregisteringId}
           />
         ))}
         <CloudRemoteEnvironmentRows
           primaryEnvironmentId={primaryEnvironmentId}
           savedEnvironments={savedEnvironments}
+          onDeregister={deregisterEnvironment}
+          deregisteringId={deregisteringId}
         />
       </SettingsSection>
       <LoadBalancingSettings environments={loadBalancingEnvironments} />

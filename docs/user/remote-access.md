@@ -153,10 +153,12 @@ management is available through `t3 auth --help`.
 A session with an open connection stays listed after its access credential
 expires.
 
-To remove an environment from T3 Connect, open your account menu's **T3 Connect**
-page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
-revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped.
+To remove an environment from T3 Connect on web or desktop, open **Settings →
+Connections** and choose **Deregister device** from its environment menu. You can
+also choose **Deregister** on your account menu's **T3 Connect** page or in
+**Settings → T3 Connect** on mobile. Confirming revokes its cloud access and frees
+its host space even when the environment is offline or has been wiped. Saved
+local connections are kept; **Remove from this device** forgets those separately.
 
 When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
 tunnel after it stays offline for several minutes. The environment stays linked
