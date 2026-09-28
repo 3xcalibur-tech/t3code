@@ -145,6 +145,7 @@ import {
   type ProviderAdapterDriver,
   type ProviderAdapterDriverCreateInput,
 } from "../ProviderAdapterDriver.ts";
+import { type BackgroundWorkReport, backgroundWorkNotification } from "../Notification.ts";
 import {
   type ProviderContinuationRequest,
   ProviderContinuationRequests,
@@ -1683,13 +1684,34 @@ function commandInputFromClaudeTool(toolName: string, input: ClaudeNativeToolInp
   );
 }
 
-// Opaque non-subagent background work admitted onto the Waiting roster.
-// Subagents project through the normal subagent lifecycle and must not be
+// Opaque non-subagent background work admitted onto the Waiting roster, by
+// Claude SDK `task_type`, and the kind the roster names it by. Subagents
+// project through the normal subagent lifecycle and must not be
 // double-counted when background_tasks_changed includes them.
-const CLAUDE_OPAQUE_BACKGROUND_TASK_TYPES = new Set(["local_bash"]);
+const CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS: ReadonlyMap<
+  string,
+  Exclude<OrchestrationV2PendingBackgroundTask["kind"], "subagent">
+> = new Map([["local_bash", "command"]]);
 
 function isClaudeOpaqueBackgroundTaskType(taskType: string | null | undefined): boolean {
-  return typeof taskType === "string" && CLAUDE_OPAQUE_BACKGROUND_TASK_TYPES.has(taskType);
+  return typeof taskType === "string" && CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.has(taskType);
+}
+
+function claudePendingBackgroundTask(input: {
+  readonly taskId: string;
+  readonly taskType: string | null;
+  readonly description: string | undefined;
+}): OrchestrationV2PendingBackgroundTask {
+  return {
+    taskId: input.taskId,
+    kind:
+      (input.taskType === null
+        ? undefined
+        : CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.get(input.taskType)) ?? "background_task",
+    ...(input.description !== undefined && input.description.trim().length > 0
+      ? { description: input.description }
+      : {}),
+  };
 }
 
 function claudeTaskTypeFromSdkMessage(message: SDKMessage): string | null {
@@ -1728,18 +1750,19 @@ function parseClaudeBackgroundTaskEntry(
   if (typeof taskId !== "string" || taskId.length === 0) {
     return null;
   }
-  const taskType = Reflect.get(entry, "task_type");
+  const rawTaskType = Reflect.get(entry, "task_type");
+  const taskType = typeof rawTaskType === "string" ? rawTaskType : null;
   // Mirror the incremental path: only opaque non-subagent types currently
   // supported for Waiting. Subagent/agent entries stay on the subagent path.
-  if (!isClaudeOpaqueBackgroundTaskType(typeof taskType === "string" ? taskType : null)) {
+  if (!isClaudeOpaqueBackgroundTaskType(taskType)) {
     return null;
   }
   const description = Reflect.get(entry, "description");
-  return {
+  return claudePendingBackgroundTask({
     taskId,
-    ...(typeof description === "string" && description.trim().length > 0 ? { description } : {}),
     taskType,
-  };
+    description: typeof description === "string" ? description : undefined,
+  });
 }
 
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
@@ -2862,6 +2885,97 @@ export function makeClaudeAdapterV2(
             { readonly messages: ReadonlyArray<SDKMessage>; readonly detail: string | null }
           >(),
         );
+        // Background work that ended and has not been named by a wake offer yet,
+        // by native thread and task id, with the user turn it ended in. Claude's
+        // wake result carries no task id, and its wake can run after a prompt the
+        // user queued meanwhile, so reports survive one user turn and then expire:
+        // a notification Claude folded into its own turn cannot name a later wake.
+        // One Ref holds both, so a report cannot be stamped with a turn that
+        // has already been superseded.
+        const wakeReportsByNativeThread = yield* Ref.make<{
+          readonly userTurns: ReadonlyMap<string, number>;
+          readonly reports: ReadonlyMap<
+            string,
+            ReadonlyMap<string, { readonly report: BackgroundWorkReport; readonly turn: number }>
+          >;
+        }>({ userTurns: new Map(), reports: new Map() });
+        // Subagents Claude started in the background. Only their ends wake the root.
+        const backgroundedSubagentTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
+        const recordWakeReport = (
+          nativeThreadId: string,
+          taskId: string,
+          report: BackgroundWorkReport,
+        ) =>
+          Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => ({
+            userTurns,
+            reports: new Map(reports).set(
+              nativeThreadId,
+              new Map(reports.get(nativeThreadId)).set(taskId, {
+                report,
+                turn: userTurns.get(nativeThreadId) ?? 0,
+              }),
+            ),
+          }));
+        const startUserTurnForWakeReports = (nativeThreadId: string) =>
+          Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => {
+            const turn = (userTurns.get(nativeThreadId) ?? 0) + 1;
+            const updatedTurns = new Map(userTurns).set(nativeThreadId, turn);
+            const threadReports = reports.get(nativeThreadId);
+            if (threadReports === undefined) return { userTurns: updatedTurns, reports };
+            const kept = new Map([...threadReports].filter(([, entry]) => entry.turn >= turn - 1));
+            const updatedReports = new Map(reports);
+            if (kept.size === 0) updatedReports.delete(nativeThreadId);
+            else updatedReports.set(nativeThreadId, kept);
+            return { userTurns: updatedTurns, reports: updatedReports };
+          });
+        /** Removes and returns a thread's reports. */
+        const takeWakeReports = (nativeThreadId: string) =>
+          Ref.modify(wakeReportsByNativeThread, (current) => {
+            const taken = current.reports.get(nativeThreadId);
+            if (taken === undefined) return [taken, current] as const;
+            const reports = new Map(current.reports);
+            reports.delete(nativeThreadId);
+            return [taken, { userTurns: current.userTurns, reports }] as const;
+          });
+        const clearWakeReports = (nativeThreadId: string) =>
+          takeWakeReports(nativeThreadId).pipe(Effect.asVoid);
+        // Last roster entry per opaque task. An empty roster level can land before
+        // the task's notification, and the wake still needs to name the task.
+        const lastKnownOpaqueTasks = yield* Ref.make(
+          new Map<string, OrchestrationV2PendingBackgroundTask>(),
+        );
+        const claudeTaskOutcome = (status: "completed" | "failed" | "stopped") =>
+          status === "completed" ? "completed" : status === "stopped" ? "cancelled" : "failed";
+        // Reads the roster, so call it before the notification clears the task from it.
+        const opaqueTaskWakeReport = Effect.fnUntraced(function* (
+          nativeThreadId: string,
+          message: Extract<SDKMessage, { readonly subtype: "task_notification" }>,
+        ): Effect.fn.Return<BackgroundWorkReport> {
+          const task =
+            rosterForNativeThread(
+              yield* Ref.get(pendingBackgroundTasksByNativeThread),
+              nativeThreadId,
+            ).get(message.task_id) ?? (yield* Ref.get(lastKnownOpaqueTasks)).get(message.task_id);
+          yield* Ref.update(lastKnownOpaqueTasks, (current) => {
+            if (!current.has(message.task_id)) return current;
+            const updated = new Map(current);
+            updated.delete(message.task_id);
+            return updated;
+          });
+          const outcome = claudeTaskOutcome(message.status);
+          const label = task?.description;
+          switch (task?.kind) {
+            case "subagent":
+              return { kind: "subagent", label, outcome, childThreadId: task.childThreadId };
+            case "monitor":
+            case "background_task":
+              return { kind: task.kind, label, outcome };
+            case "command":
+            case undefined:
+              // Only local_bash is opaque background work today.
+              return { kind: "command", label, outcome };
+          }
+        });
         const requestedContinuations = yield* Ref.make(new Set<string>());
         // ExitPlanMode plans whose permission callback fired while the tool's
         // root frames were held for a prompt echo. Each projects when its
@@ -3096,6 +3210,20 @@ export function makeClaudeAdapterV2(
           });
         });
 
+        const rememberOpaqueTasks = (tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>) =>
+          tasks.length === 0
+            ? Effect.void
+            : Ref.update(lastKnownOpaqueTasks, (current) => {
+                const updated = new Map(current);
+                for (const task of tasks) updated.set(task.taskId, task);
+                // Bounded: an entry only outlives its task when no notification came.
+                for (const oldest of updated.keys()) {
+                  if (updated.size <= 64) break;
+                  updated.delete(oldest);
+                }
+                return updated;
+              });
+
         const replacePendingBackgroundTasks = (
           nativeThreadId: string,
           tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
@@ -3113,6 +3241,7 @@ export function makeClaudeAdapterV2(
               }
               return updated;
             });
+            yield* rememberOpaqueTasks(tasks);
             // Empty level must not drop wake eligibility: notification may
             // still be in flight. Non-empty level admits new task ids to
             // wake eligibility only (replay tombstones are edge-created).
@@ -3134,6 +3263,7 @@ export function makeClaudeAdapterV2(
               roster.set(task.taskId, task);
               return new Map(current).set(nativeThreadId, roster);
             });
+            yield* rememberOpaqueTasks([task]);
             yield* markWakeEligibleOpaqueBackgroundTasks(nativeThreadId, [task.taskId]);
           });
 
@@ -3168,6 +3298,7 @@ export function makeClaudeAdapterV2(
         // session-wide pending work after sibling query replacement.
         const clearWakeStateForNativeThread = (nativeThreadId: string) =>
           Effect.gen(function* () {
+            yield* clearWakeReports(nativeThreadId);
             yield* Ref.update(wakeBuffers, (current) => {
               if (!current.has(nativeThreadId)) {
                 return current;
@@ -4722,6 +4853,31 @@ export function makeClaudeAdapterV2(
             isNotification && typeof message.summary === "string" && message.summary.length > 0
               ? message.summary
               : null;
+          if (isPendingTaskNotification) {
+            yield* recordWakeReport(
+              wakeInput.nativeThreadId,
+              message.task_id,
+              yield* opaqueTaskWakeReport(wakeInput.nativeThreadId, message),
+            );
+          } else if (isPendingSubagentNotification) {
+            const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id);
+            const started = bufferedMessages.find(
+              (entry) =>
+                entry.type === "system" &&
+                entry.subtype === "task_started" &&
+                entry.task_id === message.task_id,
+            );
+            yield* recordWakeReport(wakeInput.nativeThreadId, message.task_id, {
+              kind: "subagent",
+              label:
+                registered?.task.title ??
+                (started?.type === "system" && started.subtype === "task_started"
+                  ? started.description
+                  : undefined),
+              outcome: claudeTaskOutcome(message.status),
+              childThreadId: registered?.childThreadId,
+            });
+          }
           yield* Ref.update(wakeBuffers, (current) => {
             const existing = current.get(wakeInput.nativeThreadId);
             const updated = new Map(current);
@@ -4781,6 +4937,10 @@ export function makeClaudeAdapterV2(
           }
           const detail =
             (yield* Ref.get(wakeBuffers)).get(wakeInput.nativeThreadId)?.detail ?? null;
+          const reports = yield* takeWakeReports(wakeInput.nativeThreadId);
+          const notification = backgroundWorkNotification(
+            [...(reports?.values() ?? [])].map((entry) => entry.report),
+          );
           yield* Effect.logInfo("orchestration-v2.claude-wake-turn-detected", {
             providerSessionId: input.providerSessionId,
             threadId: route.threadId,
@@ -4791,6 +4951,7 @@ export function makeClaudeAdapterV2(
             providerThreadId: route.providerThreadId,
             driver: CLAUDE_PROVIDER,
             detail,
+            ...(notification === null ? {} : { notification }),
           });
         });
 
@@ -4826,16 +4987,15 @@ export function makeClaudeAdapterV2(
             if (!isClaudeNonSubagentTask(message) || message.is_backgrounded === false) {
               return false;
             }
-            const description =
-              typeof message.description === "string" && message.description.trim().length > 0
-                ? message.description
-                : undefined;
-            const taskType = claudeTaskTypeFromSdkMessage(message) ?? undefined;
-            yield* upsertPendingBackgroundTask(input.nativeThreadId, {
-              taskId: message.task_id,
-              ...(description === undefined ? {} : { description }),
-              ...(taskType === undefined ? {} : { taskType }),
-            });
+            yield* upsertPendingBackgroundTask(
+              input.nativeThreadId,
+              claudePendingBackgroundTask({
+                taskId: message.task_id,
+                taskType: claudeTaskTypeFromSdkMessage(message),
+                description:
+                  typeof message.description === "string" ? message.description : undefined,
+              }),
+            );
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             const removed = yield* clearPendingBackgroundTask(
@@ -5358,6 +5518,11 @@ export function makeClaudeAdapterV2(
               if (message.tool_use_id !== undefined) {
                 context.pendingSubagentModelsByToolUseId.delete(message.tool_use_id);
               }
+              if (message.is_backgrounded === true) {
+                yield* Ref.update(backgroundedSubagentTaskIds, (current) =>
+                  new Set(current).add(message.task_id),
+                );
+              }
               yield* recoverResumedClaudeSubagent({
                 context,
                 nativeThreadId: liveQuery.nativeThreadId,
@@ -5408,6 +5573,35 @@ export function makeClaudeAdapterV2(
               liveQuery.nativeThreadId,
               message.task_id,
             );
+            // Backgrounded work that ends during a user turn wakes the root after
+            // it. Drained wake frames replay here too; they were recorded idle.
+            if (!isClaudeProviderContinuationTurn(context.input)) {
+              if (wasBackgroundTask) {
+                yield* recordWakeReport(
+                  liveQuery.nativeThreadId,
+                  message.task_id,
+                  yield* opaqueTaskWakeReport(liveQuery.nativeThreadId, message),
+                );
+              } else if (
+                !wasBackgroundTask &&
+                (yield* Ref.get(backgroundedSubagentTaskIds)).has(message.task_id)
+              ) {
+                const registered = (yield* Ref.get(sessionSubagentsByTaskId)).get(message.task_id);
+                yield* recordWakeReport(liveQuery.nativeThreadId, message.task_id, {
+                  kind: "subagent",
+                  label: registered?.task.title ?? undefined,
+                  outcome: claudeTaskOutcome(message.status),
+                  childThreadId: registered?.childThreadId,
+                });
+              }
+            }
+            // A resume starts the subagent again and says again whether it is backgrounded.
+            yield* Ref.update(backgroundedSubagentTaskIds, (current) => {
+              if (!current.has(message.task_id)) return current;
+              const updated = new Set(current);
+              updated.delete(message.task_id);
+              return updated;
+            });
             yield* applyBackgroundTaskRosterMessage({
               nativeThreadId: liveQuery.nativeThreadId,
               message,
@@ -5681,6 +5875,8 @@ export function makeClaudeAdapterV2(
             isClaudeTaskNotificationOriginResult(message) &&
             !isClaudeProviderContinuationTurn(context.input)
           ) {
+            // This user turn ran the wake itself, so no offer will name its work.
+            yield* clearWakeReports(liveQuery.nativeThreadId);
             yield* Effect.logInfo("orchestration-v2.claude-task-notification-result-accepted", {
               providerTurnId: context.providerTurnId,
               num_turns: message.num_turns,
@@ -6478,6 +6674,8 @@ export function makeClaudeAdapterV2(
               // A user turn that races a wake leaves the buffer alone: the
               // continuation run the worker queued behind this run drains it
               // afterwards with correct attribution.
+              // Counted only here, so a turn that failed to start does not age reports.
+              yield* startUserTurnForWakeReports(nativeThreadId);
               yield* querySession.query.offer(userMessage);
               return;
             }
