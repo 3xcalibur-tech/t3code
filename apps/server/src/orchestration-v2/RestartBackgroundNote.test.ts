@@ -38,6 +38,7 @@ function run(
 const turnFor = (source: OrchestrationV2Run) => ({
   runAttemptId: source.activeAttemptId,
   providerThreadId: source.providerThreadId!,
+  status: "completed" as const,
 });
 
 it("keeps the note for the provider thread that lost the work across a provider switch", () => {
@@ -110,7 +111,15 @@ it("does not repeat the note when a steer restarts the run on a new attempt", ()
       runs: [root, steered],
       providerTurns: [
         turnFor(root),
-        ...(delivered ? [{ runAttemptId: firstAttempt, providerThreadId: claudeThread }] : []),
+        ...(delivered
+          ? [
+              {
+                runAttemptId: firstAttempt,
+                providerThreadId: claudeThread,
+                status: "completed" as const,
+              },
+            ]
+          : []),
       ],
       compactionMessageIds: new Set(),
       run: steered,
