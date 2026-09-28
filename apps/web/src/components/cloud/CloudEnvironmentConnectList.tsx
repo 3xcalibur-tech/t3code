@@ -451,7 +451,7 @@ export function CloudEnvironmentConnectRows({
               {statusText}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className={onDeregister ? "flex shrink-0 items-center gap-2" : "contents"}>
             {unsupported && !savedEnvironment ? (
               <Tooltip>
                 <TooltipTrigger render={<span className="inline-flex" tabIndex={0} />}>
