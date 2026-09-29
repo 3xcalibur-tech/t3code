@@ -1,0 +1,16 @@
+{
+  "description": "T3 Code. The open-source control plane for coding agents.",
+  "socialImageAlt": "The T3 Code desktop app with a thread open.",
+  "navigation": "Main navigation",
+  "home": "T3 Code home",
+  "download": "Download",
+  "githubStarsLabel": "Star T3 Code on GitHub — {stars} stars",
+  "githubStars": "GitHub stars",
+  "language": "Choose language",
+  "mitLicensed": "MIT licensed",
+  "iosApp": "iOS app",
+  "androidApp": "Android app",
+  "terms": "Terms",
+  "privacy": "Privacy",
+  "security": "Security"
+}

@@ -1,0 +1,16 @@
+{
+  "androidApp": "Android-App",
+  "description": "T3 Code. Die Open-Source-Steuerzentrale für Coding-Agenten.",
+  "download": "Herunterladen",
+  "githubStars": "GitHub-Sterne",
+  "githubStarsLabel": "Gib T3 Code auf GitHub einen Stern — {stars} Sterne",
+  "home": "Startseite von T3 Code",
+  "iosApp": "iOS-App",
+  "language": "Sprache wählen",
+  "mitLicensed": "MIT-lizenziert",
+  "navigation": "Hauptnavigation",
+  "privacy": "Datenschutz",
+  "security": "Sicherheit",
+  "socialImageAlt": "Die Desktop-App von T3 Code mit einem geöffneten Thread.",
+  "terms": "Nutzungsbedingungen"
+}

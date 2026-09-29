@@ -8,16 +8,25 @@
     "dev": "node scripts/stage-install-scripts.mjs && astro dev",
     "build": "node scripts/stage-install-scripts.mjs && astro build",
     "preview": "astro preview",
-    "typecheck": "astro check"
+    "typecheck": "astro check",
+    "i18n:translate": "gt translate",
+    "i18n:validate": "gt validate"
   },
   "dependencies": {
+    "@astrojs/react": "7.0.0",
     "@t3tools/shared": "workspace:*",
     "astro": "^7.2.8",
+    "gt-react": "11.4.5",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
     "sharp": "0.35.4"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
+    "@types/react": "~19.2.16",
+    "@types/react-dom": "~19.2.3",
     "@vercel/config": "^0.3.0",
+    "gt": "2.22.4",
     "typescript": "~6.0.3"
   }
 }

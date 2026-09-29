@@ -4,6 +4,7 @@ import appIcon from "../assets/icon.webp";
 import desktopScreenshot from "../assets/app-desktop.webp";
 import dmSansLatinUrl from "../assets/fonts/dm-sans-latin.woff2?url";
 import "../styles/fonts.css";
+import { getSiteStrings, localePath, locales, type Locale } from "../lib/i18n";
 import {
   ANDROID_PLAY_STORE_URL,
   GITHUB_REPOSITORY_URL,
@@ -15,13 +16,20 @@ interface Props {
   title?: string;
   description?: string;
   pageClass?: string;
+  locale?: Locale;
+  localizedHome?: boolean;
 }
 
 const {
   title = "T3 Code",
-  description = "T3 Code. The open-source control plane for coding agents.",
+  description: customDescription,
   pageClass,
+  locale = "en",
+  localizedHome = false,
 } = Astro.props;
+const strings = getSiteStrings(locale);
+const description = customDescription ?? strings.description;
+const currentLocale = locales.find((entry) => entry.code === locale);
 
 // Social preview card. Link unfurlers (Instagram, iMessage, X, Slack) want a
 // 1200x630 jpg or png at an absolute URL. Built from the hero screenshot so it
@@ -39,12 +47,16 @@ const socialImageUrl = new URL(socialImage.src, Astro.site);
 const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
 ---
 
-<html lang="en">
+<html lang={locale}>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <link rel="canonical" href={canonicalUrl} />
+    {localizedHome && <>
+      {locales.map((entry) => <link rel="alternate" hreflang={entry.code} href={new URL(entry.href, Astro.site)} />)}
+      <link rel="alternate" hreflang="x-default" href={new URL("/", Astro.site)} />
+    </>}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="T3 Code" />
     <meta property="og:url" content={canonicalUrl} />
@@ -53,12 +65,13 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:image" content={socialImageUrl} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="The T3 Code desktop app with a thread open." />
+    <meta property="og:image:alt" content={strings.socialImageAlt} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@t3dotgg" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={socialImageUrl} />
+    <meta name="twitter:image:alt" content={strings.socialImageAlt} />
     <link
       rel="preload"
       href={dmSansLatinUrl}
@@ -74,25 +87,42 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
   </head>
   <body>
     <div class:list={["page", pageClass]}>
-      <nav class="nav">
+      <nav class:list={["nav", { "nav-localized": localizedHome }]} aria-label={strings.navigation}>
         <div class="nav-inner">
-          <a href="/" class="nav-brand" aria-label="T3 Code home">
+          <a href={localePath(locale)} class="nav-brand" aria-label={strings.home}>
             <span class="nav-brand-name">T3 Code</span>
           </a>
           <div class="nav-right">
-            <a class="nav-link" href="/download">Download</a>
+            <a class="nav-link" href="/download">{strings.download}</a>
             <a
               class="nav-stars"
               href={GITHUB_REPOSITORY_URL}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`Star T3 Code on GitHub — ${MARKETING_STATS.githubStars} stars`}
+              aria-label={strings.githubStarsLabel.replace("{stars}", MARKETING_STATS.githubStars)}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 2.3l2.9 5.88 6.49.94-4.7 4.58 1.11 6.47L12 17.12l-5.8 3.05 1.11-6.47-4.7-4.58 6.49-.94L12 2.3z"/>
               </svg>
-              <span><strong>{MARKETING_STATS.githubStars}</strong> GitHub stars</span>
+              <span><strong>{MARKETING_STATS.githubStars}</strong><span class="nav-stars-label"> {strings.githubStars}</span></span>
             </a>
+            {localizedHome && (
+              <details class="locale-menu">
+                <summary aria-label={strings.language} title={currentLocale?.name}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M3 12h18M12 3c3 3 4 6 4 9s-1 6-4 9c-3-3-4-6-4-9s1-6 4-9Z" />
+                  </svg>
+                  <span class="locale-current" lang={locale}>{currentLocale?.name}</span>
+                  <svg class="locale-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                </summary>
+                <ul aria-label={strings.language}>
+                  {locales.map((entry) => (
+                    <li><a href={entry.href} lang={entry.code} hreflang={entry.code} aria-current={entry.code === locale ? "page" : undefined}>{entry.name}</a></li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </div>
         </div>
       </nav>
@@ -115,17 +145,17 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
               loading="lazy"
               decoding="async"
             />
-            <span>&copy; {new Date().getFullYear()} T3 Tools Inc · MIT licensed</span>
+            <span>&copy; {new Date().getFullYear()} T3 Tools Inc · {strings.mitLicensed}</span>
           </div>
           <div class="footer-links">
             <a href={GITHUB_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
             <a href="https://discord.gg/jn4EGJjrvv" target="_blank" rel="noopener noreferrer">Discord</a>
-            <a href="/download">Download</a>
-            <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer">iOS app</a>
-            <a href={ANDROID_PLAY_STORE_URL} target="_blank" rel="noopener noreferrer">Android app</a>
-            <a href="/terms-of-service">Terms</a>
-            <a href="/privacy-policy">Privacy</a>
-            <a href="/security-policy">Security</a>
+            <a href="/download">{strings.download}</a>
+            <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer">{strings.iosApp}</a>
+            <a href={ANDROID_PLAY_STORE_URL} target="_blank" rel="noopener noreferrer">{strings.androidApp}</a>
+            <a href="/terms-of-service">{strings.terms}</a>
+            <a href="/privacy-policy">{strings.privacy}</a>
+            <a href="/security-policy">{strings.security}</a>
           </div>
         </div>
       </footer>
@@ -367,6 +397,7 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
     align-items: center;
     color: var(--fg);
     transition: color 0.2s ease;
+    flex-shrink: 0;
   }
 
   .nav-brand:hover {
@@ -431,6 +462,58 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
     flex-shrink: 0;
   }
 
+  .locale-menu {
+    position: relative;
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .locale-menu summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 36px;
+    padding: 0 8px;
+    cursor: pointer;
+    list-style: none;
+    white-space: nowrap;
+  }
+
+  .locale-menu summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .locale-menu summary:hover,
+  .locale-menu[open] summary {
+    color: var(--fg);
+  }
+
+  .locale-menu ul {
+    position: absolute;
+    inset-inline-end: 0;
+    top: calc(100% + 8px);
+    min-width: 180px;
+    padding: 6px;
+    list-style: none;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+  }
+
+  .locale-menu a {
+    display: block;
+    padding: 8px 10px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .locale-menu a:hover,
+  .locale-menu a[aria-current="page"] {
+    background: rgb(255 255 255 / 6%);
+    color: var(--fg);
+  }
+
   .main {
     flex: 1;
     display: flex;
@@ -478,6 +561,8 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
   .footer-links a {
     font-size: 13px;
     color: var(--fg-dim);
+    overflow-wrap: anywhere;
+    hyphens: auto;
     transition: color 0.2s ease;
   }
 
@@ -525,6 +610,27 @@ const canonicalUrl = new URL(Astro.url.pathname, Astro.site);
       gap: 6px;
       padding: 0 12px;
       font-size: 12px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .nav-localized .nav-stars-label,
+    .locale-current {
+      display: none;
+    }
+
+    .nav-localized .nav-right {
+      gap: 4px;
+    }
+
+    .nav-localized .nav-link {
+      padding: 0 6px;
+    }
+  }
+
+  @media (max-width: 380px) {
+    .nav-localized .nav-stars {
+      display: none;
     }
   }
 </style>

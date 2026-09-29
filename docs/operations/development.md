@@ -129,6 +129,21 @@ export check's workspace selectors as more workspaces become clean. Review calle
 deleting code; production mode can also report development scripts and test fixtures.
 Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](../../knip.jsonc).
 
+## Homepage translations
+
+The marketing homepage builds from committed General Translation catalogs; ordinary
+builds need no translation credentials. After changing homepage copy, run the following
+from `apps/marketing` with access to the project in `gt.config.json`:
+
+```sh
+vp exec gt login
+vp run i18n:translate
+vp run build
+```
+
+Commit the updated catalogs and `gt-lock.json` with the source changes. `gt generate`
+creates English templates, not translations; do not use it to fill missing languages.
+
 ## Desktop artifacts
 
 Local artifact builds are unsigned by default and write to `release/`:

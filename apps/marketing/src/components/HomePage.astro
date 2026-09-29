@@ -1,0 +1,37 @@
+---
+import { getImage } from "astro:assets";
+import desktopScreenshot from "../assets/app-desktop.webp";
+import Layout from "../layouts/Layout.astro";
+import Homepage from "./Homepage";
+import { getHomepageTranslations, type Locale } from "../lib/i18n";
+import "../styles/homepage.css";
+
+interface Props {
+  locale?: Locale;
+}
+const { locale = "en" } = Astro.props;
+const screenshot = await getImage({
+  src: desktopScreenshot,
+  widths: [864, 1180, 1728, 2360],
+  format: "webp",
+  quality: 90,
+});
+const translations = await getHomepageTranslations(locale);
+---
+
+<Layout locale={locale} localizedHome>
+  <Homepage
+    locale={locale}
+    translations={translations}
+    screenshot={{
+      src: desktopScreenshot.src,
+      srcSet: `${screenshot.srcSet.attribute}, ${desktopScreenshot.src} ${desktopScreenshot.width}w`,
+      width: desktopScreenshot.width,
+      height: desktopScreenshot.height,
+    }}
+  />
+</Layout>
+
+<script>
+  import "../lib/homepage";
+</script>

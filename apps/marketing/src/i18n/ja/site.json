@@ -1,0 +1,16 @@
+{
+  "androidApp": "Androidアプリ",
+  "description": "T3 Code。コーディングエージェントのためのオープンソースのコントロールプレーン。",
+  "download": "ダウンロード",
+  "githubStars": "GitHubのスター数",
+  "githubStarsLabel": "GitHubでT3 Codeにスターを付ける — スター数：{stars}",
+  "home": "T3 Codeのホーム",
+  "iosApp": "iOSアプリ",
+  "language": "言語を選択",
+  "mitLicensed": "MITライセンス",
+  "navigation": "メインナビゲーション",
+  "privacy": "プライバシー",
+  "security": "セキュリティ",
+  "socialImageAlt": "スレッドを開いているT3 Codeのデスクトップアプリ。",
+  "terms": "利用規約"
+}

@@ -18,6 +18,7 @@ allowBuilds:
   msw: false
   node-pty: true
   sharp: true
+  tree-sitter-python: false
   utf-8-validate: false
   workerd: false
 
@@ -96,6 +97,7 @@ minimumReleaseAgeExclude:
   - "@distilled.cloud/stripe@1.0.0-rc.12"
   - "@shadcn/lint@0.1.5"
   - cn@0.3.2
+  - gt@2.22.4
 
 overrides:
   # Keep jsdom's optional peer consistent so Vite+ has one test-runner instance.

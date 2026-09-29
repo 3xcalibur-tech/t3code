@@ -1,0 +1,70 @@
+{
+  "version": 2,
+  "branchId": "brc_fpyzkltk56l56mwmf7rksugt",
+  "entries": [
+    {
+      "fileId": "4cdd3013c75630fbd1d3afe320ebc8bd71151751e9c2edc69e2172d59fac2e59",
+      "versionId": "7fc5911d9730ff5bb182575324d4c473258d639d7a24a7c00b33261cf383f664",
+      "translations": {
+        "ja": {
+          "updatedAt": "2026-09-29T00:42:26.034Z",
+          "fileName": "src/i18n/ja/site.json",
+          "postProcessHash": "71b6dd13d290f50c4d18856aca327ea503c5a47ffe168a3ba7f5d6ff8ab9381d"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-29T00:42:26.035Z",
+          "fileName": "src/i18n/pt-BR/site.json",
+          "postProcessHash": "00f08ae0e4fedc8db6732e157153a1815e282f082239ebc07bec636607776066"
+        },
+        "zh-CN": {
+          "updatedAt": "2026-09-29T00:42:26.036Z",
+          "fileName": "src/i18n/zh-CN/site.json",
+          "postProcessHash": "8a4405ae7179db733eb23bbc5c5e4a6cea63836d946692c9bf7121bea899b705"
+        },
+        "de": {
+          "updatedAt": "2026-09-29T00:42:26.036Z",
+          "fileName": "src/i18n/de/site.json",
+          "postProcessHash": "91a2e8f6041ae38276b95e87762f1b7bba50a5185a3aedf68e13f503a770382a"
+        },
+        "es": {
+          "updatedAt": "2026-09-29T00:42:26.037Z",
+          "fileName": "src/i18n/es/site.json",
+          "postProcessHash": "ef096c7c23d980c49d60c8df217824c310cfd5995c931e0266ac26862cc2db7f"
+        }
+      },
+      "fileName": "src/i18n/en/site.json"
+    },
+    {
+      "fileId": "879f3a5f954ee8b75bf1e91f4ea9916b41c933e5beba7eb6362647a637c9c66d",
+      "versionId": "90e993eccb153b910816a18a365cbd809e3f884e6f620c470a51c66ad1aa7961",
+      "translations": {
+        "es": {
+          "updatedAt": "2026-09-29T00:42:26.037Z",
+          "fileName": "src/_gt/es.json",
+          "postProcessHash": "dea2b62a11381d294cb076c97f4a1a02017ef30100f688e314623be5b68cfab7"
+        },
+        "de": {
+          "updatedAt": "2026-09-29T00:42:26.037Z",
+          "fileName": "src/_gt/de.json",
+          "postProcessHash": "c6014149fa31714e1f1781e078c464b4b31296fc2c970442a7fcb901b6e27563"
+        },
+        "zh-CN": {
+          "updatedAt": "2026-09-29T00:42:26.038Z",
+          "fileName": "src/_gt/zh-CN.json",
+          "postProcessHash": "339a83c4b269ffff6aa9634325d5925ac8c03d91b5f26c133f00dbdf3fd6235f"
+        },
+        "pt-BR": {
+          "updatedAt": "2026-09-29T00:42:26.038Z",
+          "fileName": "src/_gt/pt-BR.json",
+          "postProcessHash": "858441cd7333c565333dcd1b7356b892aa54e6b368c9eaa6863a61c856c0b152"
+        },
+        "ja": {
+          "updatedAt": "2026-09-29T00:42:26.038Z",
+          "fileName": "src/_gt/ja.json",
+          "postProcessHash": "c83d2199367a4d4ffea7cce289f5ace3e2b73ae94a516533077e730f17eff753"
+        }
+      },
+      "fileName": "__INTERNAL_GT_TEMPLATE_NAME__"
+    }
+  ]
+}

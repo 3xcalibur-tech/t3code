@@ -1,0 +1,16 @@
+{
+  "androidApp": "Aplicación para Android",
+  "description": "T3 Code. El centro de control de código abierto para agentes de programación.",
+  "download": "Descargar",
+  "githubStars": "Estrellas en GitHub",
+  "githubStarsLabel": "Dale una estrella a T3 Code en GitHub — {stars} estrellas",
+  "home": "Inicio de T3 Code",
+  "iosApp": "Aplicación para iOS",
+  "language": "Elegir idioma",
+  "mitLicensed": "Con licencia MIT",
+  "navigation": "Navegación principal",
+  "privacy": "Privacidad",
+  "security": "Seguridad",
+  "socialImageAlt": "La aplicación de escritorio de T3 Code con un hilo abierto.",
+  "terms": "Términos"
+}

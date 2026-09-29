@@ -1,0 +1,16 @@
+{
+  "androidApp": "Android 应用",
+  "description": "T3 Code，面向编程智能体的开源控制平面。",
+  "download": "下载",
+  "githubStars": "GitHub 星标数",
+  "githubStarsLabel": "在 GitHub 上为 T3 Code 点亮星标 — 已获 {stars} 颗星",
+  "home": "T3 Code 首页",
+  "iosApp": "iOS 应用",
+  "language": "选择语言",
+  "mitLicensed": "采用 MIT 许可证",
+  "navigation": "主导航",
+  "privacy": "隐私",
+  "security": "安全",
+  "socialImageAlt": "T3 Code 桌面应用，已打开一个会话。",
+  "terms": "条款"
+}
