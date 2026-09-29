@@ -1544,7 +1544,13 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
           sessions.set(input.threadId, ctx);
 
           yield* Effect.gen(function* () {
-            const stateData = yield* request(ctx, { type: "get_state" }, PI_SESSION_TIMEOUT_MS);
+            // The first request is the startup handshake, so its failure is a
+            // failed start. The PiRpcError cause keeps the `get_state` operation.
+            const stateData = yield* request(
+              ctx,
+              { type: "get_state" },
+              PI_SESSION_TIMEOUT_MS,
+            ).pipe(Effect.mapError(processError("Pi did not finish starting.")));
             // --session takes a file path, not Pi's display session UUID.
             const sessionFile = recordString(stateData, "sessionFile");
             if (sessionFile === undefined) {
@@ -1580,14 +1586,7 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
                 Effect.ignore,
               );
             }
-          }).pipe(
-            Effect.mapError((cause) =>
-              cause._tag === "ProviderAdapterProcessError"
-                ? cause
-                : processError("Pi did not finish starting.")(cause),
-            ),
-            Effect.onError(() => closeSession(ctx)),
-          );
+          }).pipe(Effect.onError(() => closeSession(ctx)));
 
           // Discovery can invoke extension code and raise a blocking dialog,
           // so it never holds session start.
