@@ -6,6 +6,7 @@ import {
   type ProviderRuntimeEvent,
   ThreadId,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -145,6 +146,8 @@ const makeFakePi = Effect.fnUntraced(function* (initialSessionFile: string) {
     queueEntries: (data: unknown) => entries.push(data),
     queueStats: (data: unknown) => stats.push(data),
     lastSpawn: () => lastSpawn,
+    /** Simulates Pi exiting: its stdout closes. */
+    closeStdout: Queue.end(stdout),
   };
 });
 
@@ -329,6 +332,58 @@ describe("PiAdapter", () => {
         sessionFile: SESSION_FILE,
         turnEntryIds: [],
       });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  // Windows has no chmod permissions, and root ignores them.
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32" || process.getuid?.() === 0)(
+    "fails the start when the session file cannot be checked",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pi-locked-" });
+        const sessionFile = `${dir}/locked/session.jsonl`;
+        yield* fs.makeDirectory(`${dir}/locked`);
+        yield* fs.writeFileString(sessionFile, "");
+        // An unreadable folder makes the probe fail with a permission error.
+        yield* Effect.acquireRelease(fs.chmod(`${dir}/locked`, 0o000), () =>
+          fs.chmod(`${dir}/locked`, 0o755).pipe(Effect.ignore),
+        );
+        const { adapter } = yield* makeHarness();
+        const error = yield* adapter
+          .startSession({
+            threadId: THREAD_ID,
+            cwd: process.cwd(),
+            runtimeMode: "full-access",
+            resumeCursor: { schemaVersion: 1, sessionFile, turnEntryIds: ["user-1"] },
+          })
+          .pipe(Effect.flip);
+        assert.equal(error._tag, "ProviderAdapterProcessError");
+        assert.include(error.message, "Failed to check Pi's session file.");
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("cancels an open dialog when Pi exits between turns", () =>
+    Effect.gen(function* () {
+      const { fake, adapter, takeEvent } = yield* makeHarness();
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-startup",
+        method: "confirm",
+        title: "Trust this project?",
+      });
+      const opened = yield* takeEvent("request.opened");
+      yield* fake.closeStdout;
+
+      const resolved = yield* takeEvent("request.resolved");
+      assert.equal(resolved.requestId, opened.requestId);
+      assert.equal(resolved.payload.decision, "cancel");
+      assert.equal((yield* takeEvent("session.exited")).payload.exitKind, "error");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

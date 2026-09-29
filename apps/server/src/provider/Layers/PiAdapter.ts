@@ -1251,6 +1251,9 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
         if (turn !== null) {
           turn.failure = turn.interrupted ? null : "Pi process exited unexpectedly.";
           yield* finalizeTurn(ctx, false);
+        } else {
+          // A startup or idle extension dialog has no turn to settle it.
+          yield* cancelPendingRequests(ctx);
         }
         ctx.stopped = true;
         forgetSession(ctx);
@@ -1295,7 +1298,8 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
         ctx.stopRequested = true;
         forgetSession(ctx);
         if (ctx.pumpFiber !== undefined) yield* Fiber.interrupt(ctx.pumpFiber);
-        yield* cancelPendingRequests(ctx);
+        // Serialized with respondToRequest so one dialog is never answered twice.
+        yield* ctx.eventPermit.withPermits(1)(cancelPendingRequests(ctx));
         yield* Scope.close(ctx.scope, Exit.void).pipe(Effect.ignore);
       });
 
@@ -1464,13 +1468,14 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
           );
 
           // A missing session file cannot be resumed. Continue in a fresh Pi
-          // session instead of leaving the thread unusable, and say so.
+          // session instead of leaving the thread unusable, and say so. Any
+          // other probe failure fails the start rather than drop the context.
           const requestedCursor = Option.getOrUndefined(decodePiResumeCursor(input.resumeCursor));
           const resumeCursor =
             requestedCursor !== undefined &&
             (yield* fileSystem
               .exists(requestedCursor.sessionFile)
-              .pipe(Effect.orElseSucceed(() => false)))
+              .pipe(Effect.mapError(processError("Failed to check Pi's session file."))))
               ? requestedCursor
               : undefined;
 
