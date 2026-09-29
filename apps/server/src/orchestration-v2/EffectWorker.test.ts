@@ -753,13 +753,19 @@ it.effect("safely retries after replacement cleanup succeeds and start fails", (
   }),
 );
 
-for (const attemptCount of [1, 5]) {
+for (const { attemptCount, interruptible } of [
+  { attemptCount: 1, interruptible: true },
+  { attemptCount: 5, interruptible: true },
+  // A handler parked in an uninterruptible wait, like an ACP response waiting
+  // for its native acknowledgement, must not hold the lane past the timeout.
+  { attemptCount: 1, interruptible: false },
+]) {
   it.effect(
-    `${attemptCount === 1 ? "retries" : "fails"} a hung effect once its execution timeout elapses (attempt ${attemptCount})`,
+    `${attemptCount === 1 ? "retries" : "fails"} a hung ${interruptible ? "" : "uninterruptible "}effect once its execution timeout elapses (attempt ${attemptCount})`,
     () =>
       Effect.gen(function* () {
         const now = DateTime.formatIso(yield* DateTime.now);
-        const effectId = `effect:worker-execution-timeout:${attemptCount}`;
+        const effectId = `effect:worker-execution-timeout:${attemptCount}:${interruptible}`;
         const workerId = "worker-execution-timeout";
         const claimedEffect: OrchestrationEffectV2 = {
           id: effectId,
@@ -800,7 +806,9 @@ for (const attemptCount of [1, 5]) {
           OrchestrationEffectExecutorV2,
           OrchestrationEffectExecutorV2.of({
             execute: () =>
-              Deferred.succeed(executionStarted, undefined).pipe(Effect.andThen(Effect.never)),
+              Deferred.succeed(executionStarted, undefined).pipe(
+                Effect.andThen(interruptible ? Effect.never : Effect.uninterruptible(Effect.never)),
+              ),
           }),
         );
         const workerLayer = effectWorkerLayerWithOptions({
@@ -833,3 +841,59 @@ for (const attemptCount of [1, 5]) {
       }).pipe(Effect.provide(TestClock.layer())),
   );
 }
+
+it.effect("a cancellation stops the running handler before the worker moves on", () =>
+  Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const effectId = "effect:worker-cancellation-stops-handler";
+    const workerId = "worker-cancellation-stops-handler";
+    const claimedEffect: OrchestrationEffectV2 = {
+      id: effectId,
+      commandId: CommandId.make("command:worker-cancellation-stops-handler"),
+      threadId: ThreadId.make("thread:worker-cancellation-stops-handler"),
+      request: { type: "terminal.cleanup" },
+      status: "running",
+      attemptCount: 1,
+      availableAt: now,
+      leaseOwner: workerId,
+      leaseExpiresAt: now,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      lastError: null,
+    };
+    const executionStarted = yield* Deferred.make<void>();
+    const cancelled = yield* Deferred.make<void>();
+    const handlerStopped = yield* Ref.make(false);
+    const outboxLayer = Layer.mock(EffectOutboxV2)({
+      claimNext: () => Effect.succeed(Option.some(claimedEffect)),
+      get: () => Effect.succeed(Option.some(claimedEffect)),
+      awaitCancellation: () => Deferred.await(cancelled),
+      clearCancellation: () => Effect.void,
+    });
+    const executorLayer = Layer.succeed(
+      OrchestrationEffectExecutorV2,
+      OrchestrationEffectExecutorV2.of({
+        execute: () =>
+          Deferred.succeed(executionStarted, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Ref.set(handlerStopped, true)),
+          ),
+      }),
+    );
+    const workerLayer = effectWorkerLayerWithOptions({ workerId }).pipe(
+      Layer.provide(Layer.merge(outboxLayer, executorLayer)),
+    );
+
+    const fiber = yield* OrchestrationEffectWorkerV2.pipe(
+      Effect.flatMap((worker) => worker.runOnce),
+      Effect.provide(workerLayer),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(executionStarted);
+    yield* Deferred.succeed(cancelled, undefined);
+
+    assert.isTrue(yield* Fiber.join(fiber));
+    assert.isTrue(yield* Ref.get(handlerStopped));
+  }),
+);

@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -655,22 +656,29 @@ export const layerWithOptions = (
 
           // A hung handler fails through the normal retry/fail path below under
           // this claim's lease. Nothing reclaims a still-running row instead.
-          const execution = executor
-            .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
-            .pipe(
-              Effect.timeoutOrElse({
-                duration: Duration.millis(effectTimeoutMs),
-                orElse: () =>
-                  Effect.fail(
-                    new OrchestrationEffectTimeoutError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      timeoutMs: effectTimeoutMs,
-                    }),
-                  ),
-              }),
-              Effect.as("executed" as const),
-            );
+          // The handler runs in its own fiber because a plain timeout waits for
+          // its loser to exit, so a handler parked in an uninterruptible wait
+          // (an ACP response awaiting its native acknowledgement) would hold the
+          // lane anyway. On timeout the claim settles and the handler is left to
+          // finish its interruption in the background; a cancellation still
+          // waits for the handler to stop.
+          const execution = Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const handler = yield* executor
+                .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
+                .pipe(Effect.forkDetach({ startImmediately: true }));
+              const handlerExit = yield* restore(
+                Fiber.await(handler).pipe(Effect.timeoutOption(Duration.millis(effectTimeoutMs))),
+              ).pipe(Effect.onInterrupt(() => Fiber.interrupt(handler)));
+              if (Option.isSome(handlerExit)) return yield* handlerExit.value;
+              yield* Fiber.interrupt(handler).pipe(Effect.forkDetach);
+              return yield* new OrchestrationEffectTimeoutError({
+                effectId: effect.id,
+                effectType: effect.request.type,
+                timeoutMs: effectTimeoutMs,
+              });
+            }),
+          ).pipe(Effect.as("executed" as const));
           const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
             Effect.ensuring(outbox.clearCancellation(effect.id)),
           );
