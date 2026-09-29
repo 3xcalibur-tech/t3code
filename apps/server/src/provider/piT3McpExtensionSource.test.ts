@@ -21,11 +21,11 @@ const runnableSource = NodeModule.stripTypeScriptTypes(
   ),
 );
 
-async function loadHandlers(): Promise<Map<string, unknown>> {
+async function loadHandlers(env: Record<string, string> = {}): Promise<Map<string, unknown>> {
   const handlers = new Map<string, unknown>();
   // Execute the shipped extension with MCP disabled.
   await NodeVM.runInNewContext(`${runnableSource}\nt3McpExtension(pi)`, {
-    process: { env: {} },
+    process: { env },
     pi: { on: (name: string, handler: unknown) => handlers.set(name, handler) },
   });
   return handlers;
@@ -101,5 +101,33 @@ describe("Pi MCP tool results", () => {
       { type: "text", text: '{"ok":true}' },
       image,
     ]);
+  });
+});
+
+type ToolCallHook = (
+  event: { toolName: string; input: unknown },
+  ctx: { ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+) => Promise<unknown>;
+
+describe("Pi approval summaries", () => {
+  const confirmMessage = async (toolName: string, input: unknown) => {
+    const hook = (await loadHandlers({ T3_PI_RUNTIME_MODE: "approval-required" })).get(
+      "tool_call",
+    ) as ToolCallHook;
+    let message: string | undefined;
+    await hook(
+      { toolName, input },
+      { ui: { confirm: async (_title, text) => ((message = text), true) } },
+    );
+    return message;
+  };
+
+  it("shows the shell command and edited path instead of raw JSON", async () => {
+    assert.equal(await confirmMessage("bash", { command: "ls src", timeout: 10 }), "ls src");
+    assert.equal(await confirmMessage("write", { path: "a.txt", content: "x" }), "a.txt");
+  });
+
+  it("falls back to JSON for tools without a command or path", async () => {
+    assert.equal(await confirmMessage("custom", { query: "q" }), '{\n  "query": "q"\n}');
   });
 });

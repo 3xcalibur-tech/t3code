@@ -63,7 +63,16 @@ function runtimeMode(): RuntimeMode {
     : "full-access";
 }
 
+// Approval cards show the command or file path the way other providers do;
+// other tools fall back to their JSON arguments.
 function toolInputSummary(input: unknown): string {
+  if (typeof input === "object" && input !== null) {
+    const record = input as Record<string, unknown>;
+    for (const key of ["command", "path"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim().length > 0) return value.slice(0, 4_000);
+    }
+  }
   try {
     return JSON.stringify(input, null, 2).slice(0, 4_000);
   } catch {
