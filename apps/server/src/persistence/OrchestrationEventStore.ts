@@ -17,6 +17,7 @@ import {
   CommandId,
   EventId,
   IsoDateTime,
+  isKnownOrchestrationV2EventType,
   NonNegativeInt,
   OrchestrationV2DomainEventJson,
   OrchestrationV2StoredEvent,
@@ -70,6 +71,14 @@ export class OrchestrationEventStore extends Context.Service<
      *
      * Reads in fixed-size sequence pages until the filtered range is exhausted;
      * `limit` caps the total emitted events across pages.
+     *
+     * By default a row whose `event_type` this build does not know fails the
+     * whole read, same as a row with a broken payload. Pass
+     * `skipUnknownEventTypes: true` for a client-facing replay that should
+     * instead skip and log such a row (still failing on a known type with a
+     * broken payload). Only client thread replay should opt in; appends, the
+     * provider ingestor, projection writes, and anything that builds server
+     * state must stay strict.
      */
     readonly readAgentEvents: (input?: {
       readonly afterSequence?: number;
@@ -78,6 +87,7 @@ export class OrchestrationEventStore extends Context.Service<
       readonly commandId?: CommandId;
       readonly eventType?: OrchestrationV2DomainEvent["type"];
       readonly limit?: number;
+      readonly skipUnknownEventTypes?: boolean;
     }) => Stream.Stream<OrchestrationV2StoredEvent, OrchestrationEventStoreError>;
 
     /** Measure one thread's bounded replay without loading or decoding its payloads. */
@@ -530,13 +540,30 @@ const makeEventStore = Effect.gen(function* () {
         );
       },
     ).pipe(
-      Stream.mapEffect((row) =>
-        rowToV2StoredEvent(row).pipe(
+      Stream.mapEffect((row) => {
+        // Only this opt-in replay path tolerates a row whose event_type this
+        // build does not recognize (e.g. after a downgrade past a row an
+        // older build never learned). Every other reader of this store stays
+        // strict: a known type whose payload fails to decode is still a real
+        // bug and must still fail.
+        if (
+          input?.skipUnknownEventTypes === true &&
+          !isKnownOrchestrationV2EventType(row.event_type)
+        ) {
+          return Effect.logWarning(
+            "Skipping a replayed application event row with a type this build does not know",
+            { threadId: row.stream_id, sequence: row.sequence, eventType: row.event_type },
+          ).pipe(Effect.as(Option.none<OrchestrationV2StoredEvent>()));
+        }
+        return rowToV2StoredEvent(row).pipe(
           Effect.mapError(
             toPersistenceDecodeError("OrchestrationEventStore.readAgentEvents:decode"),
           ),
-        ),
-      ),
+          Effect.asSome,
+        );
+      }),
+      Stream.filter(Option.isSome),
+      Stream.map((event) => event.value),
     );
   };
 
