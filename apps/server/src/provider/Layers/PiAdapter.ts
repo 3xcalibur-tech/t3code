@@ -1735,35 +1735,40 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
         }),
       );
 
+    // Holds the thread lock so a concurrent sendTurn cannot settle the marked
+    // turn and start a new Pi run before `abort`, which would stop that run.
     const interruptTurn: PiAdapterShape["interruptTurn"] = (threadId, turnId) =>
-      Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
-        const turn = ctx.activeTurn;
-        if (turn === null || (turnId !== undefined && turn.turnId !== turnId)) return;
-        turn.interrupted = true;
-        if (turn.settleWhenIdle || turn.compactionRunning || turn.manualCompactInFlight) {
-          // Pi's abort does not cancel compaction. Stop the process so Stop
-          // covers user /compact as well as detached recovery compaction; the
-          // next turn resumes the session in a fresh process.
-          ctx.stopRequested = true;
-          yield* ctx.connection.terminate;
-          return;
-        }
-        // A tool waiting on a T3 approval keeps Pi's run alive, and abort
-        // answers only once the run is idle. Release the dialogs first.
-        yield* ctx.eventPermit.withPermits(1)(cancelPendingRequests(ctx));
-        yield* request(ctx, { type: "abort" }).pipe(
-          Effect.tapError(() => Effect.sync(() => (turn.interrupted = false))),
-          Effect.mapError(requestError("abort")),
-        );
-        // Pi answers abort once the run is idle. Queue the settlement behind
-        // the events Pi wrote before that answer, so a command-only prompt
-        // that never emits agent_settled still completes.
-        yield* Queue.offer(ctx.connection.events, {
-          type: "t3.interrupt_settled",
-          turnId: turn.turnId,
-        });
-      });
+      withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(threadId);
+          const turn = ctx.activeTurn;
+          if (turn === null || (turnId !== undefined && turn.turnId !== turnId)) return;
+          turn.interrupted = true;
+          if (turn.settleWhenIdle || turn.compactionRunning || turn.manualCompactInFlight) {
+            // Pi's abort cancels compaction only since 0.84.4. Stop the process
+            // so Stop covers user /compact as well as detached recovery
+            // compaction; the next turn resumes the session in a fresh process.
+            ctx.stopRequested = true;
+            yield* ctx.connection.terminate;
+            return;
+          }
+          // A tool waiting on a T3 approval keeps Pi's run alive, and abort
+          // answers only once the run is idle. Release the dialogs first.
+          yield* ctx.eventPermit.withPermits(1)(cancelPendingRequests(ctx));
+          yield* request(ctx, { type: "abort" }).pipe(
+            Effect.tapError(() => Effect.sync(() => (turn.interrupted = false))),
+            Effect.mapError(requestError("abort")),
+          );
+          // Pi answers abort once the run is idle. Queue the settlement behind
+          // the events Pi wrote before that answer, so a command-only prompt
+          // that never emits agent_settled still completes.
+          yield* Queue.offer(ctx.connection.events, {
+            type: "t3.interrupt_settled",
+            turnId: turn.turnId,
+          });
+        }),
+      );
 
     const respondToRequest: PiAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
       Effect.gen(function* () {
