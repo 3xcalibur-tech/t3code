@@ -368,7 +368,7 @@ html:not([data-platform]) .dl-icon--apple {
     margin-bottom: 96px;
   }
 
-  /* Four above the headline, two beside the CTA. Keeps the copy clear. */
+  /* Keep decoration above translated copy, whose height varies by locale. */
   .hf-claude {
     --x: -37vw;
     --y: 44px;
@@ -393,30 +393,16 @@ html:not([data-platform]) .dl-icon--apple {
     --s: 64px;
     --rot: 8deg;
   }
-  .hf-grok {
-    --x: -36vw;
-    --y: 474px;
-    --s: 64px;
-    --rot: -6deg;
-  }
+  .hf-grok,
   .hf-cursor {
-    --x: 36vw;
-    --y: 474px;
-    --s: 64px;
-    --rot: 7deg;
+    display: none;
   }
 }
 
 @media (max-width: 340px) {
   .hf-opencode,
-  .hf-antigravity,
-  .hf-grok,
-  .hf-cursor {
+  .hf-antigravity {
     --s: 48px;
-  }
-  .hf-grok,
-  .hf-cursor {
-    --y: 580px;
   }
 }
 
