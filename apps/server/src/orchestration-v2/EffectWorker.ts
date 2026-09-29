@@ -42,6 +42,19 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
   },
 ) {}
 
+export class OrchestrationEffectTimeoutError extends Schema.TaggedError<OrchestrationEffectTimeoutError>()(
+  "OrchestrationEffectTimeoutError",
+  {
+    effectId: Schema.String,
+    effectType: Schema.String,
+    timeoutMs: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Effect ${this.effectType} (${this.effectId}) timed out after ${this.timeoutMs}ms`;
+  }
+}
+
 /**
  * Backstop for a handler that never returns. Only one non-title effect runs per
  * thread, so a hung row would otherwise block that thread's interrupt, detach and
@@ -649,10 +662,10 @@ export const layerWithOptions = (
                 duration: Duration.millis(effectTimeoutMs),
                 orElse: () =>
                   Effect.fail(
-                    new OrchestrationEffectExecutionError({
+                    new OrchestrationEffectTimeoutError({
                       effectId: effect.id,
                       effectType: effect.request.type,
-                      cause: `Effect execution timed out after ${effectTimeoutMs}ms`,
+                      timeoutMs: effectTimeoutMs,
                     }),
                   ),
               }),
