@@ -9,6 +9,7 @@ import {
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
+  providerSlashCommandArgumentError,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
 
@@ -17,6 +18,27 @@ const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+
+describe("provider slash command arguments", () => {
+  it("enforces declared rules while keeping legacy commands unrestricted", () => {
+    expect(providerSlashCommandArgumentError({ name: "copy", argumentMode: "none" }, "extra")).toBe(
+      "/copy does not accept arguments.",
+    );
+    expect(
+      providerSlashCommandArgumentError({ name: "copy", argumentMode: "none" }, " \n"),
+    ).toBeNull();
+    expect(providerSlashCommandArgumentError({ name: "run", argumentMode: "required" }, " ")).toBe(
+      "/run requires arguments.",
+    );
+    expect(
+      providerSlashCommandArgumentError({ name: "run", argumentMode: "required" }, "task"),
+    ).toBeNull();
+    expect(
+      providerSlashCommandArgumentError({ name: "export", argumentMode: "optional" }, ""),
+    ).toBeNull();
+    expect(providerSlashCommandArgumentError({ name: "legacy" }, "extra")).toBeNull();
+  });
+});
 
 const baseProviderSnapshot = {
   instanceId: "codex",

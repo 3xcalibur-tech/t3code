@@ -1356,6 +1356,7 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
+  onProviderCommand?: ((name: string) => void) | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -3577,7 +3578,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
   }, [readComposerSnapshot, resolveComposerTrigger]);
 
-  const { onUsageLimitsCommand } = props;
+  const { onUsageLimitsCommand, onProviderCommand } = props;
   const onSelectComposerItem = useCallback(
     (item: ComposerCommandItem) => {
       if (composerSelectLockRef.current) return;
@@ -3639,7 +3640,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
-        const replacement = `/${item.command.name} `;
+        if (item.command.argumentMode === "none" && onProviderCommand) {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            onProviderCommand(item.command.name);
+          }
+          return;
+        }
+        const replacement = `/${item.command.name}${item.command.argumentMode === "none" ? "" : " "}`;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -3712,6 +3723,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       handleInteractionModeChange,
       planModeUiEnabled,
       onUsageLimitsCommand,
+      onProviderCommand,
       resolveActiveComposerTrigger,
     ],
   );

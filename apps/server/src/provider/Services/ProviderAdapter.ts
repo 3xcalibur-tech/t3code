@@ -18,6 +18,8 @@ import type {
   ProviderSessionStartInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  ProviderSessionCommandInput,
+  ProviderSessionCommandResult,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
@@ -145,6 +147,11 @@ export interface ProviderAdapterShape<TError> {
   readonly uploadFeedback?: (
     input: ProviderUploadFeedbackInput,
   ) => Effect.Effect<ProviderUploadFeedbackResult, TError>;
+
+  /** Run a client-requested session utility without creating an agent turn. */
+  readonly sessionCommand?: (
+    input: ProviderSessionCommandInput,
+  ) => Effect.Effect<ProviderSessionCommandResult, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

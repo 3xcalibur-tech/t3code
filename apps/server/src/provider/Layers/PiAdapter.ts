@@ -100,6 +100,7 @@ import {
   resolvePiLaunchArgs,
 } from "../piT3McpInjection.ts";
 import type { PiAdapterShape } from "../Services/PiAdapter.ts";
+import { runPiSessionCommand } from "../PiSessionCommands.ts";
 
 const PROVIDER = ProviderDriverKind.make("pi");
 
@@ -1948,12 +1949,33 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
       stopAll().pipe(Effect.ignore, Effect.andThen(PubSub.shutdown(runtimeEvents))),
     );
 
+    const sessionCommand: NonNullable<PiAdapterShape["sessionCommand"]> = (input) =>
+      withThreadLock(
+        input.threadId,
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(input.threadId);
+          return yield* runPiSessionCommand(
+            input,
+            ctx.connection,
+            baseEnvironment,
+            ctx.session.cwd,
+          ).pipe(
+            Effect.scoped,
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.mapError((cause) => requestError(input.command)(cause)),
+          );
+        }),
+      );
+
     return {
       provider: PROVIDER,
       capabilities: { sessionModelSwitch: "in-session" },
       compaction: { type: "slash-command", command: "/compact" },
       startSession,
       sendTurn,
+      sessionCommand,
       interruptTurn,
       respondToRequest,
       respondToUserInput,

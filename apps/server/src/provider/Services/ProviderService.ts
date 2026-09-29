@@ -23,6 +23,8 @@ import type {
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  ProviderSessionCommandInput,
+  ProviderSessionCommandResult,
   MessageId,
   ThreadId,
   ProviderTurnStartResult,
@@ -127,6 +129,10 @@ export interface ProviderServiceShape {
   readonly uploadFeedback: (
     input: ProviderUploadFeedbackInput,
   ) => Effect.Effect<ProviderUploadFeedbackResult, ProviderServiceError>;
+
+  readonly sessionCommand: (
+    input: ProviderSessionCommandInput,
+  ) => Effect.Effect<ProviderSessionCommandResult, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

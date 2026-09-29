@@ -26,6 +26,7 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
+  ProviderSessionCommandInput,
   ThreadId,
   TurnId,
   type ProjectId,
@@ -2309,6 +2310,39 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const sessionCommand: ProviderServiceMethod<"sessionCommand"> = Effect.fn("sessionCommand")(
+    function* (rawInput) {
+      const operation = "ProviderService.sessionCommand";
+      const input = yield* decodeInputOrValidationError({
+        operation,
+        schema: ProviderSessionCommandInput,
+        payload: rawInput,
+      });
+      let routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation,
+        allowRecovery: false,
+      });
+      if (routed.adapter.sessionCommand === undefined) {
+        return yield* toValidationError(
+          operation,
+          `Provider '${routed.adapter.provider}' does not support session commands.`,
+        );
+      }
+      if (!routed.isActive) {
+        routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation,
+          allowRecovery: true,
+        });
+      }
+      if (routed.adapter.sessionCommand === undefined) {
+        return yield* toValidationError(operation, "Provider does not support session commands.");
+      }
+      return yield* routed.adapter.sessionCommand(input);
+    },
+  );
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     // Continuation is project-scopable, so decide it per session's project;
     // without orchestration the environment value is all there is.
@@ -2433,6 +2467,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     assertConversationRollbackSupported,
     rollbackConversation,
     uploadFeedback,
+    sessionCommand,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

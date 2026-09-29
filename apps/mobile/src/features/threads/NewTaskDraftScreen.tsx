@@ -65,6 +65,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { hasProviderUsageLimits, isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
+import { parsePiSessionCommand } from "@t3tools/client-runtime/state/threads";
 import { COMPOSER_LAYOUT_TRANSITION, ComposerSurface } from "./ThreadComposer";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
 import { useComposerCommandMenu } from "./use-composer-command-menu";
@@ -1216,6 +1217,15 @@ export function NewTaskDraftScreen(props: {
         "Antigravity model unavailable",
         "Set up Antigravity on web or desktop, or choose another model.",
       );
+      return;
+    }
+    if (
+      selectedEnvironmentServerConfig?.providers.find(
+        (provider) => provider.instanceId === modelSelection.instanceId,
+      )?.driver === "pi" &&
+      parsePiSessionCommand(initialMessageText)
+    ) {
+      Alert.alert("Start a Pi thread first", "Send a message before using session commands.");
       return;
     }
     // T3's own limits command is answered by the thread composer; a new task would

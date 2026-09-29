@@ -98,6 +98,12 @@ export function buildComposerSlashCommandItems(input: {
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
+    if (
+      !input.hasThread &&
+      input.selectedProviderStatus?.driver === "pi" &&
+      ["copy", "export", "share"].includes(command.name)
+    )
+      continue;
     // T3's own limits command is answered by the thread composer; New Task has
     // nowhere to show it. A provider's same-named command is left alone.
     if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
@@ -151,7 +157,7 @@ export function resolveComposerCommandSelection(input: {
   } else if (item.type === "slash-command") {
     replacement = `/${item.command} `;
   } else if (item.type === "provider-slash-command") {
-    replacement = `/${item.command.name} `;
+    replacement = `/${item.command.name}${item.command.argumentMode === "none" ? "" : " "}`;
   }
   return {
     ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement),
@@ -175,6 +181,7 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onProviderCommand,
 }: {
   readonly draftMessage: string;
   readonly ownerKey: string | null;
@@ -192,6 +199,7 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
+  readonly onProviderCommand?: (name: string) => void;
 }) {
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
@@ -523,6 +531,17 @@ export function useComposerCommandMenu({
         return;
       }
 
+      if (
+        item.type === "provider-slash-command" &&
+        item.command.argumentMode === "none" &&
+        onProviderCommand
+      ) {
+        const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
+        setSelection({ start: cleared.cursor, end: cleared.cursor });
+        onChangeDraftMessage(cleared.text);
+        onProviderCommand(item.command.name);
+        return;
+      }
       const result = resolveComposerCommandSelection({
         draftMessage,
         trigger,
@@ -544,6 +563,7 @@ export function useComposerCommandMenu({
       onChangeDraftMessage,
       onUpdateInteractionMode,
       onUsageLimits,
+      onProviderCommand,
       selectedProviderStatus?.showInteractionModeToggle,
       trigger,
     ],

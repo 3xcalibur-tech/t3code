@@ -157,7 +157,7 @@ describe("PiProvider", () => {
       );
       assert.deepEqual(
         discovered.slashCommands.map((command) => command.name),
-        ["compact"],
+        ["compact", "copy", "export", "share"],
       );
     }),
   );

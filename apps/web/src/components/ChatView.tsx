@@ -56,6 +56,7 @@ import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifa
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
   parseCodexFeedbackCommand,
+  parsePiSessionCommand,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "@t3tools/client-runtime/state/threads";
@@ -1526,6 +1527,9 @@ export default function ChatView(props: ChatViewProps) {
     refresh: true,
   });
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
+    reportFailure: false,
+  });
+  const runThreadSessionCommand = useAtomCommand(threadEnvironment.sessionCommand, {
     reportFailure: false,
   });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
@@ -7321,6 +7325,7 @@ export default function ChatView(props: ChatViewProps) {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    providerCommand?: string,
   ) => {
     e?.preventDefault();
     // Typed out in full rather than picked from the menu. Attachments or contexts
@@ -7475,11 +7480,14 @@ export default function ChatView(props: ChatViewProps) {
         : sendContextPreviewAnnotations;
     // A direct "send annotation" writes the draft and sends in the same tick; the reference
     // must be in the text now, not after the next render.
-    const promptForSend = directAnnotation
-      ? ensureInlineContextReferences(promptRef.current, [
-          previewAnnotationContextReference(directAnnotation.annotation),
-        ])
-      : promptRef.current;
+    const promptForSend =
+      providerCommand !== undefined
+        ? `/${providerCommand}`
+        : directAnnotation
+          ? ensureInlineContextReferences(promptRef.current, [
+              previewAnnotationContextReference(directAnnotation.annotation),
+            ])
+          : promptRef.current;
     const {
       trimmedPrompt: trimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -7491,6 +7499,120 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
+    const piSessionCommand =
+      ctxSelectedProvider === "pi" && !directAnnotation && multipleModelSelections === null
+        ? parsePiSessionCommand(trimmed)
+        : null;
+    if (piSessionCommand) {
+      if ("error" in piSessionCommand || composerHasNonPromptContent) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Invalid Pi command",
+            description:
+              "error" in piSessionCommand
+                ? piSessionCommand.error
+                : "Session commands do not accept attachments or context items.",
+          }),
+        );
+        return;
+      }
+      if (!isServerThread || activeThread.session === null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Start a Pi thread first",
+            description: "Send a message before using session commands.",
+          }),
+        );
+        return;
+      }
+      sendInFlightRef.current = true;
+      const notice = toastManager.add(
+        stackedThreadToast({
+          type: "info",
+          title:
+            piSessionCommand.command === "share" ? "Sharing Pi session…" : "Running Pi command…",
+          timeout: 0,
+        }),
+      );
+      try {
+        const response = await runThreadSessionCommand({
+          environmentId,
+          input: { threadId: activeThread.id, ...piSessionCommand },
+        });
+        if (response._tag === "Failure") {
+          if (isAtomCommandInterrupted(response)) {
+            toastManager.close(notice);
+            return;
+          }
+          throw squashAtomCommandFailure(response);
+        }
+        const result = response.value;
+        if (result.command === "copy") {
+          await writeTextToClipboard(result.text, "Pi response");
+          toastManager.update(notice, {
+            type: "success",
+            title: "Response copied",
+            timeout: 5_000,
+          });
+        } else if (result.command === "export") {
+          const url = URL.createObjectURL(
+            new Blob([result.html], { type: "text/html;charset=utf-8" }),
+          );
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = result.fileName;
+          anchor.click();
+          window.setTimeout(() => URL.revokeObjectURL(url), 0);
+          toastManager.update(notice, {
+            type: "success",
+            title: "Pi session exported",
+            description: result.outputPath,
+            timeout: 5_000,
+          });
+        } else {
+          toastManager.update(notice, {
+            type: "success",
+            title: "Pi session shared",
+            description: (
+              <a href={result.url} target="_blank" rel="noopener noreferrer" className="underline">
+                {result.url}
+              </a>
+            ),
+            actionProps: {
+              children: "Copy link",
+              onClick: () =>
+                void writeTextToClipboard(result.url, "Pi share link").catch(() =>
+                  toastManager.add(
+                    stackedThreadToast({
+                      type: "error",
+                      title: "Could not copy the share link",
+                    }),
+                  ),
+                ),
+            },
+            timeout: 0,
+          });
+        }
+        if (
+          useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ===
+          promptForSend
+        ) {
+          setComposerDraftPrompt(composerDraftTarget, "");
+        }
+      } catch (error) {
+        toastManager.update(notice, {
+          type: "error",
+          title: `Could not ${piSessionCommand.command} Pi session`,
+          description: error instanceof Error ? error.message : "An error occurred.",
+          timeout: 0,
+        });
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
@@ -10029,6 +10151,11 @@ export default function ChatView(props: ChatViewProps) {
                               usageLimitsKey !== null &&
                               !composerHasNonPromptContent
                                 ? openUsageLimits
+                                : undefined
+                            }
+                            onProviderCommand={
+                              !composerHasNonPromptContent
+                                ? (name) => void onSend(undefined, "foreground", undefined, name)
                                 : undefined
                             }
                             environmentUnavailable={activeEnvironmentUnavailableState}

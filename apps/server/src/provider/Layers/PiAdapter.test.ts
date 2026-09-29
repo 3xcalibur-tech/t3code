@@ -90,6 +90,8 @@ const makeFakePi = Effect.fnUntraced(function* (initialSessionFile: string) {
         return { ...base, data: stats.shift() ?? {} };
       case "get_commands":
         return { ...base, data: { commands: [] } };
+      case "get_last_assistant_text":
+        return { ...base, data: { text: "Pi's last response" } };
       case "fork":
         sessionFile = `/fake/fork-${++forks}.jsonl`;
         return { ...base, data: { text: "forked", cancelled: false } };
@@ -183,6 +185,21 @@ const makeHarness = Effect.fnUntraced(function* (sessionFile = SESSION_FILE) {
 });
 
 describe("PiAdapter", () => {
+  it.effect("copies a response without starting a turn or adding conversation items", () =>
+    Effect.gen(function* () {
+      const { fake, adapter } = yield* makeHarness();
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter.sessionCommand({ threadId: THREAD_ID, command: "copy" });
+      assert.deepEqual(result, { command: "copy", text: "Pi's last response" });
+      yield* fake.takeRequest("get_last_assistant_text");
+      assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+      assert.deepEqual((yield* adapter.readThread(THREAD_ID)).turns, []);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
   it.effect("runs a Pi turn and settles it only once Pi reports idle", () =>
     Effect.gen(function* () {
       const { fake, adapter, takeEvent } = yield* makeHarness();

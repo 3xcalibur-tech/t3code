@@ -28,6 +28,13 @@ Pi skills appear in the composer's `$` menu. This includes user skills and proje
 loads for the current workspace; selecting one uses Pi's native skill expansion. `/compact` runs
 Pi's own context compaction.
 
+In an existing Pi thread, `/copy` copies the last assistant response. `/export` saves an HTML
+session export to your device; an optional path also keeps a copy on the server. On mobile,
+choose where to save it through the share sheet. `/share` uploads the session to an unlisted
+GitHub gist and returns a Pi viewer link. Sharing requires `gh auth login` on the server machine;
+anyone with the link can read the exported session. Selecting `/copy` or `/share` runs it
+immediately; these commands do not accept arguments.
+
 Pi loads its normal user and project extensions. Blocking `select`, `confirm`, `input`, and `editor`
 dialogs work in T3 Code. Notifications appear in the work log. Pi terminal decoration such as
 titles, status lines, and widgets does not have a T3 Code equivalent.

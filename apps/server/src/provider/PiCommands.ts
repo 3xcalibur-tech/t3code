@@ -1,11 +1,12 @@
 import { type ServerProviderSkill, type ServerProviderSlashCommand } from "@t3tools/contracts";
 import * as Predicate from "effect/Predicate";
 
-// Pi RPC get_commands omits TUI builtins. Advertise /compact so T3 can map it to RPC compact.
+// Pi RPC get_commands omits TUI builtins. T3 handles these explicitly.
 export const PI_COMPACT_SLASH_COMMAND: ServerProviderSlashCommand = {
   name: "compact",
   description: "Summarize the conversation and reduce context usage",
   input: { hint: "Optional instructions" },
+  argumentMode: "optional",
 };
 
 export interface PiCompactCommand {
@@ -26,7 +27,23 @@ export function parsePiCompactCommand(text: string): PiCompactCommand | null {
 export function withPiBuiltinSlashCommands(
   commands: ReadonlyArray<ServerProviderSlashCommand>,
 ): ReadonlyArray<ServerProviderSlashCommand> {
-  return [PI_COMPACT_SLASH_COMMAND, ...commands.filter((command) => command.name !== "compact")];
+  const builtins = [
+    PI_COMPACT_SLASH_COMMAND,
+    { name: "copy", description: "Copy the last assistant response", argumentMode: "none" },
+    {
+      name: "export",
+      description: "Download the Pi session as HTML",
+      input: { hint: "Optional HTML path on the server" },
+      argumentMode: "optional",
+    },
+    {
+      name: "share",
+      description: "Share the Pi session through an unlisted GitHub gist",
+      argumentMode: "none",
+    },
+  ] satisfies ReadonlyArray<ServerProviderSlashCommand>;
+  const names = new Set(builtins.map((command) => command.name));
+  return [...builtins, ...commands.filter((command) => !names.has(command.name))];
 }
 
 export interface PiDiscoveredCommands {

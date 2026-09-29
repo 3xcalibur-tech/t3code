@@ -97,17 +97,22 @@ it("parses a standalone /compact command and optional instructions", () => {
   expect(parsePiCompactCommand("please /compact")).toBeNull();
 });
 
-it("prepends the builtin compact command without duplicating a discovered one", () => {
-  expect(withPiBuiltinSlashCommands([{ name: "hello", description: "Say hello." }])).toEqual([
-    PI_COMPACT_SLASH_COMMAND,
+it("advertises bridged builtins without duplicating discovered commands", () => {
+  const commands = withPiBuiltinSlashCommands([
+    { name: "compact", description: "Extension compact." },
+    { name: "copy" },
+    { name: "export" },
+    { name: "share" },
     { name: "hello", description: "Say hello." },
   ]);
-  expect(
-    withPiBuiltinSlashCommands([
-      { name: "compact", description: "Extension compact." },
-      { name: "hello" },
-    ]),
-  ).toEqual([PI_COMPACT_SLASH_COMMAND, { name: "hello" }]);
+  expect(commands.map((command) => command.name)).toEqual([
+    "compact",
+    "copy",
+    "export",
+    "share",
+    "hello",
+  ]);
+  expect(commands[0]).toEqual(PI_COMPACT_SLASH_COMMAND);
 });
 
 it("leaves unrelated dollar-prefixed text unchanged", () => {

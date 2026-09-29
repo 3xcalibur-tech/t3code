@@ -818,6 +818,8 @@ const buildAppUnderTest = (options?: {
           }),
           Layer.mock(ProviderService.ProviderService)({
             uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
+            sessionCommand: () =>
+              Effect.die("Provider session commands are not stubbed in this test"),
             ...options?.layers?.providerService,
           }),
           Layer.mock(ProviderAuthService)({
@@ -6288,6 +6290,57 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           }),
         ),
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("returns session command results over websocket rpc without dispatching a turn", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-session-command");
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            sessionCommand: (input) =>
+              Effect.succeed({ command: "copy", text: `response-${input.threadId}` }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.providerSessionCommand]({ threadId, command: "copy" }),
+        ),
+      );
+      assert.deepStrictEqual(result, { command: "copy", text: `response-${threadId}` });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps session command failures actionable across websocket rpc", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-session-command-error");
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            sessionCommand: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "pi",
+                  method: "share",
+                  detail: "Run gh auth login on the server.",
+                }),
+              ),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.providerSessionCommand]({ threadId, command: "share" }).pipe(
+            Effect.flip,
+          ),
+        ),
+      );
+      assert.strictEqual(error._tag, "ProviderSessionCommandError");
+      assert.include(error.message, "gh auth login on the server");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

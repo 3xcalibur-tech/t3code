@@ -8,6 +8,8 @@ import type {
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
+  ProviderSessionCommandInput,
+  ProviderSessionCommandResult,
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
@@ -264,6 +266,13 @@ function makeFakeCodexAdapter(
       Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
   );
 
+  const sessionCommand = vi.fn(
+    (
+      input: ProviderSessionCommandInput,
+    ): Effect.Effect<ProviderSessionCommandResult, ProviderAdapterError> =>
+      Effect.succeed({ command: "copy", text: `response-${input.threadId}` }),
+  );
+
   const stopAll = vi.fn((): Effect.Effect<void, ProviderAdapterError> =>
     Effect.sync(() => {
       sessions.clear();
@@ -294,7 +303,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
+    ...(provider === CODEX_DRIVER ? { uploadFeedback, sessionCommand } : {}),
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -332,6 +341,7 @@ function makeFakeCodexAdapter(
     readThread,
     rollbackThread,
     uploadFeedback,
+    sessionCommand,
     stopAll,
   };
 }
@@ -2188,6 +2198,53 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
       yield* Fiber.join(retryFiber);
       yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect(
+    "routes a session command after recovering a stopped session without sending a turn",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-session-command-recover");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: fixtureCwd("session-command-project"),
+          runtimeMode: "full-access",
+        });
+        yield* routing.codex.stopSession(threadId);
+        routing.codex.startSession.mockClear();
+        routing.codex.sendTurn.mockClear();
+        routing.codex.sessionCommand.mockClear();
+        const result = yield* provider.sessionCommand({ threadId, command: "copy" });
+        assert.deepStrictEqual(result, { command: "copy", text: `response-${threadId}` });
+        assert.strictEqual(routing.codex.startSession.mock.calls.length, 1);
+        assert.deepStrictEqual(routing.codex.sessionCommand.mock.calls, [
+          [{ threadId, command: "copy" }],
+        ]);
+        assert.strictEqual(routing.codex.sendTurn.mock.calls.length, 0);
+      }),
+  );
+
+  it.effect("rejects a session command for an unsupported provider without resuming it", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-session-command-unsupported");
+      yield* provider.startSession(threadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* routing.claude.stopSession(threadId);
+      routing.claude.startSession.mockClear();
+      const error = yield* provider
+        .sessionCommand({ threadId, command: "share" })
+        .pipe(Effect.flip);
+      assert.include(error.message, "does not support session commands");
+      assert.strictEqual(routing.claude.startSession.mock.calls.length, 0);
     }),
   );
 
