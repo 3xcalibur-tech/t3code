@@ -357,44 +357,46 @@ describe("PiAdapter", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("asks for approval once per session when the user accepts for the session", () =>
-    Effect.gen(function* () {
-      const { fake, adapter, takeEvent } = yield* makeHarness();
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        cwd: process.cwd(),
-        runtimeMode: "approval-required",
-      });
-      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Edit the file" });
-      yield* fake.takeRequest("prompt");
-      const confirm = {
-        type: "extension_ui_request",
-        method: "confirm",
-        title: "Allow edit?",
-        message: '{ "path": "README.md" }',
-      };
-      yield* fake.emit({ ...confirm, id: "ui-1" });
-      const opened = yield* takeEvent("request.opened");
-      assert.equal(opened.payload.requestType, "file_change_approval");
-      assert.isDefined(opened.requestId);
-      yield* adapter.respondToRequest(
-        THREAD_ID,
-        ApprovalRequestId.make(opened.requestId!),
-        "acceptForSession",
-      );
-      assert.deepInclude(yield* fake.takeRequest("extension_ui_response"), {
-        id: "ui-1",
-        confirmed: true,
-      });
-      assert.equal((yield* takeEvent("request.resolved")).payload.decision, "acceptForSession");
+  it.effect.each(["acceptForSession", "acceptAlways"] as const)(
+    "asks for approval once per session after %s",
+    (decision) =>
+      Effect.gen(function* () {
+        const { fake, adapter, takeEvent } = yield* makeHarness();
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          cwd: process.cwd(),
+          runtimeMode: "approval-required",
+        });
+        yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Edit the file" });
+        yield* fake.takeRequest("prompt");
+        const confirm = {
+          type: "extension_ui_request",
+          method: "confirm",
+          title: "Allow edit?",
+          message: '{ "path": "README.md" }',
+        };
+        yield* fake.emit({ ...confirm, id: "ui-1" });
+        const opened = yield* takeEvent("request.opened");
+        assert.equal(opened.payload.requestType, "file_change_approval");
+        assert.isDefined(opened.requestId);
+        yield* adapter.respondToRequest(
+          THREAD_ID,
+          ApprovalRequestId.make(opened.requestId!),
+          decision,
+        );
+        assert.deepInclude(yield* fake.takeRequest("extension_ui_response"), {
+          id: "ui-1",
+          confirmed: true,
+        });
+        assert.equal((yield* takeEvent("request.resolved")).payload.decision, decision);
 
-      // The identical confirmation is answered without asking again.
-      yield* fake.emit({ ...confirm, id: "ui-2" });
-      assert.deepInclude(yield* fake.takeRequest("extension_ui_response"), {
-        id: "ui-2",
-        confirmed: true,
-      });
-    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+        // The identical confirmation is answered without asking again.
+        yield* fake.emit({ ...confirm, id: "ui-2" });
+        assert.deepInclude(yield* fake.takeRequest("extension_ui_response"), {
+          id: "ui-2",
+          confirmed: true,
+        });
+      }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
   it.effect("runs /compact as RPC compaction and settles it without an agent run", () =>

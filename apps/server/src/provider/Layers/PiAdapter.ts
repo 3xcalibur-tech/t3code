@@ -358,8 +358,13 @@ function piQuestion(
   };
 }
 
+/** Pi has no lasting approval store, so "always" lasts for the session. */
+function isPiSessionApproval(decision: ProviderApprovalDecision): boolean {
+  return decision === "acceptForSession" || decision === "acceptAlways";
+}
+
 function piApprovalResponse(decision: ProviderApprovalDecision): PiRpcRecord {
-  if (decision === "accept" || decision === "acceptForSession") return { confirmed: true };
+  if (decision === "accept" || isPiSessionApproval(decision)) return { confirmed: true };
   if (decision === "decline") return { confirmed: false };
   return { cancelled: true };
 }
@@ -1315,14 +1320,20 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
       Effect.gen(function* () {
         if (modelSelection === undefined || modelSelection.instanceId !== boundInstanceId) return;
         const thinking = getModelSelectionStringOptionValue(modelSelection, "thinking");
+        const setModel = (model: { readonly provider: string; readonly modelId: string }) =>
+          request(ctx, { type: "set_model", ...model }).pipe(
+            Effect.map((data) => rememberContextWindow(ctx, data)),
+            Effect.mapError(requestError("set_model")),
+          );
+        const setThinking = (level: string) =>
+          request(ctx, { type: "set_thinking_level", level }).pipe(
+            Effect.mapError(requestError("set_thinking_level")),
+          );
         if (modelSelection.model === PI_INHERIT_MODEL_SLUG) {
           // Returning to "Pi default" after an explicit pick has to replay the
           // captured baseline, otherwise Pi stays on the last model applied.
           if (ctx.appliedModel !== null && ctx.baselineModel !== null) {
-            rememberContextWindow(
-              ctx,
-              yield* request(ctx, { type: "set_model", ...ctx.baselineModel }),
-            );
+            yield* setModel(ctx.baselineModel);
             ctx.appliedModel = null;
           }
           // "Pi default" advertises no thinking choices of its own, so an
@@ -1333,7 +1344,7 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
             ctx.baselineThinking !== null &&
             ctx.appliedThinking !== ctx.baselineThinking
           ) {
-            yield* request(ctx, { type: "set_thinking_level", level: ctx.baselineThinking });
+            yield* setThinking(ctx.baselineThinking);
             ctx.appliedThinking = null;
           }
         } else if (modelSelection.model !== ctx.appliedModel) {
@@ -1345,14 +1356,7 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
               issue: `Pi model '${modelSelection.model}' must use provider/model format.`,
             });
           }
-          rememberContextWindow(
-            ctx,
-            yield* request(ctx, {
-              type: "set_model",
-              provider: parsed.provider,
-              modelId: parsed.modelId,
-            }),
-          );
+          yield* setModel(parsed);
           ctx.appliedModel = modelSelection.model;
         }
         if (
@@ -1360,7 +1364,7 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
           thinking !== ctx.appliedThinking &&
           PI_THINKING_LEVELS.has(thinking)
         ) {
-          yield* request(ctx, { type: "set_thinking_level", level: thinking });
+          yield* setThinking(thinking);
           ctx.appliedThinking = thinking;
         }
         yield* updateSession(ctx, { model: modelSelection.model });
@@ -1645,92 +1649,92 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
           // Model changes apply only between turns. They run outside the event
           // permit so a dialog raised by set_model can still be answered.
           if (ctx.activeTurn === null || ctx.activeTurn.interrupted) {
-            yield* applySelection(ctx, input.modelSelection).pipe(
-              Effect.mapError((cause) =>
-                cause._tag === "ProviderAdapterValidationError"
-                  ? cause
-                  : requestError("set_model")(cause),
-              ),
-            );
+            yield* applySelection(ctx, input.modelSelection);
           }
-          const turnId = yield* ctx.eventPermit
-            .withPermits(1)(
-              Effect.gen(function* () {
-                // A stopped turn cannot take a steer. Its abort already
-                // returned, so settle it now instead of waiting for its
-                // queued settlement.
-                if (ctx.activeTurn?.interrupted === true) yield* finalizeTurn(ctx);
-                const active = ctx.activeTurn;
-                if (active !== null) {
-                  // Prompt with streamingBehavior steer is atomic on Pi's side:
-                  // it queues during an active run and starts a new run if
-                  // settlement won the race. /compact is not a prompt: Pi's
-                  // compact RPC aborts the agent first.
-                  if (compactCommand !== null) {
-                    active.manualCompactInFlight = true;
-                    yield* ctx.connection.send(compactRecord(compactCommand));
-                    ctx.pendingCompactResponses.push({ turnId: active.turnId, kind: "steer" });
-                  } else if (payload !== null) {
-                    yield* ctx.connection.send({
+          const turnId = yield* ctx.eventPermit.withPermits(1)(
+            Effect.gen(function* () {
+              // A stopped turn cannot take a steer. Its abort already
+              // returned, so settle it now instead of waiting for its
+              // queued settlement.
+              if (ctx.activeTurn?.interrupted === true) yield* finalizeTurn(ctx);
+              const active = ctx.activeTurn;
+              if (active !== null) {
+                // Prompt with streamingBehavior steer is atomic on Pi's side:
+                // it queues during an active run and starts a new run if
+                // settlement won the race. /compact is not a prompt: Pi's
+                // compact RPC aborts the agent first.
+                if (compactCommand !== null) {
+                  active.manualCompactInFlight = true;
+                  yield* ctx.connection
+                    .send(compactRecord(compactCommand))
+                    .pipe(Effect.mapError(requestError("compact")));
+                  ctx.pendingCompactResponses.push({ turnId: active.turnId, kind: "steer" });
+                } else if (payload !== null) {
+                  yield* ctx.connection
+                    .send({
                       type: "prompt",
                       message: payload.message,
                       streamingBehavior: "steer",
                       ...(payload.images.length === 0 ? {} : { images: payload.images }),
-                    });
-                    ctx.pendingPromptResponses.push({ turnId: active.turnId, kind: "steer" });
-                  }
-                  active.settleProbeGeneration += 1;
-                  return active.turnId;
+                    })
+                    .pipe(Effect.mapError(requestError("prompt")));
+                  ctx.pendingPromptResponses.push({ turnId: active.turnId, kind: "steer" });
                 }
+                active.settleProbeGeneration += 1;
+                return active.turnId;
+              }
 
-                const turnId = TurnId.make(yield* randomId);
-                const turn: ActivePiTurn = {
-                  turnId,
-                  entryIndex: ctx.turnEntryIds.length,
-                  messageOrdinal: 0,
-                  streamItems: new Map(),
-                  toolArgs: new Map(),
-                  interrupted: false,
-                  sawAgentActivity: false,
-                  promptMayBeCommandOnly:
-                    compactCommand !== null ||
-                    (payload?.message.trimStart().startsWith("/") ?? false),
-                  latestCompactionAfterTokens: null,
-                  lastUsedTokens: null,
-                  settleProbeGeneration: 0,
-                  settleWhenIdle: false,
-                  sawCompaction: false,
-                  manualCompactInFlight: compactCommand !== null,
-                  compactionRunning: false,
-                  failure: null,
-                };
-                // Pi acks `prompt` only after slash-command expansion completes,
-                // and extension commands may block on dialogs indefinitely.
-                // Rejections therefore return later as id-less responses.
-                if (compactCommand !== null) {
-                  yield* ctx.connection.send(compactRecord(compactCommand));
-                  ctx.pendingCompactResponses.push({ turnId, kind: "turn_start" });
-                } else if (payload !== null) {
-                  yield* ctx.connection.send({
+              const turnId = TurnId.make(yield* randomId);
+              const turn: ActivePiTurn = {
+                turnId,
+                entryIndex: ctx.turnEntryIds.length,
+                messageOrdinal: 0,
+                streamItems: new Map(),
+                toolArgs: new Map(),
+                interrupted: false,
+                sawAgentActivity: false,
+                promptMayBeCommandOnly:
+                  compactCommand !== null ||
+                  (payload?.message.trimStart().startsWith("/") ?? false),
+                latestCompactionAfterTokens: null,
+                lastUsedTokens: null,
+                settleProbeGeneration: 0,
+                settleWhenIdle: false,
+                sawCompaction: false,
+                manualCompactInFlight: compactCommand !== null,
+                compactionRunning: false,
+                failure: null,
+              };
+              // Pi acks `prompt` only after slash-command expansion completes,
+              // and extension commands may block on dialogs indefinitely.
+              // Rejections therefore return later as id-less responses.
+              if (compactCommand !== null) {
+                yield* ctx.connection
+                  .send(compactRecord(compactCommand))
+                  .pipe(Effect.mapError(requestError("compact")));
+                ctx.pendingCompactResponses.push({ turnId, kind: "turn_start" });
+              } else if (payload !== null) {
+                yield* ctx.connection
+                  .send({
                     type: "prompt",
                     message: payload.message,
                     ...(payload.images.length === 0 ? {} : { images: payload.images }),
-                  });
-                  ctx.pendingPromptResponses.push({ turnId, kind: "turn_start" });
-                }
-                ctx.activeTurn = turn;
-                ctx.turnEntryIds.push(null);
-                ctx.turns.push({ id: turnId, items: [] });
-                yield* updateSession(ctx, { status: "running", activeTurnId: turnId });
-                yield* emit(ctx, {
-                  type: "turn.started",
-                  turnId,
-                  payload: ctx.session.model === undefined ? {} : { model: ctx.session.model },
-                });
-                return turnId;
-              }),
-            )
-            .pipe(Effect.mapError(requestError("prompt")));
+                  })
+                  .pipe(Effect.mapError(requestError("prompt")));
+                ctx.pendingPromptResponses.push({ turnId, kind: "turn_start" });
+              }
+              ctx.activeTurn = turn;
+              ctx.turnEntryIds.push(null);
+              ctx.turns.push({ id: turnId, items: [] });
+              yield* updateSession(ctx, { status: "running", activeTurnId: turnId });
+              yield* emit(ctx, {
+                type: "turn.started",
+                turnId,
+                payload: ctx.session.model === undefined ? {} : { model: ctx.session.model },
+              });
+              return turnId;
+            }),
+          );
           return { threadId: input.threadId, turnId, resumeCursor: ctx.session.resumeCursor };
         }),
       );
@@ -1793,7 +1797,7 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
             // Dropped only once Pi has the answer, so a failed send leaves the
             // request retryable and still cancellable during teardown.
             ctx.pendingRequests.delete(requestId);
-            if (decision === "acceptForSession") ctx.sessionApprovals.add(pending.approvalKey);
+            if (isPiSessionApproval(decision)) ctx.sessionApprovals.add(pending.approvalKey);
             yield* resolvePendingRequest(ctx, requestId, pending, { type: "approval", decision });
           }),
         );
