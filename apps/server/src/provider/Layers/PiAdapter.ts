@@ -1593,6 +1593,47 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
             }
           }).pipe(Effect.onError(() => closeSession(ctx)));
 
+          // The pump reports an exit only for a session that finished starting,
+          // so readiness is checked and published under the same permit: Pi
+          // exiting now either fails this start or reports a normal exit.
+          yield* ctx.eventPermit.withPermits(1)(
+            Effect.gen(function* () {
+              if (ctx.stopped) {
+                return yield* new ProviderAdapterProcessError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  detail: "Pi exited during startup.",
+                });
+              }
+              yield* updateSession(ctx, { status: "ready" });
+              yield* emit(ctx, { type: "session.started", payload: {} });
+              // Pi writes the file only once it holds a message, so a missing
+              // file loses context only if a turn recorded a user entry (or
+              // could not tell).
+              if (
+                requestedCursor !== undefined &&
+                resumeCursor === undefined &&
+                requestedCursor.turnEntryIds.some((entryId) => entryId !== "")
+              ) {
+                yield* emit(ctx, {
+                  type: "runtime.warning",
+                  payload: {
+                    message:
+                      "Pi's previous session file is missing. This thread continues in a new Pi session without earlier context.",
+                  },
+                });
+              }
+              yield* emit(ctx, {
+                type: "session.state.changed",
+                payload: { state: "ready", reason: "Pi session ready" },
+              });
+              yield* emit(ctx, {
+                type: "thread.started",
+                payload: { providerThreadId: ctx.sessionFile },
+              });
+            }),
+          );
+
           // Discovery can invoke extension code and raise a blocking dialog,
           // so it never holds session start.
           yield* discoverSkillNames(ctx).pipe(
@@ -1600,33 +1641,6 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
             Effect.ignore,
             Effect.forkIn(sessionScope),
           );
-
-          yield* updateSession(ctx, { status: "ready" });
-          yield* emit(ctx, { type: "session.started", payload: {} });
-          // Pi writes the file only once it holds a message, so a missing
-          // file loses context only if a turn recorded a user entry (or could
-          // not tell).
-          if (
-            requestedCursor !== undefined &&
-            resumeCursor === undefined &&
-            requestedCursor.turnEntryIds.some((entryId) => entryId !== "")
-          ) {
-            yield* emit(ctx, {
-              type: "runtime.warning",
-              payload: {
-                message:
-                  "Pi's previous session file is missing. This thread continues in a new Pi session without earlier context.",
-              },
-            });
-          }
-          yield* emit(ctx, {
-            type: "session.state.changed",
-            payload: { state: "ready", reason: "Pi session ready" },
-          });
-          yield* emit(ctx, {
-            type: "thread.started",
-            payload: { providerThreadId: ctx.sessionFile },
-          });
           return { ...ctx.session };
         }),
       );
