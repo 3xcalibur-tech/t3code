@@ -871,7 +871,11 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
         const usage = readUsage
           ? yield* readTokenUsage(ctx, turn.latestCompactionAfterTokens)
           : undefined;
-        if (usage !== undefined) yield* emitTokenUsage(ctx, turn.turnId, usage);
+        // Each report becomes a persisted activity. After a normal turn the
+        // settled total usually equals the last message's, so skip the repeat.
+        if (usage !== undefined && usage.usedTokens !== turn.lastUsedTokens) {
+          yield* emitTokenUsage(ctx, turn.turnId, usage);
+        }
         const failure = turn.interrupted
           ? null
           : (turn.failure?.slice(0, PI_TURN_FAILURE_MAX_CHARS) ?? null);
@@ -937,12 +941,14 @@ export function makePiAdapter(piSettings: PiSettings, options?: PiAdapterLiveOpt
         const result = event["result"];
         if (result === null || result === undefined) {
           if (event["aborted"] !== true) {
+            // Pi's message already names the failure, for example
+            // "Compaction failed: Nothing to compact (session too small)".
             const errorMessage =
               nonEmpty(recordString(event, "errorMessage")) ?? "Pi context compaction failed.";
             yield* emit(ctx, {
               type: "runtime.warning",
               turnId: turn.turnId,
-              payload: { message: `Context compaction failed: ${errorMessage.slice(0, 1_000)}` },
+              payload: { message: errorMessage.slice(0, 1_000) },
             });
           }
         } else {

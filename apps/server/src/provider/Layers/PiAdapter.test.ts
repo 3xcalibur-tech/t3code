@@ -428,6 +428,67 @@ describe("PiAdapter", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("reports a failed /compact in Pi's words and still completes the turn", () =>
+    Effect.gen(function* () {
+      const { fake, adapter, takeEvent } = yield* makeHarness();
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({ threadId: THREAD_ID, input: "/compact" });
+      yield* fake.takeRequest("compact");
+      // Pi 0.87's sequence for a session with too little to summarize.
+      yield* fake.emit({ type: "compaction_start", reason: "manual" });
+      yield* fake.emit({
+        type: "compaction_end",
+        reason: "manual",
+        aborted: false,
+        willRetry: false,
+        errorMessage: "Compaction failed: Nothing to compact (session too small)",
+      });
+      yield* fake.emit({
+        type: "response",
+        command: "compact",
+        success: false,
+        error: "Nothing to compact (session too small)",
+      });
+
+      assert.equal(
+        (yield* takeEvent("runtime.warning")).payload.message,
+        "Compaction failed: Nothing to compact (session too small)",
+      );
+      const completed = yield* takeEvent("turn.completed");
+      assert.equal(completed.turnId, turn.turnId);
+      assert.equal(completed.payload.state, "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("does not repeat an unchanged usage report when the turn settles", () =>
+    Effect.gen(function* () {
+      const { fake, adapter, takeEventsThrough } = yield* makeHarness();
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "Hello pi" });
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", usage: { totalTokens: 1_500, input: 1_400, output: 100 } },
+      });
+      fake.queueStats({ contextUsage: { tokens: 1_500, contextWindow: 200_000 } });
+      yield* fake.emit({ type: "agent_settled" });
+
+      const events = yield* takeEventsThrough("turn.completed");
+      const usage = events.filter((event) => event.type === "thread.token-usage.updated");
+      assert.equal(usage.length, 1);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("fails a rejected prompt with Pi's reason, bounded", () =>
     Effect.gen(function* () {
       const { fake, adapter, takeEvent } = yield* makeHarness();
