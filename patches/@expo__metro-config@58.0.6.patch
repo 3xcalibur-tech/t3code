@@ -1,5 +1,5 @@
 diff --git a/build/serializer/sourceMap.js b/build/serializer/sourceMap.js
-index 2a58f5792e351b3c64dca1590c36586d7c1fdab3..a90ce773ff7af897acab586621d11ff14a00317f 100644
+index 2a58f57..a90ce77 100644
 --- a/build/serializer/sourceMap.js
 +++ b/build/serializer/sourceMap.js
 @@ -177,6 +177,58 @@ function repairInvalidNegativeIndices(map) {

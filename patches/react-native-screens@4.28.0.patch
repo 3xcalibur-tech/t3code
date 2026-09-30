@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderConfigViewManager.kt b/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderConfigViewManager.kt
-index fa1b77317f609983ae2434764174072e51130550..270c81c90971b0ff3038b999973dd4d128a9d140 100644
+index fa1b773..270c81c 100644
 --- a/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderConfigViewManager.kt
 +++ b/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderConfigViewManager.kt
 @@ -124,6 +124,34 @@ class ScreenStackHeaderConfigViewManager :
@@ -38,7 +38,7 @@ index fa1b77317f609983ae2434764174072e51130550..270c81c90971b0ff3038b999973dd4d1
          config: ScreenStackHeaderConfig,
          titleFontFamily: String?,
 diff --git a/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderSubviewManager.kt b/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderSubviewManager.kt
-index 64f14f0c5ade16eb9519b8780d4ce013f88fbd3a..6cb1d69f97a95759c662a6006a9626925d9fefd9 100644
+index 64f14f0..6cb1d69 100644
 --- a/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderSubviewManager.kt
 +++ b/android/src/main/java/com/swmansion/rnscreens/ScreenStackHeaderSubviewManager.kt
 @@ -47,6 +47,12 @@ class ScreenStackHeaderSubviewManager :
@@ -55,7 +55,7 @@ index 64f14f0c5ade16eb9519b8780d4ce013f88fbd3a..6cb1d69f97a95759c662a6006a962692
      // however we must override their setters
      override fun setSynchronousShadowStateUpdatesEnabled(
 diff --git a/ios/RNSBarButtonItem.h b/ios/RNSBarButtonItem.h
-index a26d1254eafd89268f65d968988cf6a3b8c1e457..62eea42ac26c532801189556c5f51012c3df3a52 100644
+index a26d125..62eea42 100644
 --- a/ios/RNSBarButtonItem.h
 +++ b/ios/RNSBarButtonItem.h
 @@ -15,6 +15,10 @@ typedef void (^RNSBarButtonMenuItemAction)(NSString *menuId);
@@ -70,10 +70,10 @@ index a26d1254eafd89268f65d968988cf6a3b8c1e457..62eea42ac26c532801189556c5f51012
  
  @end
 diff --git a/ios/RNSBarButtonItem.mm b/ios/RNSBarButtonItem.mm
-index 76a39d4df4a4482d6447f4ead1ae4de544132831..15bd5a9662434c9b19e6970b77e796da4b61983c 100644
+index 76a39d4..15bd5a9 100644
 --- a/ios/RNSBarButtonItem.mm
 +++ b/ios/RNSBarButtonItem.mm
-@@ -110,6 +110,58 @@ static UIMenuOptions RNSMakeUIMenuOptionsFromConfig(NSDictionary *config);
+@@ -110,6 +110,58 @@ - (instancetype)initWithConfig:(NSDictionary<NSString *, id> *)dict
    if (dict[@"accessibilityHint"]) {
      self.accessibilityHint = dict[@"accessibilityHint"];
    }
@@ -133,10 +133,10 @@ index 76a39d4df4a4482d6447f4ead1ae4de544132831..15bd5a9662434c9b19e6970b77e796da
  #if !TARGET_OS_TV || __TV_OS_VERSION_MAX_ALLOWED >= 170000
    if (@available(tvOS 17.0, *)) {
 diff --git a/ios/RNSScreenStack.mm b/ios/RNSScreenStack.mm
-index c233036b56c6b2ba433785d5cbc06e9f411b5a19..0c2db425e9910eb6acc8512cfd6e4ab9677f16c6 100644
+index c233036..0c2db42 100644
 --- a/ios/RNSScreenStack.mm
 +++ b/ios/RNSScreenStack.mm
-@@ -1076,6 +1076,15 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -1076,6 +1076,15 @@ - (BOOL)scrollViewHasHorizontalPart:(UIScrollView *)scrollView
    return scrollView.contentSize.width > scrollView.frame.size.width;
  }
  
@@ -152,7 +152,7 @@ index c233036b56c6b2ba433785d5cbc06e9f411b5a19..0c2db425e9910eb6acc8512cfd6e4ab9
  // Custom method for compatibility with iOS < 13.4
  // RNSScreenStackView is a UIGestureRecognizerDelegate for three types of gesture recognizers:
  // RNSPanGestureRecognizer, RNSScreenEdgeGestureRecognizer, _UIParallaxTransitionPanGestureRecognizer
-@@ -1169,9 +1178,11 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -1169,9 +1178,11 @@ - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
      if (gestureRecognizer == _controller.interactiveContentPopGestureRecognizer &&
          [self isScrollViewPanGestureRecognizer:otherGestureRecognizer]) {
        // ScrollView should take precedence when scrolling horizontally (it should be required to fail).
@@ -166,7 +166,7 @@ index c233036b56c6b2ba433785d5cbc06e9f411b5a19..0c2db425e9910eb6acc8512cfd6e4ab9
      }
    }
  
-@@ -1191,6 +1202,15 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -1191,6 +1202,15 @@ - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
      // gestureRecognizer:shouldRequireFailureOfGestureRecognizer
      isEdgeSwipeGestureRecognizer =
          isEdgeSwipeGestureRecognizer && gestureRecognizer != _controller.interactiveContentPopGestureRecognizer;
@@ -183,7 +183,7 @@ index c233036b56c6b2ba433785d5cbc06e9f411b5a19..0c2db425e9910eb6acc8512cfd6e4ab9
  #endif // check for iOS >= 26
  
 diff --git a/ios/RNSScreenStackHeaderConfig.h b/ios/RNSScreenStackHeaderConfig.h
-index 8a41697223f6c4b5cb2dd6d450fc58cbb3b27536..309ba2f762068dcf452c172f7c7cbf2a55d03cb2 100644
+index 8a41697..309ba2f 100644
 --- a/ios/RNSScreenStackHeaderConfig.h
 +++ b/ios/RNSScreenStackHeaderConfig.h
 @@ -23,6 +23,8 @@
@@ -209,7 +209,7 @@ index 8a41697223f6c4b5cb2dd6d450fc58cbb3b27536..309ba2f762068dcf452c172f7c7cbf2a
  
  NS_ASSUME_NONNULL_END
 diff --git a/ios/RNSScreenStackHeaderConfig.mm b/ios/RNSScreenStackHeaderConfig.mm
-index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab60e185033 100644
+index a54cb63..4ff30b3 100644
 --- a/ios/RNSScreenStackHeaderConfig.mm
 +++ b/ios/RNSScreenStackHeaderConfig.mm
 @@ -24,11 +24,46 @@
@@ -259,7 +259,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  @interface RCTImageLoader (Private)
  - (id<RCTImageCache>)imageCache;
  @end
-@@ -46,6 +81,9 @@ static const NSNumber *const DEFAULT_TITLE_LARGE_FONT_SIZE = @34;
+@@ -46,6 +81,9 @@ + (BOOL)rnscreens_isBlankOrNull:(NSString *)string
  @end
  
  @interface RNSScreenStackHeaderConfig () <RCTMountingTransactionObserving>
@@ -269,7 +269,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  @end
  
  @implementation RNSScreenStackHeaderConfig {
-@@ -80,6 +118,7 @@ static const NSNumber *const DEFAULT_TITLE_LARGE_FONT_SIZE = @34;
+@@ -80,6 +118,7 @@ - (void)initProps
    self.hidden = YES;
    _reactSubviews = [NSMutableArray new];
    _backTitleVisible = YES;
@@ -277,7 +277,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
    _blurEffect = RNSBlurEffectStyleNone;
    _synchronousShadowStateUpdatesEnabled = YES;
  }
-@@ -507,6 +546,10 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -507,6 +546,10 @@ + (void)updateViewController:(UIViewController *)vc
  
    if (shouldHide) {
      navitem.title = config.title;
@@ -288,7 +288,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
      // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items.
      [navctr setNavigationBarHidden:YES animated:animated];
-@@ -523,11 +566,19 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -523,11 +566,19 @@ + (void)updateViewController:(UIViewController *)vc
    }
    navitem.largeTitleDisplayMode =
        config.largeTitle ? UINavigationItemLargeTitleDisplayModeAlways : UINavigationItemLargeTitleDisplayModeNever;
@@ -308,7 +308,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
  // appearance does not apply to the tvOS so we need to use lagacy customization
  #if TARGET_OS_TV
-@@ -559,8 +610,6 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -559,8 +610,6 @@ + (void)updateViewController:(UIViewController *)vc
    navitem.leftItemsSupplementBackButton = config.backButtonInCustomView;
  #endif
    navitem.titleView = nil;
@@ -317,7 +317,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
  #if !TARGET_OS_TV
    // We want to set navitem.searchController to nil only if we are sure
-@@ -568,22 +617,18 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -568,22 +617,18 @@ + (void)updateViewController:(UIViewController *)vc
    bool searchBarPresent = false;
  #endif /* !TARGET_OS_TV */
  
@@ -344,7 +344,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
          break;
        }
        case RNSScreenStackHeaderSubviewTypeCenter:
-@@ -648,10 +693,479 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -648,10 +693,479 @@ + (void)updateViewController:(UIViewController *)vc
    // This assignment should be done after `navitem.titleView = ...` assignment (iOS 16.0 bug).
    // See: https://github.com/software-mansion/react-native-screens/issues/1570 (comments)
    navitem.title = config.title;
@@ -828,7 +828,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
    // Setting navigation bar visibility is split to mitigate iOS 26 bug with bar button items
    // (setting nav bar visibility should be done after `navitem.*BarButtonItems`).
-@@ -784,6 +1289,8 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -784,6 +1298,8 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
  
  - (NSArray<UIBarButtonItem *> *)barButtonItemsFromConfigs:(NSArray<NSDictionary<NSString *, id> *> *)dicts
                                           withCurrentItems:(NSArray<UIBarButtonItem *> *)currentItems
@@ -837,7 +837,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  {
    if (dicts.count == 0) {
      return currentItems;
-@@ -792,7 +1299,200 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -792,7 +1308,200 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
    [items addObjectsFromArray:currentItems];
    for (NSUInteger i = 0; i < dicts.count; i++) {
      NSDictionary *dict = dicts[i];
@@ -1039,7 +1039,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
        RNSBarButtonItem *item = [[RNSBarButtonItem alloc] initWithConfig:dict
            action:^(NSString *buttonId) {
              auto eventEmitter = std::static_pointer_cast<const facebook::react::RNSScreenStackHeaderConfigEventEmitter>(
-@@ -814,19 +1514,23 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -814,19 +1523,23 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
            }
            imageLoader:_imageLoader];
        NSNumber *index = dict[@"index"];
@@ -1069,7 +1069,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
          [items insertObject:item atIndex:index.integerValue];
        } else {
          [items addObject:item];
-@@ -836,6 +1540,47 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -836,6 +1549,47 @@ - (void)applySemanticContentAttributeIfNeededToNavCtrl:(UINavigationController *
    return items;
  }
  
@@ -1117,7 +1117,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  RNS_IGNORE_SUPER_CALL_BEGIN
  - (void)insertReactSubview:(RNSScreenStackHeaderSubview *)subview atIndex:(NSInteger)atIndex
  {
-@@ -1023,6 +1768,8 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1025,6 +1779,8 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
    }
  
    _title = RCTNSStringFromStringNilIfEmpty(newScreenProps.title);
@@ -1126,7 +1126,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
    if (newScreenProps.titleFontFamily != oldScreenProps.titleFontFamily) {
      _titleFontFamily = RCTNSStringFromStringNilIfEmpty(newScreenProps.titleFontFamily);
    }
-@@ -1048,6 +1795,7 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1050,6 +1806,7 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
    _disableBackButtonMenu = newScreenProps.disableBackButtonMenu;
    _backButtonDisplayMode =
        [RNSConvert UINavigationItemBackButtonDisplayModeFromCppEquivalent:newScreenProps.backButtonDisplayMode];
@@ -1134,7 +1134,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
    if (newScreenProps.userInterfaceStyle != oldScreenProps.userInterfaceStyle) {
      _userInterfaceStyle = [RNSConvert UIUserInterfaceStyleFromCppEquivalent:newScreenProps.userInterfaceStyle];
-@@ -1094,6 +1842,30 @@ static RCTResizeMode resizeModeFromCppEquiv(react::ImageResizeMode resizeMode)
+@@ -1096,6 +1853,30 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
      _headerRightBarButtonItems = array;
    }
  
@@ -1166,10 +1166,10 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
  
    if (needsNavigationControllerLayout) {
 diff --git a/ios/RNSScreenStackHeaderSubview.mm b/ios/RNSScreenStackHeaderSubview.mm
-index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb595396ae 100644
+index add33c4..489afa5 100644
 --- a/ios/RNSScreenStackHeaderSubview.mm
 +++ b/ios/RNSScreenStackHeaderSubview.mm
-@@ -20,7 +20,9 @@ namespace react = facebook::react;
+@@ -20,7 +20,9 @@ @implementation RNSScreenStackHeaderSubview {
    // This is a strong reference to UIBarButtonItem which creates a retain cycle.
    // The cycle is cleared via `invalidateUIBarButtonItem` method, called by `invalidate` callback.
    UIBarButtonItem *_barButtonItem;
@@ -1179,7 +1179,7 @@ index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb
  }
  
  #pragma mark - Common
-@@ -102,6 +104,25 @@ namespace react = facebook::react;
+@@ -102,6 +104,25 @@ - (void)updateShadowStateWithFrame:(CGRect)frame
  - (void)layoutSubviews
  {
    [super layoutSubviews];
@@ -1205,7 +1205,7 @@ index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb
    [self updateShadowStateInContextOfAncestorView:[self findNavigationBar]];
  }
  
-@@ -124,6 +145,7 @@ namespace react = facebook::react;
+@@ -124,6 +145,7 @@ - (void)updateProps:(react::Props::Shared const &)props oldProps:(react::Props::
    const auto &newHeaderSubviewProps = *std::static_pointer_cast<const react::RNSScreenStackHeaderSubviewProps>(props);
  
    [self setType:[RNSConvert RNSScreenStackHeaderSubviewTypeFromCppEquivalent:newHeaderSubviewProps.type]];
@@ -1213,7 +1213,7 @@ index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb
    [self setHidesSharedBackground:newHeaderSubviewProps.hidesSharedBackground];
    [self setSynchronousShadowStateUpdatesEnabled:newHeaderSubviewProps.synchronousShadowStateUpdatesEnabled];
    [super updateProps:props oldProps:oldProps];
-@@ -276,7 +298,14 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -276,7 +298,14 @@ - (void)configureBarButtonItem
  #if RNS_IPHONE_OS_VERSION_AVAILABLE(26_0)
    if (@available(iOS 26.0, *)) {
      if (_barButtonItem != nil) {
@@ -1229,7 +1229,7 @@ index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb
      }
    }
  #endif // RNS_IPHONE_OS_VERSION_AVAILABLE(26_0)
-@@ -284,10 +313,22 @@ RNS_IGNORE_SUPER_CALL_END
+@@ -284,10 +313,22 @@ - (void)configureBarButtonItem
  
  - (void)setHidesSharedBackground:(BOOL)hidesSharedBackground
  {
@@ -1253,7 +1253,7 @@ index add33c4807e038dcd846f6c72b2fc472ded02809..489afa5fa2da09c1ec6986d1832b58bb
  
  // Needed because of this: https://github.com/facebook/react-native/pull/37274
 diff --git a/lib/commonjs/components/ScreenStackHeaderConfig.js b/lib/commonjs/components/ScreenStackHeaderConfig.js
-index 6e68cd1f83469fb6976aee837ba704f996546b61..9e0948514644b01d9fd7956fcf3ac84cef3e9577 100644
+index 6e68cd1..9e09485 100644
 --- a/lib/commonjs/components/ScreenStackHeaderConfig.js
 +++ b/lib/commonjs/components/ScreenStackHeaderConfig.js
 @@ -31,17 +31,42 @@ const ScreenStackHeaderConfig = exports.ScreenStackHeaderConfig = /*#__PURE__*/_
@@ -1337,7 +1337,7 @@ index 6e68cd1f83469fb6976aee837ba704f996546b61..9e0948514644b01d9fd7956fcf3ac84c
      onPressHeaderBarButtonMenuItem: onPressHeaderBarButtonMenuItem,
      ref: ref,
 diff --git a/lib/commonjs/components/helpers/prepareHeaderBarButtonItems.js b/lib/commonjs/components/helpers/prepareHeaderBarButtonItems.js
-index 589b6ccc3c68229cfa0eaf8abeb73724aaa6b66b..b584624cf3dcd8ada86b6a6359d0d3940ca24a2e 100644
+index 589b6cc..b584624 100644
 --- a/lib/commonjs/components/helpers/prepareHeaderBarButtonItems.js
 +++ b/lib/commonjs/components/helpers/prepareHeaderBarButtonItems.js
 @@ -8,7 +8,7 @@ var _reactNative = require("react-native");
@@ -1425,7 +1425,7 @@ index 589b6ccc3c68229cfa0eaf8abeb73724aaa6b66b..b584624cf3dcd8ada86b6a6359d0d394
  //# sourceMappingURL=prepareHeaderBarButtonItems.js.map
 \ No newline at end of file
 diff --git a/lib/module/components/ScreenStackHeaderConfig.js b/lib/module/components/ScreenStackHeaderConfig.js
-index 242898c203307c25e752ee0a9a4abc864d773e78..7cebaa3d6919724a9d8b7b7ab20756658d93df1f 100644
+index 242898c..7cebaa3 100644
 --- a/lib/module/components/ScreenStackHeaderConfig.js
 +++ b/lib/module/components/ScreenStackHeaderConfig.js
 @@ -27,17 +27,42 @@ export const ScreenStackHeaderConfig = /*#__PURE__*/React.forwardRef((props, ref
@@ -1509,7 +1509,7 @@ index 242898c203307c25e752ee0a9a4abc864d773e78..7cebaa3d6919724a9d8b7b7ab2075665
      onPressHeaderBarButtonMenuItem: onPressHeaderBarButtonMenuItem,
      ref: ref,
 diff --git a/lib/module/components/helpers/prepareHeaderBarButtonItems.js b/lib/module/components/helpers/prepareHeaderBarButtonItems.js
-index 24bf271717a0876fee87c3f01f4a2707b481036a..693cfad508029c66207535b7e5e26e372eb4130d 100644
+index 24bf271..693cfad 100644
 --- a/lib/module/components/helpers/prepareHeaderBarButtonItems.js
 +++ b/lib/module/components/helpers/prepareHeaderBarButtonItems.js
 @@ -3,7 +3,7 @@ import { Image, processColor } from 'react-native';
@@ -1596,7 +1596,7 @@ index 24bf271717a0876fee87c3f01f4a2707b481036a..693cfad508029c66207535b7e5e26e37
  //# sourceMappingURL=prepareHeaderBarButtonItems.js.map
 \ No newline at end of file
 diff --git a/lib/typescript/components/helpers/prepareHeaderBarButtonItems.d.ts b/lib/typescript/components/helpers/prepareHeaderBarButtonItems.d.ts
-index 4704a145fb1b3f85d0c0624ea6dbf944f5dd7205..e2e2b7861083bd1aaf0b3e84d6e62d3f5a21e2f2 100644
+index 4704a14..e2e2b78 100644
 --- a/lib/typescript/components/helpers/prepareHeaderBarButtonItems.d.ts
 +++ b/lib/typescript/components/helpers/prepareHeaderBarButtonItems.d.ts
 @@ -2,7 +2,7 @@ import type { ImageResolvedAssetSource } from 'react-native';
@@ -1617,7 +1617,7 @@ index 4704a145fb1b3f85d0c0624ea6dbf944f5dd7205..e2e2b7861083bd1aaf0b3e84d6e62d3f
  //# sourceMappingURL=prepareHeaderBarButtonItems.d.ts.map
 \ No newline at end of file
 diff --git a/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts b/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts
-index ec39792c39420be57cc2a26f1c0f69efb417c4ca..434bccf543dc608c87ce2ba7521919e617cf3538 100644
+index ec39792..434bccf 100644
 --- a/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts
 +++ b/lib/typescript/fabric/ScreenStackHeaderConfigNativeComponent.d.ts
 @@ -9,6 +9,7 @@ type OnPressHeaderBarButtonMenuItemEvent = Readonly<{
@@ -1653,7 +1653,7 @@ index ec39792c39420be57cc2a26f1c0f69efb417c4ca..434bccf543dc608c87ce2ba7521919e6
      onPressHeaderBarButtonMenuItem?: CT.DirectEventHandler<OnPressHeaderBarButtonMenuItemEvent> | undefined;
      synchronousShadowStateUpdatesEnabled?: CT.WithDefault<boolean, true>;
 diff --git a/lib/typescript/fabric/ScreenStackHeaderSubviewNativeComponent.d.ts b/lib/typescript/fabric/ScreenStackHeaderSubviewNativeComponent.d.ts
-index 2cb1a7954a7f5dc19155d59bdb13b4118ef2934b..d6ca5a4ef9c4e9748203443998a47804f34e9cdf 100644
+index 2cb1a79..d6ca5a4 100644
 --- a/lib/typescript/fabric/ScreenStackHeaderSubviewNativeComponent.d.ts
 +++ b/lib/typescript/fabric/ScreenStackHeaderSubviewNativeComponent.d.ts
 @@ -3,6 +3,7 @@ export type HeaderSubviewTypes = 'back' | 'right' | 'left' | 'title' | 'center'
@@ -1665,7 +1665,7 @@ index 2cb1a7954a7f5dc19155d59bdb13b4118ef2934b..d6ca5a4ef9c4e9748203443998a47804
  }
  declare const _default: HostComponent<NativeProps>;
 diff --git a/lib/typescript/types.d.ts b/lib/typescript/types.d.ts
-index ff378811e169f12657f030b6138185b5df56138f..b487303bbd500c3f0897498f4c0f7e0912102e52 100644
+index ff37881..b487303 100644
 --- a/lib/typescript/types.d.ts
 +++ b/lib/typescript/types.d.ts
 @@ -19,6 +19,7 @@ export type SearchBarCommands = {
@@ -1806,7 +1806,7 @@ index ff378811e169f12657f030b6138185b5df56138f..b487303bbd500c3f0897498f4c0f7e09
   * Custom Screen Transition
   */
 diff --git a/src/components/ScreenStackHeaderConfig.tsx b/src/components/ScreenStackHeaderConfig.tsx
-index 509d6cd1410a1b49a6a7b46346f447ad5810bc7f..761e49be5f15efc700070b8bc53472eeba71df4c 100644
+index 509d6cd..761e49b 100644
 --- a/src/components/ScreenStackHeaderConfig.tsx
 +++ b/src/components/ScreenStackHeaderConfig.tsx
 @@ -54,7 +54,12 @@ export const ScreenStackHeaderConfig = React.forwardRef<
@@ -1934,7 +1934,7 @@ index 509d6cd1410a1b49a6a7b46346f447ad5810bc7f..761e49be5f15efc700070b8bc53472ee
        onPressHeaderBarButtonMenuItem={onPressHeaderBarButtonMenuItem}
        ref={ref}
 diff --git a/src/components/helpers/prepareHeaderBarButtonItems.ts b/src/components/helpers/prepareHeaderBarButtonItems.ts
-index 19ab7bcdcd0f6f23c0d9e1794144adefb459c6c5..9fd5cebd8a5c18c0c1caac00562cbcb8fa52be01 100644
+index 19ab7bc..9fd5ceb 100644
 --- a/src/components/helpers/prepareHeaderBarButtonItems.ts
 +++ b/src/components/helpers/prepareHeaderBarButtonItems.ts
 @@ -12,7 +12,7 @@ export interface ResolvedImageAsset extends ImageResolvedAssetSource {}
@@ -2033,7 +2033,7 @@ index 19ab7bcdcd0f6f23c0d9e1794144adefb459c6c5..9fd5cebd8a5c18c0c1caac00562cbcb8
 +  }).filter(item => item !== null);
  };
 diff --git a/src/fabric/ScreenStackHeaderConfigNativeComponent.ts b/src/fabric/ScreenStackHeaderConfigNativeComponent.ts
-index da28c51c6ffd29b996c876742a11cfdf322db969..1136622d7125916ff94401c3027c913556d926af 100644
+index da28c51..1136622 100644
 --- a/src/fabric/ScreenStackHeaderConfigNativeComponent.ts
 +++ b/src/fabric/ScreenStackHeaderConfigNativeComponent.ts
 @@ -19,6 +19,7 @@ type OnPressHeaderBarButtonItemEvent = Readonly<{ buttonId: string }>;
@@ -2070,7 +2070,7 @@ index da28c51c6ffd29b996c876742a11cfdf322db969..1136622d7125916ff94401c3027c9135
      | CT.DirectEventHandler<OnPressHeaderBarButtonItemEvent>
      | undefined;
 diff --git a/src/fabric/ScreenStackHeaderSubviewNativeComponent.ts b/src/fabric/ScreenStackHeaderSubviewNativeComponent.ts
-index 9a6af57ac0a5d4775d2cc76778939c02486fa4f7..03aa2b28e7930dd203c6e3191fa1913a1170d8d8 100644
+index 9a6af57..03aa2b2 100644
 --- a/src/fabric/ScreenStackHeaderSubviewNativeComponent.ts
 +++ b/src/fabric/ScreenStackHeaderSubviewNativeComponent.ts
 @@ -18,6 +18,7 @@ export type HeaderSubviewTypes =
@@ -2082,7 +2082,7 @@ index 9a6af57ac0a5d4775d2cc76778939c02486fa4f7..03aa2b28e7930dd203c6e3191fa1913a
  }
  
 diff --git a/src/types.tsx b/src/types.tsx
-index 8594b733fae4eba17b44ad917047d38614464a34..20c6e88686fe0c8eeaab2c5adb9f9248995b1512 100644
+index 8594b73..20c6e88 100644
 --- a/src/types.tsx
 +++ b/src/types.tsx
 @@ -35,6 +35,7 @@ export type SearchBarCommands = {
