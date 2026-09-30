@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BackHandler, Keyboard, Pressable, TextInput, type TextInputInstance, View } from "react-native";
+import {
+  BackHandler,
+  Keyboard,
+  Pressable,
+  TextInput,
+  type TextInputInstance,
+  View,
+} from "react-native";
 import { useMaterialToolbarLayout } from "./useMaterialToolbarLayout";
 import { NativeStackScreenOptions } from "../native/StackHeader";
 import { AndroidWorkspaceSidebarButton } from "../features/layout/workspace-sidebar-toolbar";
