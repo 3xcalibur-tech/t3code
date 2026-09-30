@@ -81,6 +81,13 @@ describe("usageAvailability", () => {
     expect(result.canRetry).toBe(false);
   });
 
+  it("shows connection guidance without retry for a disconnected environment", () => {
+    const result = usageAvailability([{ ...mac, summary: null, isConnected: false }], []);
+    expect(result.hasCompatibleSummary).toBe(false);
+    expect(result.canRetry).toBe(false);
+    expect(result.notices[0]?.message).toContain("Connect to MacBook Pro");
+  });
+
   it("clears notices once the versions are compatible", () => {
     expect(usageAvailability([mac], []).notices).toEqual([]);
   });

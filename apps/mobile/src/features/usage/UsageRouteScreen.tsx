@@ -327,7 +327,10 @@ export function UsageRouteScreen() {
                   {merged.duplicateSources.join(", ")}
                 </Text>
               ) : null}
-              {isPending && !availability.canRetry && merged.contractMismatches.length === 0 ? (
+              {isPending &&
+              !availability.canRetry &&
+              merged.contractMismatches.length === 0 &&
+              selectedEnvironments.every((environment) => environment.isConnected) ? (
                 <Text className="py-16 text-center text-base text-foreground-muted">
                   Scanning provider transcripts…
                 </Text>
