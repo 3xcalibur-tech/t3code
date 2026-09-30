@@ -10,7 +10,7 @@ import {
 } from "../shared.ts";
 import { GROK_PROMPT_ERROR_FOLLOW_UP, GROK_PROMPT_ERROR_PROMPT } from "./input.ts";
 
-export const GROK_PROMPT_ERROR_TEXT =
+const GROK_PROMPT_ERROR_TEXT =
   "API error (status 400 Bad Request): invalid_request_error: grok prompt error fixture";
 
 export function assertGrokPromptErrorOutput(
