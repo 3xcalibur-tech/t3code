@@ -11,8 +11,8 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import { ProviderRegistryLive } from "./Layers/ProviderRegistry.ts";
-import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
-import { ProviderInstanceRegistry } from "./Services/ProviderInstanceRegistry.ts";
+import * as ProviderRegistry from "./Services/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "./Services/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "./ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
@@ -257,7 +257,7 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
         forceRefresh: refresh,
         refreshInBackground: Effect.void,
       }),
-      Layer.succeed(ProviderInstanceRegistry, {
+      Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
         getInstance: (id) => Effect.succeed(id === instance.instanceId ? instance : undefined),
         listInstances: Effect.succeed([instance]),
         listUnavailable: Effect.succeed([]),
@@ -269,7 +269,7 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
       ),
     );
     yield* Effect.gen(function* () {
-      const registry = yield* ProviderRegistry;
+      const registry = yield* ProviderRegistry.ProviderRegistry;
       yield* Deferred.await(started);
       assert.strictEqual(
         (yield* registry.getProviders)[0]?.compatibilityAdvisory?.status,
