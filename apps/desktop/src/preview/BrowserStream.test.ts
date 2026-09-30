@@ -119,6 +119,39 @@ describe("native browser stream lifecycle", () => {
     }
   });
 
+  it("acknowledges viewport changes only after the controlling viewer applies them", async () => {
+    const applied = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const command = vi.fn(async () => {
+      started.resolve();
+      await applied.promise;
+    });
+    const stream = await createDesktopBrowserStream({
+      capture: async () => image,
+      takeControl: async () => {},
+      releaseControl: async () => {},
+      command,
+    });
+    const viewer = await connect(stream.url);
+    const viewport = { _tag: "freeform", width: 800, height: 600 };
+    try {
+      await viewer.next("control");
+      viewer.client.send(JSON.stringify({ type: "set_viewport", viewport }));
+      await viewer.next("error");
+      expect(command).not.toHaveBeenCalled();
+      viewer.client.send(JSON.stringify({ type: "take_control" }));
+      await viewer.next("control");
+      viewer.client.send(JSON.stringify({ type: "set_viewport", viewport }));
+      await started.promise;
+      applied.resolve();
+      expect(await viewer.next("viewport")).toMatchObject({ type: "viewport", viewport });
+    } finally {
+      applied.resolve();
+      viewer.client.terminate();
+      await stream.close();
+    }
+  });
+
   it("announces explicit native takeover to remote observers", async () => {
     const stream = await createDesktopBrowserStream({
       capture: async () => image,

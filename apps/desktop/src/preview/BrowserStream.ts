@@ -185,6 +185,9 @@ export async function createDesktopBrowserStream(input: {
             if (controller !== state.viewer)
               throw new Error("Take browser control before interacting.");
             await input.command(state.viewer, message);
+            if (message.type === "set_viewport") {
+              send(client, { type: "viewport", viewport: message.viewport });
+            }
           }
         })
         .catch((error) =>

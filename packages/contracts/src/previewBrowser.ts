@@ -98,6 +98,7 @@ export const PreviewBrowserServerMessage = Schema.Union([
     viewerId: Schema.String,
     controller: Schema.NullOr(Schema.String),
   }),
+  Schema.Struct({ type: Schema.Literal("viewport"), viewport: PreviewViewportSetting }),
   Schema.Struct({ type: Schema.Literal("error"), message: Schema.String }),
 ]);
 export type PreviewBrowserServerMessage = typeof PreviewBrowserServerMessage.Type;

@@ -4,7 +4,7 @@ import {
   ThreadId,
   PreviewBrowserClientMessage,
   PreviewBrowserRuntimeError,
-  type PreviewBrowserServerMessage,
+  PreviewBrowserServerMessage,
 } from "@t3tools/contracts";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as Effect from "effect/Effect";
@@ -21,6 +21,7 @@ import {
 import * as PreviewManager from "../preview/Manager.ts";
 import * as BrowserRuntime from "./BrowserRuntime.ts";
 
+const decodeServerPacket = Schema.decodeEffect(Schema.fromJsonString(PreviewBrowserServerMessage));
 const decodePacket = Schema.decodeUnknownEffect(Schema.fromJsonString(PreviewBrowserClientMessage));
 export const browserPacketNeedsOperate = (packet: PreviewBrowserClientMessage) =>
   packet.type !== "ack" && packet.type !== "config";
@@ -68,7 +69,13 @@ const handler = Effect.gen(function* () {
     return HttpServerResponse.empty({ status: 404 });
 
   const socket = yield* request.upgrade;
-  const write = yield* socket.writer;
+  const writer = yield* socket.writer;
+  const write = writer.write;
+  const reader = yield* socket.reader;
+  const readClient = <E>(handle: (data: string | Uint8Array) => Effect.Effect<void, E>) =>
+    Effect.forever(
+      Effect.flatMap(reader.pull, (batch) => Effect.forEach(batch, handle, { discard: true })),
+    );
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const send = (message: PreviewBrowserServerMessage) => write(JSON.stringify(message));
@@ -92,7 +99,7 @@ const handler = Effect.gen(function* () {
           }),
           (connection) => connection.close,
         );
-        yield* socket.runRaw((data) =>
+        return yield* readClient((data) =>
           parse(data).pipe(
             Effect.flatMap((packet) =>
               Effect.gen(function* () {
@@ -113,10 +120,32 @@ const handler = Effect.gen(function* () {
         const upstream = yield* Socket.makeWebSocket(nativeUrl, { openTimeout: "10 seconds" }).pipe(
           Effect.provide(NodeSocket.layerWebSocketConstructor),
         );
-        const forward = yield* upstream.writer;
-        yield* Effect.raceFirst(
-          upstream.runRaw((data) => write(data)),
-          socket.runRaw((data) =>
+        const upstreamWriter = yield* upstream.writer;
+        const upstreamReader = yield* upstream.reader;
+        const forward = upstreamWriter.write;
+        return yield* Effect.raceFirst(
+          Effect.forever(
+            Effect.flatMap(upstreamReader.pull, (batch) =>
+              Effect.forEach(
+                batch,
+                (data) =>
+                  Effect.gen(function* () {
+                    const message = yield* decodeServerPacket(
+                      typeof data === "string" ? data : new TextDecoder().decode(data),
+                    );
+                    if (message.type === "viewport")
+                      yield* manager.resize({
+                        threadId: ThreadId.make(threadId),
+                        tabId,
+                        viewport: message.viewport,
+                      });
+                    yield* write(data);
+                  }),
+                { discard: true },
+              ),
+            ),
+          ),
+          readClient((data) =>
             parse(data).pipe(
               Effect.flatMap((packet) =>
                 browserPacketNeedsOperate(packet) && !canOperate
@@ -124,19 +153,7 @@ const handler = Effect.gen(function* () {
                       type: "error",
                       message: "This connection has read-only access to the browser.",
                     })
-                  : forward(JSON.stringify(packet)).pipe(
-                      Effect.tap(() =>
-                        packet.type === "set_viewport"
-                          ? manager
-                              .resize({
-                                threadId: ThreadId.make(threadId),
-                                tabId,
-                                viewport: packet.viewport,
-                              })
-                              .pipe(Effect.asVoid)
-                          : Effect.void,
-                      ),
-                    ),
+                  : forward(JSON.stringify(packet)),
               ),
               Effect.catch((error) => send({ type: "error", message: error.message })),
             ),
