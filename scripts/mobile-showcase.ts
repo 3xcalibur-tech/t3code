@@ -1412,9 +1412,7 @@ async function captureAndroid(
   ]);
   await prepareAndroidShowcaseApp(serial);
   await runAdb(serial, ["reverse", `tcp:${config.metroPort}`, `tcp:${config.metroPort}`]);
-  const metroUrl = encodeURIComponent(
-    `http://127.0.0.1:${config.metroPort}?${DEV_CLIENT_LAUNCH_FLAGS}`,
-  );
+  const metroUrl = encodeURIComponent(`http://127.0.0.1:${config.metroPort}?disableOnboarding=1`);
   const firstScene = capture.scenes[0] ?? "threads";
   await runAdb(serial, [
     "shell",
@@ -1424,7 +1422,7 @@ async function captureAndroid(
     "-a",
     "android.intent.action.VIEW",
     "-d",
-    `${APP_SCHEME}://expo-development-client/?url=${metroUrl}`,
+    `${APP_SCHEME}://expo-development-client/?url=${metroUrl}&${DEV_CLIENT_LAUNCH_FLAGS}`,
     "--es",
     "showcasePairingUrl",
     encodeAndroidPairingUrls(pairingUrls),
