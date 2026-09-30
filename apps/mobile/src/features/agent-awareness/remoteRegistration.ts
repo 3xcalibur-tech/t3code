@@ -532,25 +532,28 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
       return;
     }
     const nowIso = new Date(Date.now()).toISOString();
-    const activity = startAgentLiveActivity({
-      title: "T3 Code",
-      subtitle: "Agent work in progress",
-      activeCount: 1,
-      updatedAt: nowIso,
-      activities: [
-        {
-          environmentId: "",
-          threadId: "",
-          projectTitle: input.projectTitle,
-          threadTitle: input.threadTitle,
-          modelTitle: "",
-          phase: "starting",
-          status: "Connecting",
-          updatedAt: nowIso,
-          deepLink: "/",
-        },
-      ],
-    }, liveActivityStaleDate());
+    const activity = startAgentLiveActivity(
+      {
+        title: "T3 Code",
+        subtitle: "Agent work in progress",
+        activeCount: 1,
+        updatedAt: nowIso,
+        activities: [
+          {
+            environmentId: "",
+            threadId: "",
+            projectTitle: input.projectTitle,
+            threadTitle: input.threadTitle,
+            modelTitle: "",
+            phase: "starting",
+            status: "Connecting",
+            updatedAt: nowIso,
+            deepLink: "/",
+          },
+        ],
+      },
+      liveActivityStaleDate(),
+    );
     if (!activity) {
       return;
     }
@@ -1136,13 +1139,16 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
           const aggregate = snapshot.aggregate;
           const primed = yield* Effect.try({
             try: () =>
-              startAgentLiveActivity({
-                title: aggregate.title,
-                subtitle: aggregate.subtitle,
-                activeCount: aggregate.activeCount,
-                updatedAt: aggregate.updatedAt,
-                activities: aggregate.activities,
-              }, liveActivityStaleDate()),
+              startAgentLiveActivity(
+                {
+                  title: aggregate.title,
+                  subtitle: aggregate.subtitle,
+                  activeCount: aggregate.activeCount,
+                  updatedAt: aggregate.updatedAt,
+                  activities: aggregate.activities,
+                },
+                liveActivityStaleDate(),
+              ),
             catch: (cause) =>
               new AgentAwarenessOperationError({
                 operation: "prime-live-activity",
