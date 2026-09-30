@@ -14,12 +14,11 @@ export function useAgentNotificationNavigation(pathname: string): void {
   // current route without re-registering on every navigation.
   const deepLinkOnScreen = useRef<string | null>(null);
   useLayoutEffect(() => {
-    deepLinkOnScreen.current = threadDeepLinkOnScreen(pathname);
-  }, [pathname]);
-  // Android alerts are built natively from FCM data, so the route travels
-  // to Kotlin instead of through a JS handler.
-  useEffect(() => {
-    setAndroidThreadOnScreen(threadDeepLinkOnScreen(pathname));
+    const thread = threadDeepLinkOnScreen(pathname);
+    deepLinkOnScreen.current = thread;
+    // Android alerts are built natively from FCM data, so update the native
+    // route at commit time alongside the iOS handler's route reference.
+    setAndroidThreadOnScreen(thread);
   }, [pathname]);
 
   useEffect(() => {
