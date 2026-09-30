@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { useLinkTo } from "@react-navigation/native";
 
@@ -13,7 +13,9 @@ export function useAgentNotificationNavigation(pathname: string): void {
   // Read through a ref so the native handler registered once below sees the
   // current route without re-registering on every navigation.
   const deepLinkOnScreen = useRef<string | null>(null);
-  deepLinkOnScreen.current = threadDeepLinkOnScreen(pathname);
+  useLayoutEffect(() => {
+    deepLinkOnScreen.current = threadDeepLinkOnScreen(pathname);
+  }, [pathname]);
   // Android alerts are built natively from FCM data, so the route travels
   // to Kotlin instead of through a JS handler.
   useEffect(() => {
