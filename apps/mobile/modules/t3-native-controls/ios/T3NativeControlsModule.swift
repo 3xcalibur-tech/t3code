@@ -121,8 +121,8 @@ public final class T3NativeControlsModule: Module {
     launchArgument("--showcasePairingUrl")
   }
 
-  @JS(.concurrent)
-  func getShowcaseScene() async -> String? {
+  @JS
+  func getShowcaseScene() -> String? {
     let scenePath = NSHomeDirectory() + "/Library/Caches/T3ShowcaseScene"
     if let storedScene = try? String(contentsOfFile: scenePath, encoding: .utf8)
       .trimmingCharacters(in: .whitespacesAndNewlines), !storedScene.isEmpty {
