@@ -293,7 +293,7 @@ export const make = Effect.gen(function* () {
       // A registration replay must clear an orphan even when the relay has
       // already forgotten its baseline. Finished cards are visible, but idle.
       if (!displayedAggregate && !alert && !previousAggregate && job.state !== null) return;
-      const data = {
+      const data: Record<string, string> = {
         t3_kind: "agent_activity",
         device_id: job.deviceId,
         user_id: job.userId,
