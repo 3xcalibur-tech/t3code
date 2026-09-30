@@ -30,6 +30,8 @@ import { grokBackgroundSubagentInput } from "./grok_background_subagent/input.ts
 import { assertGrokBackgroundSubagentOutput } from "./grok_background_subagent/output.ts";
 import { grokMonitorInput } from "./grok_monitor/input.ts";
 import { assertGrokMonitorOutput } from "./grok_monitor/output.ts";
+import { grokPromptErrorInput } from "./grok_prompt_error/input.ts";
+import { assertGrokPromptErrorOutput } from "./grok_prompt_error/output.ts";
 import { grokSubagentLineageInput } from "./grok_subagent_lineage/input.ts";
 import { assertGrokSubagentLineageOutput } from "./grok_subagent_lineage/output.ts";
 import { assertClaudeMessageSteeringOutput } from "./message_steering/claude_output.ts";
@@ -373,6 +375,18 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: GROK_MODEL_SELECTION,
         runContinuationWorker: true,
         assertOutput: assertGrokMonitorOutput,
+      },
+    ],
+  },
+  {
+    name: "grok_prompt_error",
+    buildInput: grokPromptErrorInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("grok"),
+        transcriptFile: new URL("./grok_prompt_error/grok_transcript.ndjson", import.meta.url),
+        modelSelection: GROK_MODEL_SELECTION,
+        assertOutput: assertGrokPromptErrorOutput,
       },
     ],
   },

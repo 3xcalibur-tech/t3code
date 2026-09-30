@@ -45,6 +45,7 @@ const XAiSessionUpdateNotification = Schema.Struct({
     promptId: Schema.optional(Schema.String),
     stop_reason: Schema.optional(Schema.String),
     stopReason: Schema.optional(Schema.String),
+    agent_result: Schema.optional(Schema.NullOr(Schema.Unknown)),
     // subagent_finished
     child_session_id: Schema.optional(Schema.String),
     status: Schema.optional(Schema.String),
@@ -89,6 +90,7 @@ export function xAiPromptCompleteFromSessionUpdate(
     sessionId: notification.sessionId,
     promptId,
     ...(stopReason === undefined ? {} : { stopReason }),
+    ...(update.agent_result === undefined ? {} : { agentResult: update.agent_result }),
   };
 }
 
@@ -1387,6 +1389,30 @@ function promptResponseFromXAi(
   };
 }
 
+/**
+ * Grok settles a failed prompt with `stopReason: "error"` and the provider's
+ * message in `agentResult` before its `session/prompt` RPC error arrives. The
+ * completion wins the race, so it must carry the failure itself.
+ */
+function xAiPromptFailure(
+  notification: XAiPromptCompleteNotification,
+): EffectAcpErrors.AcpRequestError | null {
+  if (notification.stopReason === "rate_limit") {
+    return new EffectAcpErrors.AcpRequestError({
+      code: xAiRateLimitedErrorCode,
+      errorMessage: "Grok usage limit reached. Try again later.",
+    });
+  }
+  if (notification.stopReason === "error") {
+    return new EffectAcpErrors.AcpRequestError({
+      code: -32603,
+      errorMessage:
+        nonEmptyString(notification.agentResult) ?? "Grok ended the turn with an error.",
+    });
+  }
+  return null;
+}
+
 const registerXAiPromptCompletionFallback = (
   pendingRef: Ref.Ref<ReadonlyArray<PendingXAiPromptCompletion>>,
   sessionId: string,
@@ -1481,15 +1507,10 @@ const resolveXAiPromptCompletionFallback = ({
         if (!entry) {
           return [Effect.void, pending] as const;
         }
+        const failure = xAiPromptFailure(notification);
         const settle =
-          notification.stopReason === "rate_limit"
-            ? Deferred.fail(
-                entry.deferred,
-                new EffectAcpErrors.AcpRequestError({
-                  code: xAiRateLimitedErrorCode,
-                  errorMessage: "Grok usage limit reached. Try again later.",
-                }),
-              ).pipe(Effect.asVoid)
+          failure !== null
+            ? Deferred.fail(entry.deferred, failure).pipe(Effect.asVoid)
             : Deferred.succeed(entry.deferred, promptResponseFromXAi(notification)).pipe(
                 Effect.asVoid,
               );
