@@ -15,23 +15,36 @@ export interface McpProviderSessionConfig {
    * already pointed at the server's daemon; the agent never handles a token.
    */
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
+  /** Routes the managed browser CLI through this session's MCP credential. */
+  readonly agentBrowserEnvironment?: Readonly<Record<string, string>>;
 }
 
-/** Provider env with the device variables applied over `base`, or `base` untouched. */
-export function withAgentDeviceEnvironment(
+/** Adds managed tool launchers while preserving provider credentials and PATH. */
+export function withAgentToolEnvironment(
   base: NodeJS.ProcessEnv,
-  config: Pick<McpProviderSessionConfig, "agentDeviceEnvironment"> | undefined,
+  config:
+    | Pick<McpProviderSessionConfig, "agentDeviceEnvironment" | "agentBrowserEnvironment">
+    | undefined,
 ): NodeJS.ProcessEnv {
-  const extra = config?.agentDeviceEnvironment;
-  if (!extra) return base;
-  const separator = extra.PATH_SEPARATOR ?? ":";
-  const basePath = base.PATH ?? base.Path;
-  const { PATH: shimDir, PATH_SEPARATOR: _separator, ...rest } = extra;
-  return {
-    ...base,
-    ...rest,
-    ...(shimDir ? { PATH: basePath ? `${shimDir}${separator}${basePath}` : shimDir } : {}),
-  };
+  if (
+    !config?.agentDeviceEnvironment &&
+    !config?.agentBrowserEnvironment &&
+    base.T3_AGENT_BROWSER_CONFIG === undefined
+  )
+    return base;
+  const environment = { ...base };
+  // Nested T3 servers must not lend an ancestor provider's browser credential
+  // to a new session that has different permissions or thread ownership.
+  delete environment.T3_AGENT_BROWSER_CONFIG;
+  for (const extra of [config?.agentDeviceEnvironment, config?.agentBrowserEnvironment]) {
+    if (!extra) continue;
+    const separator = extra.PATH_SEPARATOR ?? ":";
+    const basePath = environment.PATH ?? environment.Path;
+    const { PATH: shimDir, PATH_SEPARATOR: _separator, ...rest } = extra;
+    Object.assign(environment, rest);
+    if (shimDir) environment.PATH = basePath ? `${shimDir}${separator}${basePath}` : shimDir;
+  }
+  return environment;
 }
 
 const sessionsByThread = new Map<ThreadId, McpProviderSessionConfig>();
@@ -50,4 +63,8 @@ export function clearMcpProviderSession(threadId: ThreadId): void {
 
 export function clearAllMcpProviderSessions(): void {
   sessionsByThread.clear();
+}
+
+export function listMcpProviderSessions(): ReadonlyArray<McpProviderSessionConfig> {
+  return [...sessionsByThread.values()];
 }

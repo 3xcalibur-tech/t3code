@@ -980,6 +980,7 @@ const buildAppUnderTest = (options?: {
             close: () => Effect.void,
             list: () => Effect.succeed({ sessions: [], serverEpoch: "test-server", revision: 0 }),
             events: Stream.empty,
+            browserStreamUrl: () => undefined,
             subscribeEvents: Effect.flatMap(PubSub.unbounded<PreviewEvent>(), (pubsub) =>
               PubSub.subscribe(pubsub),
             ),

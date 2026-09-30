@@ -9,6 +9,7 @@ import {
 } from "~/browser/browserDefaults";
 import { isWebUrl, resolveBrowserLinkTargetPreference } from "~/browser/browserLinkTarget";
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
+import { previewRuntimeForEnvironment } from "~/browser/previewRuntime";
 import { recordVisitForThread } from "~/browserHistoryStore";
 import { applyPreviewServerSnapshot, isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
@@ -68,6 +69,7 @@ export async function openTerminalLinkInPreview<E>(
     environmentId: input.threadRef.environmentId,
     input: {
       threadId: input.threadRef.threadId,
+      runtime: previewRuntimeForEnvironment(input.threadRef.environmentId),
       url: input.url,
       // Same reason as `openUrlInPreview`: this path handles its own result
       // mapping, so the configured defaults are applied explicitly.

@@ -22,6 +22,7 @@ import {
   rememberPreviewUrl,
 } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
+import { previewRuntimeForEnvironment } from "./previewRuntime";
 
 import {
   browserDefaultOpenProfileId,
@@ -66,6 +67,7 @@ export async function openUrlInPreview<E>(input: {
     environmentId: input.threadRef.environmentId,
     input: {
       threadId: input.threadRef.threadId,
+      runtime: previewRuntimeForEnvironment(input.threadRef.environmentId),
       url: input.url,
       // Built here rather than via `openPreviewSession` because this path
       // maps the result differently, so the configured defaults have to be

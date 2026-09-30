@@ -2,11 +2,36 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const readPreparedConnection = vi.fn();
+const previewRuntime = vi.hoisted(() => vi.fn<() => "desktop" | "server">());
+vi.mock("./previewRuntime", () => ({ previewRuntimeForEnvironment: previewRuntime }));
 
 vi.mock("~/state/session", () => ({ readPreparedConnection }));
 
 describe("browser target resolver", () => {
-  beforeEach(() => readPreparedConnection.mockReset());
+  beforeEach(() => {
+    readPreparedConnection.mockReset();
+    previewRuntime.mockReturnValue("desktop");
+  });
+
+  it("keeps environment ports on server loopback even through a public relay", async () => {
+    previewRuntime.mockReturnValue("server");
+    readPreparedConnection.mockReturnValue({ httpBaseUrl: "https://relay.example.com" });
+    const { resolveBrowserNavigationTarget, resolveDiscoveredServerUrl } =
+      await import("./browserTargetResolver");
+    expect(
+      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
+        kind: "environment-port",
+        port: 5173,
+        path: "/dashboard?x=1#top",
+      }).resolvedUrl,
+    ).toBe("http://localhost:5173/dashboard?x=1#top");
+    expect(
+      resolveDiscoveredServerUrl(
+        EnvironmentId.make("environment-1"),
+        "http://127.0.0.1:5173/dashboard?x=1#top",
+      ),
+    ).toBe("http://localhost:5173/dashboard?x=1#top");
+  });
 
   it("maps environment ports onto a private network host", async () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });

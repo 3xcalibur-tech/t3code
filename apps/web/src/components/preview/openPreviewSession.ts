@@ -15,6 +15,7 @@ import {
   resolveBrowserDefaults,
 } from "~/browser/browserDefaults";
 import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
+import { previewRuntimeForEnvironment } from "~/browser/previewRuntime";
 import { applyPreviewServerSnapshot, rememberPreviewUrl } from "~/previewStateStore";
 
 interface OpenPreviewSessionInput<E> {
@@ -45,6 +46,7 @@ export async function openPreviewSession<E>(
     environmentId: input.threadRef.environmentId,
     input: {
       threadId: input.threadRef.threadId,
+      runtime: previewRuntimeForEnvironment(input.threadRef.environmentId),
       ...(input.url === undefined ? {} : { url: input.url }),
       viewport: input.viewport ?? browserDefaultOpenViewport(defaults),
       profileId: input.profileId ?? browserDefaultOpenProfileId(defaults),

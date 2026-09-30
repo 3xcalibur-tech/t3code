@@ -108,7 +108,14 @@ function ThreadHeader(
   const { onOpenTerminal } = props.gitControls;
   const native = useThreadHeaderOptions(props);
   const androidHeaderActions = useMemo<ReadonlyArray<ScreenHeaderAction>>(() => {
-    const actions: ScreenHeaderAction[] = [];
+    const actions: ScreenHeaderAction[] = [{
+      accessibilityLabel: "Open browser",
+      icon: "globe",
+      onPress: () => navigation.navigate("ThreadBrowser", {
+        environmentId: String(props.gitControls.environmentId),
+        threadId: String(props.gitControls.threadId),
+      }),
+    }];
     if (props.onReturnToThread) {
       actions.push({
         accessibilityLabel: "Return to chat",
@@ -139,6 +146,9 @@ function ThreadHeader(
     });
     return actions;
   }, [
+    navigation,
+    props.gitControls.environmentId,
+    props.gitControls.threadId,
     props.inspectorMode,
     panes.auxiliaryPaneVisible,
     props.onOpenFilesInspector,

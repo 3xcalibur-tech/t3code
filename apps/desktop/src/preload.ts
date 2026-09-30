@@ -381,6 +381,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL, { tabId, input }),
       evaluate: (tabId, input) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, { tabId, input }),
+      agentBrowser: (tabId, args) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_AGENT_BROWSER_CHANNEL, { tabId, args }),
+      stream: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STREAM_CHANNEL, { tabId }),
+      takeControl: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_TAKE_CONTROL_CHANNEL, { tabId }),
+      releaseControl: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_RELEASE_CONTROL_CHANNEL, { tabId }),
       waitFor: (tabId, input) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, { tabId, input }),
     },

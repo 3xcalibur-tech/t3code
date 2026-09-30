@@ -3,6 +3,9 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   PreviewAutomationClientDisconnectedError,
+  PreviewAutomationControlInterruptedError,
+  PreviewAutomationExecutionError,
+  PreviewBrowserRuntimeError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
@@ -28,6 +31,8 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as RpcTest from "effect/unstable/rpc/RpcTest";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as BrowserRuntime from "../browser/BrowserRuntime.ts";
+import * as PreviewManager from "../preview/Manager.ts";
 
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
 
@@ -45,6 +50,270 @@ const makeHost = (overrides: Partial<PreviewAutomationHost> = {}): PreviewAutoma
   environmentId: scope.environmentId,
   ...overrides,
 });
+
+const serverBrowserFixture = () => {
+  const tabs = new Map<string, string>();
+  const calls: Array<{ tabId: string; operation: string; input: unknown }> = [];
+  let humanControl = false;
+  const runtime = BrowserRuntime.BrowserRuntime.of({
+    open: (snapshot) =>
+      Effect.sync(() => {
+        tabs.set(
+          snapshot.tabId,
+          snapshot.navStatus._tag === "Idle" ? "about:blank" : snapshot.navStatus.url,
+        );
+      }),
+    has: (_threadId, tabId) => tabs.has(tabId),
+    invoke: (_threadId, tabId, operation, input) =>
+      Effect.gen(function* () {
+        calls.push({ tabId, operation, input });
+        if (humanControl && operation !== "status")
+          return yield* new PreviewBrowserRuntimeError({
+            threadId: scope.threadId,
+            tabId,
+            message: "A human controls this browser.",
+          });
+        return {
+          available: true,
+          visible: false,
+          runtime: "server",
+          tabId,
+          url: tabs.get(tabId),
+          title: "",
+          loading: false,
+          viewport: { width: 1280, height: 800 },
+        };
+      }),
+    navigate: (_threadId, tabId, url) =>
+      Effect.sync(() => {
+        tabs.set(tabId, url);
+      }),
+    resize: () => Effect.void,
+    refresh: () => Effect.void,
+    close: (_threadId, tabId) =>
+      Effect.sync(() => {
+        if (tabId) tabs.delete(tabId);
+        else tabs.clear();
+      }),
+    attach: () => Effect.die("This test does not attach browser viewers"),
+  });
+  return {
+    runtime,
+    calls,
+    takeControl: () => {
+      humanControl = true;
+    },
+  };
+};
+
+it.effect("opens a browser without a desktop and keeps its tab when a desktop connects", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = serverBrowserFixture();
+      const manager = yield* PreviewManager.make.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+      );
+      const broker = yield* makeBroker.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+        Effect.provideService(PreviewManager.PreviewManager, manager),
+      );
+      const before = yield* broker.invoke<{ available: boolean; tabId: string | null }>({
+        scope,
+        operation: "status",
+        input: {},
+      });
+      expect(before).toMatchObject({ available: true, tabId: null });
+      const opened = yield* broker.invoke<{ tabId: string }>({
+        scope,
+        operation: "open",
+        input: { url: "http://localhost:5173" },
+      });
+      const connected = yield* Deferred.make<void>();
+      yield* Stream.runForEach(yield* broker.connect(makeHost()), (event) =>
+        event.type === "connected" ? Deferred.succeed(connected, undefined) : Effect.void,
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const later = yield* broker.invoke<{ tabId: string }>({
+        scope,
+        operation: "snapshot",
+        input: {},
+      });
+      expect(later.tabId).toBe(opened.tabId);
+      expect(fixture.calls.at(-1)).toMatchObject({ tabId: opened.tabId, operation: "snapshot" });
+      expect((yield* manager.list({ threadId: scope.threadId })).sessions).toHaveLength(1);
+    }),
+  ),
+);
+
+it.effect("server tabs honor explicit targeting and new-tab requests", () =>
+  Effect.gen(function* () {
+    const fixture = serverBrowserFixture();
+    const manager = yield* PreviewManager.make.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+    );
+    const broker = yield* makeBroker.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+      Effect.provideService(PreviewManager.PreviewManager, manager),
+    );
+    const first = yield* broker.invoke<{ tabId: string }>({ scope, operation: "open", input: {} });
+    const second = yield* broker.invoke<{ tabId: string }>({
+      scope,
+      operation: "open",
+      input: { reuseExistingTab: false },
+    });
+    expect(second.tabId).not.toBe(first.tabId);
+    const targeted = yield* broker.invoke<{ tabId: string }>({
+      scope,
+      operation: "snapshot",
+      input: {},
+      tabId: first.tabId,
+    });
+    expect(targeted.tabId).toBe(first.tabId);
+    const current = yield* broker.invoke<{ tabId: string }>({
+      scope,
+      operation: "status",
+      input: {},
+    });
+    expect(current.tabId).toBe(first.tabId);
+  }),
+);
+
+it.effect("human control interrupts managed CLI commands through the broker", () =>
+  Effect.gen(function* () {
+    const fixture = serverBrowserFixture();
+    const manager = yield* PreviewManager.make.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+    );
+    const broker = yield* makeBroker.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+      Effect.provideService(PreviewManager.PreviewManager, manager),
+    );
+    yield* broker.invoke({ scope, operation: "open", input: {} });
+    fixture.takeControl();
+    const result = yield* Effect.result(
+      broker.invoke({ scope, operation: "agentBrowser", input: { args: ["click", "@e1"] } }),
+    );
+    expect(Result.isFailure(result)).toBe(true);
+    if (Result.isFailure(result))
+      expect(result.failure).toBeInstanceOf(PreviewAutomationControlInterruptedError);
+  }),
+);
+
+it.effect("rejects runtime overrides on an explicit existing tab", () =>
+  Effect.gen(function* () {
+    const fixture = serverBrowserFixture();
+    const manager = yield* PreviewManager.make.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+    );
+    const broker = yield* makeBroker.pipe(
+      Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+      Effect.provideService(PreviewManager.PreviewManager, manager),
+    );
+    const desktop = yield* manager.open({ threadId: scope.threadId });
+    const server = yield* manager.open({ threadId: scope.threadId, runtime: "server" });
+    for (const [tabId, runtime] of [
+      [desktop.tabId, "server"],
+      [server.tabId, "desktop"],
+    ] as const) {
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "open", tabId, input: { runtime } })
+        .pipe(Effect.flip);
+      expect(error).toBeInstanceOf(PreviewAutomationExecutionError);
+      expect(error).toMatchObject({ remoteTag: "PreviewRuntimeMismatch" });
+    }
+    expect((yield* manager.list({ threadId: scope.threadId })).sessions).toHaveLength(2);
+  }),
+);
+
+it.effect("creating a desktop tab from a server tab omits the previous target", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = serverBrowserFixture();
+      const manager = yield* PreviewManager.make.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+      );
+      const broker = yield* makeBroker.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, fixture.runtime),
+        Effect.provideService(PreviewManager.PreviewManager, manager),
+      );
+      const old = yield* broker.invoke<{ tabId: string }>({
+        scope,
+        operation: "open",
+        input: { runtime: "server" },
+      });
+      const connected = yield* Deferred.make<void>();
+      const routed: RoutedRequest[] = [];
+      yield* Stream.runForEach(yield* broker.connect(makeHost()), (event) =>
+        event.type === "connected"
+          ? Deferred.succeed(connected, undefined)
+          : Effect.gen(function* () {
+              routed.push({ ...event.request, connectionId: event.connectionId });
+              yield* broker.respond({
+                clientId: "client-1",
+                connectionId: event.connectionId,
+                requestId: event.request.requestId,
+                ok: true,
+                result: { tabId: PreviewTabId.make("new-desktop-tab") },
+              });
+            }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const created = yield* broker.invoke<{ tabId: string }>({
+        scope,
+        operation: "open",
+        tabId: PreviewTabId.make(old.tabId),
+        input: { runtime: "desktop", reuseExistingTab: false },
+      });
+      expect(created.tabId).toBe("new-desktop-tab");
+      expect(routed.at(-1)?.tabId).toBeUndefined();
+      expect(routed.at(-1)?.input).toMatchObject({ reuseExistingTab: false, runtime: "desktop" });
+    }),
+  ),
+);
+
+it.effect("late server opens cannot replace the newer current tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = serverBrowserFixture();
+      const started = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      let opens = 0;
+      const runtime = {
+        ...fixture.runtime,
+        open: (snapshot: Parameters<typeof fixture.runtime.open>[0]) =>
+          Effect.gen(function* () {
+            if (++opens === 1) {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(finish);
+            }
+            yield* fixture.runtime.open(snapshot, () => undefined);
+          }),
+      };
+      const manager = yield* PreviewManager.make.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, runtime),
+      );
+      const broker = yield* makeBroker.pipe(
+        Effect.provideService(BrowserRuntime.BrowserRuntime, runtime),
+        Effect.provideService(PreviewManager.PreviewManager, manager),
+      );
+      const first = yield* broker
+        .invoke<{ tabId: string }>({ scope, operation: "open", input: { reuseExistingTab: false } })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      const second = yield* broker.invoke<{ tabId: string }>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false },
+      });
+      yield* Deferred.succeed(finish, undefined);
+      const late = yield* Fiber.join(first);
+      expect(late.tabId).not.toBe(second.tabId);
+      expect(
+        (yield* broker.invoke<{ tabId: string }>({ scope, operation: "status", input: {} })).tabId,
+      ).toBe(second.tabId);
+    }),
+  ),
+);
 
 type RoutedRequest = PreviewAutomationRequest & {
   readonly connectionId: PreviewAutomationStreamEvent["connectionId"];

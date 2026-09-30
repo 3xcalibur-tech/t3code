@@ -25,6 +25,7 @@ import type {
   DesktopPreviewScreenshotArtifact,
   DesktopPreviewTabDefaults,
   PreviewAutomationClickInput,
+  PreviewAutomationAgentBrowserResult,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
   PreviewAutomationEvaluateInput,
@@ -37,6 +38,11 @@ import type {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
+import {
+  agentBrowserCommandError,
+  getAgentBrowserCommandName,
+} from "@t3tools/shared/agentBrowserCommand";
+import { closeAgentBrowserSession, runAgentBrowser } from "@t3tools/shared/agentBrowserRuntime";
 import {
   BrowserWindow,
   ClipboardItem,
@@ -68,6 +74,9 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import { sendGuestCommand } from "./GuestInput.ts";
+import { createAgentBrowserBridge, type AgentBrowserBridge } from "./AgentBrowserBridge.ts";
+import { createDesktopBrowserStream, type DesktopBrowserStream } from "./BrowserStream.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_THEME_CHANNEL,
@@ -118,6 +127,7 @@ export interface PreviewTabState {
   /** Observed from Chromium. Stays true while a muted tab keeps playing. */
   audible: boolean;
   controller: "human" | "agent" | "none";
+  nativeHumanControl?: boolean;
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
 }
@@ -474,6 +484,11 @@ interface PickSession {
 }
 
 interface BrowserControlSession {
+  agentBrowserBridge?: AgentBrowserBridge;
+  agentBrowserAbort?: AbortController;
+  agentBrowserFinished?: Promise<void>;
+  browserStream?: DesktopBrowserStream;
+  agentBrowserRefsStale?: boolean;
   readonly webContentsId: number;
   // Pins the WebContents' Debugger wrapper for the session's lifetime.
   // Electron's Debugger is GC-managed but registered with Chromium as a raw
@@ -641,6 +656,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
+  const humanControllersRef = yield* Ref.make<ReadonlyMap<string, string>>(new Map());
   const playwrightInstallExpression = yield* Effect.cached(
     playwrightInjectedRuntimeInstallExpression(),
   );
@@ -1473,7 +1489,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       sendCleanup: SendCommand,
       checkControl: Effect.Effect<void, PreviewManagerError>,
     ) => Effect.Effect<A, PreviewManagerError>,
+    viewer?: string,
   ) {
+    const owner = (yield* Ref.get(humanControllersRef)).get(tabId);
+    if (owner !== undefined && owner !== viewer)
+      return yield* new PreviewAutomationControlInterruptedError({
+        operation: action,
+        tabId,
+        webContentsId: wc.id,
+      });
     const sequence = yield* nextCounter(actionSequenceRef);
     const startedAt = yield* currentIso;
     const millis = yield* currentMillis;
@@ -1487,10 +1511,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const epoch = (yield* Ref.get(controlEpochRef)).get(tabId) ?? 0;
     const control = yield* ensureControlSession(wc);
     const execute = Effect.fn("PreviewManager.executeControlAction")(function* () {
-      yield* update(tabId, { controller: "agent" });
+      yield* update(tabId, { controller: viewer ? "human" : "agent" });
       const checkControl = Effect.gen(function* () {
         const currentEpoch = (yield* Ref.get(controlEpochRef)).get(tabId) ?? 0;
-        if (currentEpoch !== epoch) {
+        const currentOwner = (yield* Ref.get(humanControllersRef)).get(tabId);
+        if (currentEpoch !== epoch || (currentOwner !== undefined && currentOwner !== viewer)) {
           return yield* new PreviewAutomationControlInterruptedError({
             operation: action,
             tabId,
@@ -1562,7 +1587,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         });
       }
       const tabs = yield* SynchronizedRef.get(tabsRef);
-      if (tabs.has(tabId)) yield* update(tabId, { controller: "none" });
+      if (tabs.has(tabId))
+        yield* update(tabId, {
+          controller: (yield* Ref.get(humanControllersRef)).has(tabId) ? "human" : "none",
+        });
     });
     return yield* control.semaphore.withPermit(execute().pipe(Effect.onExit(finalize)));
   });
@@ -1927,6 +1955,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           copy.set(tabId, (epochs.get(tabId) ?? 0) + 1);
         }),
       );
+      const control = (yield* SynchronizedRef.get(controlSessionsRef)).get(wc.id);
+      control?.agentBrowserAbort?.abort();
+      control?.agentBrowserBridge?.disconnect();
+      if (control) control.agentBrowserRefsStale = true;
+      if ((yield* Ref.get(humanControllersRef)).get(tabId) !== "native") {
+        yield* Ref.update(humanControllersRef, (owners) =>
+          replaceMap(owners, (copy) => {
+            copy.delete(tabId);
+          }),
+        );
+        control?.browserStream?.evictController();
+      }
       yield* update(
         tabId,
         { controller: "human" },
@@ -1936,7 +1976,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       );
       yield* Effect.sleep(750);
       const tabs = yield* SynchronizedRef.get(tabsRef);
-      if (tabs.get(tabId)?.controller === "human") {
+      if (
+        tabs.get(tabId)?.controller === "human" &&
+        !(yield* Ref.get(humanControllersRef)).has(tabId)
+      ) {
         yield* update(tabId, { controller: "none" });
       }
     });
@@ -2154,6 +2197,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
 
   const closeTabUnlocked = Effect.fn("PreviewManager.closeTabUnlocked")(function* (tabId: string) {
     if (!(yield* SynchronizedRef.get(tabsRef)).has(tabId)) return;
+    yield* Ref.update(humanControllersRef, (owners) =>
+      replaceMap(owners, (copy) => {
+        copy.delete(tabId);
+      }),
+    );
     clearPendingRecording(tabId);
     yield* Effect.all(
       [
@@ -3623,6 +3671,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const automationStatus = Effect.fn("PreviewManager.automationStatus")(function* (tabId: string) {
+    const humanControl = (yield* Ref.get(humanControllersRef)).has(tabId);
+    const nativeHumanControl = (yield* Ref.get(humanControllersRef)).get(tabId) === "native";
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (!tab || tab.webContentsId == null) {
       const navStatus = tab?.navStatus;
@@ -3652,6 +3702,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           url: wc.getURL() || null,
           title: wc.getTitle() || null,
           loading: wc.isLoading(),
+          humanControl,
+          nativeHumanControl,
         };
   });
 
@@ -3767,6 +3819,310 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     return yield* withControlSession(tabId, wc, "snapshot", (send) =>
       captureAutomationSnapshot(tabId, wc, send),
     );
+  });
+
+  const automationAgentBrowser = Effect.fn("PreviewManager.automationAgentBrowser")(function* (
+    tabId: string,
+    args: ReadonlyArray<string>,
+  ) {
+    const invalid = agentBrowserCommandError(args);
+    const command = getAgentBrowserCommandName(args);
+    if (invalid)
+      return yield* new PreviewOperationError({
+        operation: "agentBrowser",
+        tabId,
+        cause: new Error(invalid),
+      });
+    const wc = yield* requireWebContents(tabId);
+    const control = yield* ensureControlSession(wc);
+    const directory = path.join(resolvedArtifactDirectory, "..", "browser-runtime");
+    if (control.agentBrowserRefsStale === undefined)
+      control.agentBrowserRefsStale = ((yield* Ref.get(controlEpochRef)).get(tabId) ?? 0) > 0;
+    if (control.agentBrowserRefsStale && command !== "snapshot")
+      return {
+        stdout: "",
+        stderr: "Browser control changed. Run agent-browser snapshot -i before the next command.\n",
+        exitCode: 1,
+      };
+    const session = `t3-desktop-${wc.id}-${NodeCrypto.createHash("sha256").update(tabId).digest("hex").slice(0, 12)}`;
+    return yield* withControlSession(
+      tabId,
+      wc,
+      `agent-browser ${args[0]}`,
+      (send, _sendCleanup, checkControl) =>
+        Effect.gen(function* () {
+          if (!control.agentBrowserBridge) {
+            const bridge = yield* attemptPromise(
+              { operation: "agentBrowser.createBridge", tabId, webContentsId: wc.id },
+              () =>
+                createAgentBrowserBridge({
+                  id: wc.id,
+                  debugger: control.debugger,
+                  url: () => wc.getURL(),
+                  title: () => wc.getTitle(),
+                }),
+            );
+            control.agentBrowserBridge = bridge;
+            yield* Scope.addFinalizer(
+              control.scope,
+              attemptPromise({ operation: "agentBrowser.closeBridge", tabId }, async () => {
+                control.agentBrowserAbort?.abort();
+                await bridge.close();
+                await closeAgentBrowserSession({ directory, session });
+              }).pipe(Effect.ignore),
+            );
+          }
+          const bridge = control.agentBrowserBridge;
+          const abort = new AbortController();
+          const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(60_000)]);
+          const onAbort = () => {
+            bridge.disconnect();
+            control.agentBrowserRefsStale = true;
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          control.agentBrowserAbort = abort;
+          const finished = Promise.withResolvers<void>();
+          control.agentBrowserFinished = finished.promise;
+          const execute = Effect.fn("PreviewManager.agentBrowserCommand")(function* (
+            method: string,
+            params?: Record<string, unknown>,
+            sessionId?: string,
+          ) {
+            yield* checkControl;
+            if (
+              method === "Input.dispatchMouseEvent" &&
+              params?.type === "mousePressed" &&
+              typeof params.x === "number" &&
+              typeof params.y === "number"
+            ) {
+              yield* expectAgentInput(tabId, {
+                kind: "pointer",
+                x: params.x,
+                y: params.y,
+                button: params.button === "right" ? 2 : params.button === "middle" ? 1 : 0,
+              });
+            }
+            if (
+              method === "Input.dispatchKeyEvent" &&
+              (params?.type === "keyDown" || params?.type === "rawKeyDown") &&
+              typeof params.key === "string" &&
+              typeof params.code === "string"
+            ) {
+              yield* expectAgentInput(tabId, { kind: "key", key: params.key, code: params.code });
+            }
+            return yield* attemptPromise(
+              { operation: "agentBrowser.guestInput", tabId, webContentsId: wc.id },
+              () =>
+                sendGuestCommand(
+                  wc,
+                  (method, params, sessionId) =>
+                    Effect.runPromiseWith(context)(send(method, params, sessionId)),
+                  method,
+                  params,
+                  sessionId,
+                ),
+            );
+          });
+          bridge.activate((method, params, sessionId) =>
+            Effect.runPromiseWith(context)(execute(method, params, sessionId)),
+          );
+          return yield* attemptPromise(
+            { operation: "agentBrowser.run", tabId, webContentsId: wc.id },
+            () =>
+              runAgentBrowser({
+                directory,
+                session,
+                cdp: bridge.endpoint,
+                targetId: bridge.targetId,
+                args,
+                signal,
+              }),
+          ).pipe(
+            Effect.tap(() => checkControl),
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                if (result.exitCode === 0 && command === "snapshot")
+                  control.agentBrowserRefsStale = false;
+              }),
+            ),
+            Effect.ensuring(
+              Effect.sync(() => {
+                signal.removeEventListener("abort", onAbort);
+                bridge.deactivate();
+                abort.abort();
+                delete control.agentBrowserAbort;
+                delete control.agentBrowserFinished;
+                finished.resolve();
+              }),
+            ),
+          );
+        }),
+    );
+  });
+
+  const setHumanControl = Effect.fn("PreviewManager.setHumanControl")(function* (
+    tabId: string,
+    viewer: string,
+  ) {
+    const wc = yield* requireWebContents(tabId);
+    const previous = (yield* Ref.get(humanControllersRef)).get(tabId);
+    if (previous && previous !== viewer && viewer !== "native")
+      return yield* new PreviewOperationError({
+        operation: "takeControl",
+        tabId,
+        cause: new Error("The browser is controlled by another user."),
+      });
+    yield* Ref.update(humanControllersRef, (owners) =>
+      replaceMap(owners, (copy) => {
+        copy.set(tabId, viewer);
+      }),
+    );
+    yield* Ref.update(controlEpochRef, (epochs) =>
+      replaceMap(epochs, (copy) => {
+        copy.set(tabId, (epochs.get(tabId) ?? 0) + 1);
+      }),
+    );
+    const control = (yield* SynchronizedRef.get(controlSessionsRef)).get(wc.id);
+    const finished = control?.agentBrowserFinished;
+    control?.agentBrowserBridge?.disconnect();
+    control?.agentBrowserAbort?.abort();
+    if (finished) yield* Effect.promise(() => finished);
+    if (control) control.agentBrowserRefsStale = true;
+    if (viewer === "native") control?.browserStream?.evictController("native");
+    yield* update(tabId, { controller: "human", nativeHumanControl: viewer === "native" });
+  });
+  const releaseHumanControl = Effect.fn("PreviewManager.releaseHumanControl")(function* (
+    tabId: string,
+    viewer: string,
+  ) {
+    if ((yield* Ref.get(humanControllersRef)).get(tabId) !== viewer) return;
+    yield* Ref.update(humanControllersRef, (owners) =>
+      replaceMap(owners, (copy) => {
+        copy.delete(tabId);
+      }),
+    );
+    yield* update(tabId, { controller: "none", nativeHumanControl: false });
+    if (viewer === "native") {
+      const wc = yield* requireWebContents(tabId);
+      (yield* SynchronizedRef.get(controlSessionsRef)).get(wc.id)?.browserStream?.evictController();
+    }
+  });
+  const automationTakeControl = (tabId: string) => setHumanControl(tabId, "native");
+  const automationReleaseControl = (tabId: string) => releaseHumanControl(tabId, "native");
+  const automationStream = Effect.fn("PreviewManager.automationStream")(function* (tabId: string) {
+    const wc = yield* requireWebContents(tabId);
+    const control = yield* ensureControlSession(wc);
+    if (!control.browserStream) {
+      const run = Effect.runPromiseWith(context);
+      const stream = yield* attemptPromise({ operation: "stream.start", tabId }, () =>
+        createDesktopBrowserStream({
+          capture: async () => {
+            const source = await wc.capturePage();
+            const image =
+              source.getSize().width > MAX_SCREENSHOT_WIDTH
+                ? source.resize({ width: MAX_SCREENSHOT_WIDTH })
+                : source;
+            const size = (await wc.executeJavaScript(
+              "({width: innerWidth, height: innerHeight})",
+            )) as { width: number; height: number };
+            return {
+              data: image.toJPEG(80).toString("base64"),
+              ...size,
+              url: wc.getURL(),
+              canGoBack: wc.navigationHistory.canGoBack(),
+              canGoForward: wc.navigationHistory.canGoForward(),
+            };
+          },
+          takeControl: (viewer) => run(setHumanControl(tabId, viewer)),
+          releaseControl: (viewer) => run(releaseHumanControl(tabId, viewer)),
+          command: (viewer, message) =>
+            run(
+              withControlSession(
+                tabId,
+                wc,
+                `stream ${message.type}`,
+                (send) =>
+                  Effect.gen(function* () {
+                    if (message.type === "input_mouse") {
+                      const { type: _type, eventType, ...params } = message;
+                      if (eventType === "mousePressed")
+                        yield* expectAgentInput(tabId, {
+                          kind: "pointer",
+                          x: params.x,
+                          y: params.y,
+                          button:
+                            params.button === "right" ? 2 : params.button === "middle" ? 1 : 0,
+                        });
+                      yield* send("Input.dispatchMouseEvent", { ...params, type: eventType });
+                    } else if (message.type === "input_keyboard") {
+                      const { type: _type, eventType, ...params } = message;
+                      if (eventType === "keyDown" && params.key && params.code)
+                        yield* expectAgentInput(tabId, {
+                          kind: "key",
+                          key: params.key,
+                          code: params.code,
+                        });
+                      yield* attemptPromise(
+                        { operation: "browserStream.guestInput", tabId, webContentsId: wc.id },
+                        () =>
+                          sendGuestCommand(
+                            wc,
+                            (method, params, sessionId) => run(send(method, params, sessionId)),
+                            "Input.dispatchKeyEvent",
+                            { ...params, type: eventType },
+                          ),
+                      );
+                    } else if (message.type === "input_touch") {
+                      if (message.eventType === "touchStart" && message.touchPoints[0])
+                        yield* expectAgentInput(tabId, {
+                          kind: "pointer",
+                          x: message.touchPoints[0].x,
+                          y: message.touchPoints[0].y,
+                          button: 0,
+                        });
+                      yield* send("Input.dispatchTouchEvent", {
+                        type: message.eventType,
+                        touchPoints: message.touchPoints,
+                      });
+                    } else if (message.type === "navigate") yield* navigate(tabId, message.url);
+                    else if (message.type === "back") yield* goBack(tabId);
+                    else if (message.type === "forward") yield* goForward(tabId);
+                    else if (message.type === "reload") yield* hardReload(tabId);
+                    else if (message.type === "set_color_scheme")
+                      yield* setColorScheme(tabId, message.colorScheme);
+                    else if (message.type === "set_viewport") {
+                      if (message.viewport._tag === "fill") {
+                        yield* send("Emulation.clearDeviceMetricsOverride");
+                      } else {
+                        yield* send("Emulation.setDeviceMetricsOverride", {
+                          width: message.viewport.width,
+                          height: message.viewport.height,
+                          deviceScaleFactor: 1,
+                          mobile: false,
+                        });
+                      }
+                    } else if (message.type === "resize")
+                      yield* send("Emulation.setDeviceMetricsOverride", {
+                        width: message.width,
+                        height: message.height,
+                        deviceScaleFactor: 1,
+                        mobile: false,
+                      });
+                  }),
+                viewer,
+              ),
+            ),
+        }),
+      );
+      control.browserStream = stream;
+      yield* Scope.addFinalizer(
+        control.scope,
+        attemptPromise({ operation: "stream.close", tabId }, () => stream.close()).pipe(
+          Effect.ignore,
+        ),
+      );
+    }
+    return { url: control.browserStream.url };
   });
 
   const resolveClickPoint = Effect.fn("PreviewManager.resolveClickPoint")(function* (
@@ -4608,6 +4964,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   yield* Effect.addFinalizer(() => destroy().pipe(Effect.ignore));
 
   return {
+    automationStream,
+    automationTakeControl,
+    automationReleaseControl,
+    automationAgentBrowser,
     automationClick,
     automationEvaluate,
     automationPress,
@@ -5025,6 +5385,15 @@ export class PreviewManager extends Context.Service<
     readonly automationSnapshot: (
       tabId: string,
     ) => Effect.Effect<PreviewAutomationSnapshot, PreviewManagerError>;
+    readonly automationAgentBrowser: (
+      tabId: string,
+      args: ReadonlyArray<string>,
+    ) => Effect.Effect<PreviewAutomationAgentBrowserResult, PreviewManagerError>;
+    readonly automationStream: (
+      tabId: string,
+    ) => Effect.Effect<{ url: string }, PreviewManagerError>;
+    readonly automationTakeControl: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly automationReleaseControl: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly automationClick: (
       tabId: string,
       input: PreviewAutomationClickInput,
@@ -5139,6 +5508,10 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     stopRecording: operations.stopRecording,
     saveRecording: operations.saveRecording,
     automationStatus: operations.automationStatus,
+    automationAgentBrowser: operations.automationAgentBrowser,
+    automationStream: operations.automationStream,
+    automationTakeControl: operations.automationTakeControl,
+    automationReleaseControl: operations.automationReleaseControl,
     automationSnapshot: operations.automationSnapshot,
     automationClick: operations.automationClick,
     automationType: operations.automationType,

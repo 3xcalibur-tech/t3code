@@ -5,6 +5,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PREVIEW_RECORDING_STOP_TIMEOUT_MS,
   PreviewAutomationRecordingTransferError,
+  PreviewAutomationAgentBrowserResult,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingArtifact,
   type ToolActivityIcon,
@@ -26,6 +27,7 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
+import { agentBrowserCommandError } from "@t3tools/shared/agentBrowserCommand";
 import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -191,6 +193,22 @@ const handlers = {
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
     invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+  preview_agent_browser: (input) =>
+    Effect.gen(function* () {
+      yield* McpInvocationContext.requireMcpCapability("preview");
+      const error = agentBrowserCommandError(input.args);
+      if (error) {
+        return { stdout: "", stderr: error, exitCode: 1 };
+      }
+      const { tabId, ...command } = input;
+      const { result } = yield* invoke<PreviewAutomationAgentBrowserResult>(
+        "agentBrowser",
+        command,
+        60_000,
+        tabId,
+      );
+      return result;
+    }),
   preview_navigate: (input) =>
     invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
   preview_resize: (input) =>

@@ -272,8 +272,9 @@ export function surfaceShortcutTargetsTypingContext(
   target: { closest(selectors: string): unknown } | null,
 ): boolean {
   return (
-    target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') !=
-    null
+    target?.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="application"], [data-browser-input-owner]',
+    ) != null
   );
 }
 

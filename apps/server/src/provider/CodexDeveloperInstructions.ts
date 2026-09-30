@@ -4,11 +4,14 @@ import { buildRuntimeInstructions } from "./RuntimeInstructions.ts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `## T3 Code collaborative browser
 
-You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
+You are running inside T3 Code. The \`t3-code\` MCP server provides the collaborative browser shared with the user. When it exposes \`preview_*\` tools, use that browser so the user can watch and take control.
 
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
+For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. When the result advertises \`agentBrowser\`, drive the tab with the managed \`agent-browser\` CLI on PATH. Include \`--t3-tab <tabId>\` from that result on every command so concurrent threads and tabs stay independent. Start with \`agent-browser --t3-tab <tabId> skills get core --full\`, then use \`snapshot -i\` and its element references for interaction. T3 supplies browser/profile/session targeting; do not add \`--cdp\`, \`--session\`, or \`--profile\`. While the user controls the browser, wait for them to return control before retrying actions. Take a fresh snapshot after takeover because page state and references may have changed.
 
-Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.`;
+Use \`preview_snapshot\` with \`save=true\` to produce screenshot evidence the user can see, and the preview recording tools for recordings. If \`agentBrowser\` is absent on an older desktop, use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools instead. Prefer snapshot-provided locators over coordinates.
+
+Do not switch to global browser skills, independent browser sessions, Node REPL browser automation, or standalone Playwright merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. Inspect actionable failures and retry with corrected arguments.
+`;
 
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
 
@@ -220,7 +223,7 @@ export function buildCodexAdditionalContext(
   return {
     t3_code_runtime: {
       kind: "application",
-      value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
+      value: buildRuntimeInstructions({ harness: "Codex", ...runtime, browserTools: normalizeAvailability(toolsAvailable).browser }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
   };

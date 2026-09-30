@@ -3,6 +3,7 @@ import {
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewAutomationClickInputSchema,
   DesktopPreviewAutomationEvaluateInputSchema,
+  DesktopPreviewAutomationAgentBrowserInputSchema,
   DesktopPreviewAutomationPressInputSchema,
   DesktopPreviewAutomationScrollInputSchema,
   DesktopPreviewAutomationStatusSchema,
@@ -25,6 +26,7 @@ import {
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
   PreviewAutomationSnapshot,
+  PreviewAutomationAgentBrowserResult,
   DEFAULT_BROWSER_PROFILE_ID,
   INCOGNITO_BROWSER_PROFILE_ID,
 } from "@t3tools/contracts";
@@ -462,6 +464,41 @@ export const automationEvaluate = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const automationAgentBrowser = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_AGENT_BROWSER_CHANNEL,
+  payload: DesktopPreviewAutomationAgentBrowserInputSchema,
+  result: PreviewAutomationAgentBrowserResult,
+  handler: Effect.fn("desktop.ipc.preview.automationAgentBrowser")(function* ({ tabId, args }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    return yield* manager.automationAgentBrowser(tabId, args);
+  }),
+});
+
+export const automationStream = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_STREAM_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Struct({ url: Schema.String }),
+  handler: Effect.fn("desktop.ipc.preview.automationStream")(function* ({ tabId }) {
+    return yield* (yield* PreviewManager.PreviewManager).automationStream(tabId);
+  }),
+});
+export const automationTakeControl = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_TAKE_CONTROL_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.automationTakeControl")(function* ({ tabId }) {
+    yield* (yield* PreviewManager.PreviewManager).automationTakeControl(tabId);
+  }),
+});
+export const automationReleaseControl = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_AUTOMATION_RELEASE_CONTROL_CHANNEL,
+  payload: DesktopPreviewTabInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.automationReleaseControl")(function* ({ tabId }) {
+    yield* (yield* PreviewManager.PreviewManager).automationReleaseControl(tabId);
+  }),
+});
+
 export const automationWaitFor = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL,
   payload: DesktopPreviewAutomationWaitForInputSchema,
@@ -515,6 +552,10 @@ export const methods = [
   automationPress,
   automationScroll,
   automationEvaluate,
+  automationAgentBrowser,
+  automationStream,
+  automationTakeControl,
+  automationReleaseControl,
   automationWaitFor,
   startRecording,
   stopRecording,

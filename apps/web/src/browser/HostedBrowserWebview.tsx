@@ -7,6 +7,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
+import { previewEnvironment } from "~/state/preview";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { readThreadPreviewState } from "~/previewStateStore";
 import { cn, isMacPlatform } from "~/lib/utils";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
@@ -68,6 +71,10 @@ export function HostedBrowserWebview(props: {
     profileId,
   } = props;
   const clientSettingsHydrated = useClientSettingsHydrated();
+  const reportStatus = useAtomCommand(
+    previewEnvironment.reportStatus,
+    "native browser stream registration",
+  );
   const config = usePreviewWebviewConfig(threadRef.environmentId, profileId);
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
@@ -123,10 +130,13 @@ export function HostedBrowserWebview(props: {
     const bridge = previewBridge;
     if (!clientSettingsHydrated || !webview || !config || !bridge) return;
     let disposed = false;
+    let registrationPending = false;
+    let registeredWebContentsId: number | null = null;
     let recoveryTimeout: ReturnType<typeof setTimeout> | null = null;
     const register = () => {
       const lease = tabLeaseRef.current;
-      if (!lease) return;
+      if (!lease || registrationPending) return;
+      registrationPending = true;
       void (async () => {
         try {
           // The main-process tab and the DOM webview are created by separate
@@ -135,11 +145,43 @@ export function HostedBrowserWebview(props: {
           await lease.ready;
           if (disposed || webviewRef.current !== webview) return;
           const webContentsId = webview.getWebContentsId();
+          if (registeredWebContentsId === webContentsId) return;
           if (Number.isInteger(webContentsId) && webContentsId > 0) {
             await bridge.registerWebview(runtimeTabId, webContentsId);
+            if (typeof bridge.automation?.stream === "function") {
+              const stream = await bridge.automation.stream(runtimeTabId);
+              if (disposed || webviewRef.current !== webview) return;
+              const status = await bridge.automation.status(runtimeTabId);
+              if (disposed || webviewRef.current !== webview) return;
+              const navStatus =
+                status.url && status.url !== "about:blank"
+                  ? {
+                      _tag: status.loading ? ("Loading" as const) : ("Success" as const),
+                      url: status.url,
+                      title: status.title ?? "",
+                    }
+                  : { _tag: "Idle" as const };
+              const current = readThreadPreviewState(threadRef);
+              const overlay = current.desktopByTabId[tabId];
+              const snapshot = current.sessions[tabId];
+              await reportStatus({
+                environmentId: threadRef.environmentId,
+                input: {
+                  threadId: threadRef.threadId,
+                  tabId,
+                  navStatus: snapshot?.navStatus ?? navStatus,
+                  canGoBack: overlay?.canGoBack ?? snapshot?.canGoBack ?? false,
+                  canGoForward: overlay?.canGoForward ?? snapshot?.canGoForward ?? false,
+                  browserStreamUrl: stream.url,
+                },
+              });
+            }
+            registeredWebContentsId = webContentsId;
           }
         } catch {
           // did-attach/dom-ready will retry if the guest was not ready yet.
+        } finally {
+          registrationPending = false;
         }
       })();
     };
@@ -177,7 +219,17 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
     };
-  }, [clientSettingsHydrated, config, initialSrc, runtimeTabId, webviewGeneration]);
+  }, [
+    clientSettingsHydrated,
+    config,
+    initialSrc,
+    reportStatus,
+    runtimeTabId,
+    tabId,
+    threadRef.environmentId,
+    threadRef.threadId,
+    webviewGeneration,
+  ]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;

@@ -58,6 +58,10 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as DeviceService from "../../device/DeviceService.ts";
 import { ensureAgentDeviceShim } from "../../device/AgentDeviceShim.ts";
+import {
+  ensureAgentBrowserShim,
+  removeAgentBrowserCredential,
+} from "../../browser/AgentBrowserShim.ts";
 import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import {
   increment,
@@ -968,16 +972,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
+      const previous = McpProviderSession.readMcpProviderSession(threadId);
       const capabilities = yield* agentAccessCapabilities(threadId);
       const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {
+        yield* removeAgentBrowserCredential(previous?.agentBrowserEnvironment).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.ignore,
+        );
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
+          : undefined;
+        const browserEnvironment = capabilities.has("preview")
+          ? yield* ensureAgentBrowserShim({
+              stateDir: serverConfig.stateDir,
+              session: credential.config,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, pathService),
+              Effect.catch((cause) =>
+                Effect.logWarning("Agent browser CLI unavailable", { cause }).pipe(
+                  Effect.as(undefined),
+                ),
+              ),
+            )
           : undefined;
         yield* Effect.sync(() =>
           McpProviderSession.setMcpProviderSession({
             ...credential.config,
             ...(deviceEnvironment ? { agentDeviceEnvironment: deviceEnvironment } : {}),
+            ...(browserEnvironment ? { agentBrowserEnvironment: browserEnvironment } : {}),
           }),
         );
       }
@@ -985,6 +1009,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
+      Effect.tap(() =>
+        removeAgentBrowserCredential(
+          McpProviderSession.readMcpProviderSession(threadId)?.agentBrowserEnvironment,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem), Effect.ignore),
+      ),
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
     );
 
@@ -2405,6 +2434,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ).pipe(Effect.asVoid);
     yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
+    yield* Effect.forEach(McpProviderSession.listMcpProviderSessions(), (session) =>
+      removeAgentBrowserCredential(session.agentBrowserEnvironment).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.ignore,
+      ),
+    );
     McpProviderSession.clearAllMcpProviderSessions();
     // Stopped rows stay for their resume cursors, so long-lived installs hold
     // thousands. Only rewrite the ones this shutdown actually stops.

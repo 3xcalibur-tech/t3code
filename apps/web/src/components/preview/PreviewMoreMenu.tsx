@@ -7,6 +7,7 @@ import { Button } from "~/components/ui/button";
 import {
   Menu,
   MenuItem,
+  MenuCheckboxItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -63,6 +64,9 @@ interface Props {
   profileId: string;
   /** Profile display name, shown so the menu says which data is being cleared. */
   profileName: string | undefined;
+  holdControl: boolean;
+  onHoldControlChange: (held: boolean) => void;
+  controlPending: boolean;
 }
 
 /**
@@ -82,6 +86,9 @@ export function PreviewMoreMenu({
   environmentId,
   profileId,
   profileName,
+  holdControl,
+  onHoldControlChange,
+  controlPending,
 }: Props) {
   if (!previewBridge) return null;
   const bridge = previewBridge;
@@ -143,6 +150,15 @@ export function PreviewMoreMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
+        {typeof bridge.automation?.takeControl === "function" ? (
+          <MenuCheckboxItem
+            checked={holdControl}
+            onCheckedChange={onHoldControlChange}
+            disabled={tabDisabled || controlPending}
+          >
+            Pause agent while I browse
+          </MenuCheckboxItem>
+        ) : null}
         <MenuSeparator />
         {/*
           Zoom row: label + inline control cluster. `closeOnClick=false`

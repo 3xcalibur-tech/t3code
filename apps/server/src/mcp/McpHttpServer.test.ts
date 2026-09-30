@@ -1,7 +1,13 @@
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, PreviewTabId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PREVIEW_AUTOMATION_OPERATIONS,
+  PreviewTabId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -113,6 +119,77 @@ const callSnapshot = (args: Record<string, unknown>) =>
         Effect.provideService(McpSchema.McpServerClient, client),
       );
   });
+
+it.effect(
+  "managed browser commands preserve output and tab scope and reject browser overrides",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+        const connected = yield* Deferred.make<void>();
+        const routed: Array<{ operation: string; tabId?: string | undefined; input: unknown }> = [];
+        const events = yield* broker.connect({
+          clientId: "managed-browser-client",
+          environmentId,
+          supportedOperations: PREVIEW_AUTOMATION_OPERATIONS,
+        });
+        yield* Stream.runForEach(events, (event) => {
+          if (event.type === "connected") return Deferred.succeed(connected, undefined);
+          routed.push(event.request);
+          return broker.respond({
+            clientId: "managed-browser-client",
+            connectionId: event.connectionId,
+            requestId: event.request.requestId,
+            ok: true,
+            result:
+              event.request.operation === "agentBrowser"
+                ? { stdout: "button Login [ref=e1]\n", stderr: "fixture warning", exitCode: 2 }
+                : {
+                    available: true,
+                    visible: true,
+                    tabId: alternateTabId,
+                    url: "http://example.test/",
+                    title: "Example",
+                    loading: false,
+                  },
+          });
+        }).pipe(Effect.forkScoped);
+        yield* Deferred.await(connected);
+        const call = (args: Record<string, unknown>, scope = invocation) =>
+          server
+            .callTool({
+              name: "preview_agent_browser",
+              arguments: args,
+            })
+            .pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+              Effect.provideService(McpSchema.McpServerClient, client),
+            );
+        const result = yield* call({ tabId: alternateTabId, args: ["snapshot", "-i"] });
+        expect(result.isError).toBe(false);
+        expect(result.structuredContent).toEqual({
+          stdout: "button Login [ref=e1]\n",
+          stderr: "fixture warning",
+          exitCode: 2,
+        });
+        expect(routed[0]).toMatchObject({
+          operation: "agentBrowser",
+          tabId: alternateTabId,
+          input: { args: ["snapshot", "-i"] },
+        });
+        const count = routed.length;
+        const rejected = yield* call({ args: ["--cdp", "http://another-browser", "snapshot"] });
+        expect(rejected.structuredContent).toMatchObject({ stdout: "", exitCode: 1 });
+        const denied = yield* call(
+          { args: ["snapshot"] },
+          { ...invocation, capabilities: new Set() },
+        );
+        expect(denied.isError).toBe(true);
+        expect(routed).toHaveLength(count);
+      }),
+    ).pipe(Effect.provide(TestLayer)),
+);
 
 it("normalizes empty successful notification responses to accepted", () => {
   const notificationResponse = McpHttpServer.normalizeMcpHttpResponse(

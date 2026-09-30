@@ -1,6 +1,8 @@
 import {
   ToolActivityIcon,
   PreviewAutomationClickInput,
+  PreviewAutomationAgentBrowserInput,
+  PreviewAutomationAgentBrowserResult,
   PreviewAutomationError,
   PreviewAutomationEvaluateInput,
   PreviewAutomationNavigateInput,
@@ -74,6 +76,17 @@ const PreviewOpenTool = browserTool(
   })
     .annotate(Tool.Title, "Open browser preview")
     .annotate(Tool.Destructive, false),
+);
+
+const PreviewAgentBrowserTool = browserTool(
+  Tool.make("preview_agent_browser", {
+    description:
+      "Run agent-browser against the collaborative browser tab. Used by T3's managed agent-browser CLI. Call preview_open first, then prefer snapshot -i references for interaction. T3 supplies browser and session targeting and honors human takeover.",
+    parameters: PreviewAutomationAgentBrowserInput,
+    success: PreviewAutomationAgentBrowserResult,
+    failure: PreviewAutomationError,
+    dependencies,
+  }).annotate(Tool.Title, "Run browser command"),
 );
 
 const PreviewNavigateTool = safeBrowserTool(
@@ -244,6 +257,7 @@ const PreviewRecordingStopTool = safeBrowserTool(
 export const PreviewToolkit = Toolkit.make(
   PreviewStatusTool,
   PreviewOpenTool,
+  PreviewAgentBrowserTool,
   PreviewNavigateTool,
   PreviewResizeTool,
   PreviewSetAppearanceTool,
@@ -261,6 +275,7 @@ export const PreviewToolkit = Toolkit.make(
 export const PreviewStandardToolkit = Toolkit.make(
   PreviewStatusTool,
   PreviewOpenTool,
+  PreviewAgentBrowserTool,
   PreviewNavigateTool,
   PreviewResizeTool,
   PreviewSetAppearanceTool,

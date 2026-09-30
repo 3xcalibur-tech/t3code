@@ -2057,6 +2057,13 @@ describe("shouldRefocusComposerOnWindowFocus", () => {
     expect(shouldRefocusComposerOnWindowFocus(element(tagName))).toBe(false);
   });
 
+  it("preserves focus on a controlled streamed page when returning to the window", () => {
+    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { role: "application" }))).toBe(false);
+    expect(
+      shouldRefocusComposerOnWindowFocus(element("DIV", { within: "data-browser-input-owner" })),
+    ).toBe(false);
+  });
+
   it("leaves a focused terminal alone in the drawer and the right panel", () => {
     expect(
       shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "data-terminal-owner" })),

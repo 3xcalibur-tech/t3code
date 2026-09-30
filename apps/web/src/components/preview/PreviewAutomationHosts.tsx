@@ -57,8 +57,9 @@ import {
 } from "~/browser/browserDefaults";
 import { runBrowserViewportMutation } from "~/browser/browserViewportActions";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { previewRuntimeForEnvironment } from "~/browser/previewRuntime";
 import { isElectron } from "~/env";
-import { useEnvironments } from "~/state/environments";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -69,6 +70,7 @@ import {
   PreviewAutomationOverlayTimeoutError,
   PreviewAutomationRecordingNotActiveError,
   PreviewAutomationTargetUnavailableError,
+  PreviewAutomationHumanControlHostError,
   PreviewAutomationViewportTimeoutError,
 } from "./previewAutomationErrors";
 import {
@@ -274,23 +276,15 @@ const raisePreviewAutomationHostError = (
 };
 
 export function PreviewAutomationHosts() {
-  const { environments } = useEnvironments();
-  if (!isElectron || !previewBridge?.automation) return null;
-  return (
-    <>
-      {/*
-       * Host lifetime follows the desktop runtime's environment connections,
-       * not the routed thread. This keeps background threads automatable and
-       * lets the subscription runtime own reconnects for every saved target.
-       */}
-      {environments.map((environment) => (
-        <PreviewAutomationHost
-          key={environment.environmentId}
-          environmentId={environment.environmentId}
-        />
-      ))}
-    </>
-  );
+  const environmentId = usePrimaryEnvironmentId();
+  if (
+    !isElectron ||
+    !previewBridge?.automation ||
+    environmentId === null ||
+    previewRuntimeForEnvironment(environmentId) !== "desktop"
+  )
+    return null;
+  return <PreviewAutomationHost key={environmentId} environmentId={environmentId} />;
 }
 
 function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId }) {
@@ -325,7 +319,11 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
     () => ({
       clientId: automationClientId,
       environmentId,
-      supportedOperations: [...PREVIEW_AUTOMATION_OPERATIONS],
+      supportedOperations: PREVIEW_AUTOMATION_OPERATIONS.filter(
+        (operation) =>
+          operation !== "agentBrowser" ||
+          typeof previewBridge?.automation.agentBrowser === "function",
+      ),
     }),
     [automationClientId, environmentId],
   );
@@ -389,6 +387,24 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
           tabId,
           bridgeAvailable: Boolean(previewBridge),
         };
+        const assertAgentControl = async (targetTabId: string) => {
+          if (!previewBridge?.automation.status) return;
+          const targetRuntimeTabId = previewRuntimeTabId(
+            threadRef,
+            readThreadPreviewState(threadRef).serverEpoch,
+            targetTabId,
+          );
+          const status = await previewBridge.automation.status(targetRuntimeTabId);
+          if (status.humanControl)
+            throw new PreviewAutomationHumanControlHostError({
+              requestId: request.requestId,
+              operation: request.operation,
+              environmentId,
+              threadId: request.threadId,
+              tabId: targetTabId,
+            });
+        };
+        if (request.operation !== "status" && tabId) await assertAgentControl(tabId);
         const requireReadyTab = async () => {
           const bridge = previewBridge;
           const readyTabId = tabId;
@@ -423,6 +439,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             request.operation,
             hostDeadlineMs,
           );
+          await assertAgentControl(readyTabId);
           return {
             bridge,
             tabId: readyTabId,
@@ -456,6 +473,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 environmentId,
                 input: {
                   threadId: request.threadId,
+                  runtime: "desktop",
                   ...(resolvedInputUrl ? { url: resolvedInputUrl } : {}),
                   // An agent that didn't state a size gets the user's
                   // configured default, same as a hand-opened tab.
@@ -477,6 +495,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               readThreadPreviewState(threadRef).serverEpoch,
               activeTabId,
             );
+            await assertAgentControl(activeTabId);
             if (activeSnapshot) {
               const defaultViewport = previewAutomationDefaultViewport(
                 reusedExistingTab,
@@ -486,6 +505,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 const resizeResult = await runBrowserViewportMutation(
                   activeRuntimeTabId,
                   async () => {
+                    await assertAgentControl(activeTabId);
                     assertPreviewRuntimeCurrent(
                       threadRef,
                       activeTabId,
@@ -555,6 +575,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               await waitForPreviewPresentation(activeRuntimeTabId);
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
+              await assertAgentControl(activeTabId);
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
               await previewBridge.navigate(activeRuntimeTabId, resolvedInputUrl);
               await waitForNavigationReadiness(
@@ -596,6 +617,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             const input = request.input as PreviewAutomationResizeInput;
             const setting = resolvePreviewViewport(input);
             const applied = await runBrowserViewportMutation(ready.runtimeTabId, async () => {
+              await assertAgentControl(ready.tabId);
               const operationState = assertPreviewRuntimeCurrent(
                 threadRef,
                 ready.tabId,
@@ -638,6 +660,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               );
             } catch (cause) {
               await runBrowserViewportMutation(ready.runtimeTabId, async () => {
+                await assertAgentControl(ready.tabId);
                 const latestState = readThreadPreviewState(threadRef);
                 const latestSetting =
                   latestState.sessions[ready.tabId]?.viewport ?? FILL_PREVIEW_VIEWPORT;
@@ -719,6 +742,11 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               request.input as Parameters<typeof ready.bridge.automation.evaluate>[1],
             );
           }
+          case "agentBrowser": {
+            const ready = await requireReadyTab();
+            const args = (request.input as { readonly args: ReadonlyArray<string> }).args;
+            return await ready.bridge.automation.agentBrowser(ready.runtimeTabId, args);
+          }
           case "waitFor": {
             const ready = await requireReadyTab();
             return await ready.bridge.automation.waitFor(
@@ -753,6 +781,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             const stopRuntimeTabId =
               activeRecordings.find((recording) => recording.serverTabId === stopTabId)
                 ?.runtimeTabId ?? null;
+            if (stopTabId) await assertAgentControl(stopTabId);
             const transferToEnvironment =
               typeof request.input === "object" &&
               request.input !== null &&

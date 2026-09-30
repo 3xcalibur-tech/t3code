@@ -358,6 +358,14 @@
     "./codexAuthHandoff": {
       "types": "./src/codexAuthHandoff.ts",
       "import": "./src/codexAuthHandoff.ts"
+    },
+    "./agentBrowserCommand": {
+      "types": "./src/agentBrowserCommand.ts",
+      "import": "./src/agentBrowserCommand.ts"
+    },
+    "./agentBrowserRuntime": {
+      "types": "./src/agentBrowserRuntime.ts",
+      "import": "./src/agentBrowserRuntime.ts"
     }
   },
   "scripts": {

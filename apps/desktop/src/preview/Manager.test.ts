@@ -190,6 +190,8 @@ const {
   webviewSend,
   writeFile,
   writeClipboard,
+  runAgentBrowser,
+  closeAgentBrowserSession,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
   clipboardItemConstructor: vi.fn(),
@@ -204,6 +206,13 @@ const {
   webviewSend: vi.fn(),
   writeFile: vi.fn((_path: string, _data: Uint8Array) => undefined),
   writeClipboard: vi.fn(async () => undefined),
+  runAgentBrowser: vi.fn(async () => ({ stdout: "snapshot\n", stderr: "", exitCode: 0 })),
+  closeAgentBrowserSession: vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 })),
+}));
+
+vi.mock("@t3tools/shared/agentBrowserRuntime", () => ({
+  runAgentBrowser,
+  closeAgentBrowserSession,
 }));
 
 vi.mock("electron", () => ({
@@ -553,7 +562,84 @@ describe("PreviewManager", () => {
     writeClipboard.mockClear();
     createFromPath.mockClear();
     webviewSend.mockClear();
+    runAgentBrowser.mockClear();
+    closeAgentBrowserSession.mockClear();
   });
+
+  effectIt.effect("keeps explicit native takeover exclusive until it is released", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const wc = makeTestPreviewWebContents(async () => ({
+          toJPEG: () => Buffer.from("jpeg"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        Object.assign(wc, { isDevToolsOpened: () => false });
+        const send = vi.fn(async (method: string) =>
+          method === "Runtime.evaluate" ? { result: { value: 42 } } : undefined,
+        );
+        Object.assign(wc.debugger, { sendCommand: send });
+        fromId.mockReturnValue(wc);
+        yield* manager.createTab("tab_control");
+        yield* manager.registerWebview("tab_control", wc.id);
+        send.mockClear();
+        yield* manager.automationTakeControl("tab_control");
+        expect((yield* manager.automationStatus("tab_control")).nativeHumanControl).toBe(true);
+        yield* TestClock.adjust(10_000);
+        const blocked = yield* Effect.exit(
+          manager.automationEvaluate("tab_control", { expression: "42" }),
+        );
+        expect(Exit.isFailure(blocked)).toBe(true);
+        if (Exit.isFailure(blocked))
+          expect(Option.getOrNull(Cause.findErrorOption(blocked.cause))?._tag).toBe(
+            "PreviewAutomationControlInterruptedError",
+          );
+        expect(send).not.toHaveBeenCalled();
+        yield* manager.automationReleaseControl("tab_control");
+        expect((yield* manager.automationStatus("tab_control")).nativeHumanControl).toBe(false);
+        expect(yield* manager.automationEvaluate("tab_control", { expression: "42" })).toBe(42);
+        expect(send).toHaveBeenCalledWith(
+          "Runtime.evaluate",
+          expect.objectContaining({ expression: "42" }),
+        );
+      }),
+    ),
+  );
+
+  effectIt.effect(
+    "requires a fresh native snapshot after human takeover and accepts leading output flags",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const wc = makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("jpeg"),
+            getSize: () => ({ width: 1280, height: 720 }),
+          }));
+          Object.assign(wc, { isDevToolsOpened: () => false });
+          fromId.mockReturnValue(wc);
+          yield* manager.createTab("tab_refs");
+          yield* manager.registerWebview("tab_refs", wc.id);
+          yield* manager.automationTakeControl("tab_refs");
+          yield* manager.automationReleaseControl("tab_refs");
+          const stale = yield* manager.automationAgentBrowser("tab_refs", [
+            "--json",
+            "click",
+            "@e1",
+          ]);
+          expect(stale.exitCode).toBe(1);
+          expect(stale.stderr).toContain("snapshot -i");
+          expect(runAgentBrowser).not.toHaveBeenCalled();
+          expect(
+            (yield* manager.automationAgentBrowser("tab_refs", ["--json", "snapshot", "-i"]))
+              .exitCode,
+          ).toBe(0);
+          expect(
+            (yield* manager.automationAgentBrowser("tab_refs", ["--json", "click", "@e1"]))
+              .exitCode,
+          ).toBe(0);
+          expect(runAgentBrowser).toHaveBeenCalledTimes(2);
+        }),
+      ),
+  );
 
   effectIt.effect("keeps preview shortcuts out of the host window", () =>
     withManager((manager) =>

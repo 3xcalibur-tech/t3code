@@ -36,6 +36,10 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as BrowserRuntime from "../browser/BrowserRuntime.ts";
+import * as PreviewManager from "../preview/Manager.ts";
+import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
+import type { PreviewAutomationOpenInput, PreviewAutomationResizeInput } from "@t3tools/contracts";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -316,6 +320,14 @@ const classifyResponseError = (
 };
 
 export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
+  const serverBrowserOption = yield* Effect.serviceOption(BrowserRuntime.BrowserRuntime);
+  const previewManagerOption = yield* Effect.serviceOption(PreviewManager.PreviewManager);
+  const serverBrowser = Option.getOrUndefined(serverBrowserOption);
+  const previewManager = Option.getOrUndefined(previewManagerOption);
+  // Server tabs survive viewer disconnects. They are never reassigned when a desktop appears.
+  const serverAssignments = new Map<string, PreviewTabId>();
+  const serverAssignmentOrder = new Map<string, number>();
+  let serverRequestSequence = 0;
   const crypto = yield* Crypto.Crypto;
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
@@ -474,6 +486,177 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
   ): Effect.fn.Return<A, PreviewAutomationError> {
     const timeoutMs = input.timeoutMs ?? 15_000;
+    if (serverBrowser && previewManager) {
+      const assignmentKey = hostAssignmentKey(input.scope);
+      const requestOrder = ++serverRequestSequence;
+      const openInput =
+        input.operation === "open" ? (input.input as PreviewAutomationOpenInput) : undefined;
+      const assignedServerTab = serverAssignments.get(assignmentKey);
+      const requestedTab = input.tabId ?? assignedServerTab;
+      const previews = yield* previewManager.list({ threadId: input.scope.threadId });
+      const requestedPreview = requestedTab
+        ? previews.sessions.find((tab) => tab.tabId === requestedTab)
+        : undefined;
+      const desktopState = yield* SynchronizedRef.get(state);
+      const hasDesktop = Array.from(desktopState.clients.values()).some(
+        (host) => host.environmentId === input.scope.environmentId,
+      );
+      if (
+        input.tabId !== undefined &&
+        requestedPreview &&
+        openInput?.runtime !== undefined &&
+        openInput.reuseExistingTab !== false &&
+        openInput.runtime !== (requestedPreview.runtime ?? "desktop")
+      ) {
+        return yield* new PreviewAutomationExecutionError({
+          operation: input.operation,
+          environmentId: input.scope.environmentId,
+          threadId: input.scope.threadId,
+          providerSessionId: input.scope.providerSessionId,
+          providerInstanceId: input.scope.providerInstanceId,
+          clientId: "server-browser",
+          connectionId: "server-browser",
+          requestId: "server-browser",
+          tabId: input.tabId,
+          timeoutMs,
+          remoteTag: "PreviewRuntimeMismatch",
+          remoteMessageLength: 0,
+          cause: "A browser tab cannot change runtimes. Open a new tab to choose another runtime.",
+        });
+      }
+      if (
+        openInput?.reuseExistingTab === false &&
+        openInput.runtime !== undefined &&
+        requestedPreview &&
+        openInput.runtime !== (requestedPreview.runtime ?? "desktop")
+      ) {
+        const { tabId: _previousTabId, ...newTabInput } = input;
+        input = newTabInput;
+      }
+      const useServer =
+        openInput?.runtime === "server" ||
+        (openInput?.runtime !== "desktop" &&
+          (requestedPreview?.runtime === "server" ||
+            (assignedServerTab !== undefined && input.tabId === undefined) ||
+            (!hasDesktop && input.tabId === undefined)));
+      if (openInput?.runtime === "desktop" && input.updateCurrentTab !== false) {
+        serverAssignments.delete(assignmentKey);
+        serverAssignmentOrder.set(assignmentKey, requestOrder);
+      }
+      if (useServer) {
+        const context = {
+          operation: input.operation,
+          environmentId: input.scope.environmentId,
+          threadId: input.scope.threadId,
+          providerSessionId: input.scope.providerSessionId,
+          providerInstanceId: input.scope.providerInstanceId,
+          clientId: "server-browser",
+          connectionId: "server-browser",
+          requestId: "server-browser",
+          ...(requestedTab === undefined ? {} : { tabId: requestedTab }),
+          timeoutMs,
+        };
+        return yield* Effect.gen(function* () {
+          let tabId = requestedTab;
+          if (input.operation === "open") {
+            if (input.tabId !== undefined && !requestedPreview) {
+              return yield* new PreviewAutomationTabNotFoundError({
+                ...context,
+                remoteTag: "PreviewSessionLookupError",
+                remoteMessageLength: 0,
+                cause: null,
+              });
+            }
+            if (
+              openInput?.reuseExistingTab === false ||
+              !requestedPreview ||
+              !serverBrowser.has(input.scope.threadId, requestedPreview.tabId)
+            ) {
+              const opened = yield* previewManager.open({
+                threadId: input.scope.threadId,
+                runtime: "server",
+                ...(openInput?.url === undefined ? {} : { url: openInput.url }),
+                ...(openInput?.profileId === undefined ? {} : { profileId: openInput.profileId }),
+              });
+              tabId = opened.tabId;
+            } else if (openInput?.url !== undefined) {
+              yield* serverBrowser.invoke(
+                input.scope.threadId,
+                requestedPreview.tabId,
+                "navigate",
+                { url: openInput.url },
+                timeoutMs,
+              );
+            }
+          }
+          if (!tabId || !serverBrowser.has(input.scope.threadId, tabId)) {
+            if (input.operation === "status" && input.tabId === undefined) {
+              return {
+                available: true,
+                visible: false,
+                runtime: "server",
+                tabId: null,
+                url: null,
+                title: null,
+                loading: false,
+              } as A;
+            }
+            return yield* new PreviewAutomationTabNotFoundError({
+              ...context,
+              remoteTag: "PreviewSessionLookupError",
+              remoteMessageLength: 0,
+              cause: null,
+            });
+          }
+          input.onTargetTab?.(tabId);
+          if (
+            input.updateCurrentTab !== false &&
+            requestOrder >= (serverAssignmentOrder.get(assignmentKey) ?? 0)
+          ) {
+            serverAssignments.set(assignmentKey, tabId);
+            serverAssignmentOrder.set(assignmentKey, requestOrder);
+          }
+          if (input.operation === "resize") {
+            const setting = resolvePreviewViewport(input.input as PreviewAutomationResizeInput);
+            yield* previewManager.resize({
+              threadId: input.scope.threadId,
+              tabId,
+              viewport: setting,
+            });
+            const status = yield* serverBrowser.invoke(
+              input.scope.threadId,
+              tabId,
+              "status",
+              {},
+              timeoutMs,
+            );
+            return { tabId, setting, viewport: (status as { viewport: unknown }).viewport } as A;
+          }
+          return yield* serverBrowser
+            .invoke(
+              input.scope.threadId,
+              tabId,
+              input.operation === "open" ? "status" : input.operation,
+              input.input,
+              timeoutMs,
+            )
+            .pipe(Effect.map((result) => result as A));
+        }).pipe(
+          Effect.mapError((error) => {
+            if (error._tag === "PreviewAutomationTabNotFoundError") return error;
+            const fields = {
+              ...context,
+              remoteTag: error._tag,
+              remoteMessageLength: error.message.length,
+              cause: error,
+            };
+            return error.message.includes("human controls")
+              ? new PreviewAutomationControlInterruptedError(fields)
+              : new PreviewAutomationExecutionError(fields);
+          }),
+        );
+      }
+    }
     const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
     const route = yield* SynchronizedRef.modify(state, (current) => {
       const assignments = new Map(

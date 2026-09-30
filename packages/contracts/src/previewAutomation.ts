@@ -4,11 +4,13 @@ import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts
 import {
   PREVIEW_VIEWPORT_MAX_AREA,
   PreviewRenderedViewportSize,
+  PreviewRuntimeKind,
   PreviewTabId,
   PreviewViewportPresetId,
   PreviewViewportSetting,
   PreviewViewportSize,
 } from "./preview.ts";
+import { BrowserProfileId } from "./browserProfile.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
@@ -43,6 +45,7 @@ export const PREVIEW_AUTOMATION_OPERATIONS = [
   ...PREVIEW_AUTOMATION_V1_OPERATIONS,
   "resize",
   "setColorScheme",
+  "agentBrowser",
 ] as const;
 
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_OPERATIONS);
@@ -63,6 +66,25 @@ const PreviewAutomationTabTargetFields = {
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
 
+export const PreviewAutomationAgentBrowserInput = Schema.Struct({
+  ...PreviewAutomationTabTargetFields,
+  args: Schema.Array(Schema.String.check(Schema.isMaxLength(16_384)))
+    .check(Schema.isMinLength(1))
+    .check(Schema.isMaxLength(128))
+    .annotate({
+      description:
+        "agent-browser command arguments, for example ['snapshot', '-i'] or ['click', '@e2']. T3 supplies browser and session targeting.",
+    }),
+}).annotate({ description: "Runs agent-browser against the assigned collaborative browser tab." });
+export type PreviewAutomationAgentBrowserInput = typeof PreviewAutomationAgentBrowserInput.Type;
+
+export const PreviewAutomationAgentBrowserResult = Schema.Struct({
+  stdout: Schema.String,
+  stderr: Schema.String,
+  exitCode: Schema.Int,
+});
+export type PreviewAutomationAgentBrowserResult = typeof PreviewAutomationAgentBrowserResult.Type;
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   visible: Schema.Boolean,
@@ -74,11 +96,23 @@ export const PreviewAutomationStatus = Schema.Struct({
   viewportSetting: Schema.optional(PreviewViewportSetting),
   /** Measured guest-page viewport in CSS pixels when a webview is ready. */
   viewport: Schema.optional(PreviewRenderedViewportSize),
+  runtime: Schema.optional(PreviewRuntimeKind),
+  /** A human explicitly owns control until they release it. */
+  humanControl: Schema.optional(Schema.Boolean),
+  agentBrowser: Schema.optional(
+    Schema.Struct({ command: Schema.String, instructions: Schema.String }),
+  ),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
 
 export const PreviewAutomationOpenInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
+  runtime: Schema.optional(PreviewRuntimeKind).annotate({
+    description: "Browser owner. Omit to use the environment's available runtime.",
+  }),
+  profileId: Schema.optional(BrowserProfileId).annotate({
+    description: "Browser profile for a new tab. Existing tabs keep their profile.",
+  }),
   url: Schema.optional(BoundedUrl).annotate({
     description: `Optional initial page URL. ${URL_GUIDANCE} Omit to open a blank tab.`,
   }),

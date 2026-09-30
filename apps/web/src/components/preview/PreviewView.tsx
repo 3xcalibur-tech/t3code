@@ -9,6 +9,7 @@ import {
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
   type PreviewAnnotationPayload,
+  type DesktopPreviewColorScheme,
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -31,7 +32,7 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
-import { useEnvironmentHttpBaseUrl } from "~/state/environments";
+import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 import {
@@ -47,14 +48,20 @@ import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu } from "./PreviewMoreMenu";
+import { ServerPreviewMoreMenu } from "./ServerPreviewMoreMenu";
+import { BrowserDeviceToolbar } from "~/browser/BrowserDeviceToolbar";
+import { BrowserViewportResizeHandles } from "~/browser/BrowserViewportResizeHandles";
+import { useBrowserViewportResize } from "~/browser/useBrowserViewportResize";
 import {
   commitBrowserViewportChange,
   subscribeBrowserViewportChange,
 } from "~/browser/browserViewportActions";
 import { browserResponsiveViewportForToggle, useBrowserDefaults } from "~/browser/browserDefaults";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { previewRuntimeForEnvironment } from "~/browser/previewRuntime";
 import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
 import { PreviewUnreachable } from "./PreviewUnreachable";
+import { ServerBrowserView, type ServerBrowserViewHandle } from "./ServerBrowserView";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 import { Badge } from "~/components/ui/badge";
@@ -106,6 +113,13 @@ export function PreviewView({
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
+  const [controlPending, setControlPending] = useState(false);
+  const [holdControl, setHoldControl] = useState(false);
+  const [serverColorScheme, setServerColorScheme] = useState<DesktopPreviewColorScheme>("system");
+  const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
+  const browserContainerRef = useRef<HTMLDivElement>(null);
+  const [browserContainerSize, setBrowserContainerSize] = useState({ width: 1024, height: 768 });
+  const serverBrowserRef = useRef<ServerBrowserViewHandle>(null);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
   const pickActiveRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -150,7 +164,14 @@ export function PreviewView({
         : findActiveBrowserRecordingRuntimeTabId(threadRef, tabId)
       : null;
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
-  const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const serverBrowser =
+    snapshot !== null &&
+    (snapshot.runtime === "server" ||
+      (primaryEnvironmentId !== null && primaryEnvironmentId !== threadRef.environmentId) ||
+      previewRuntimeForEnvironment(threadRef.environmentId) === "server");
+  const desktopOverlay =
+    tabId && !serverBrowser ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
   const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
@@ -158,7 +179,7 @@ export function PreviewView({
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
-  const showEmptyState = shouldShowPreviewEmptyState(snapshot);
+  const showEmptyState = shouldShowPreviewEmptyState(snapshot) && !serverBrowser;
   const controller = desktopOverlay?.controller ?? "none";
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const browserDefaults = useBrowserDefaults();
@@ -174,6 +195,65 @@ export function PreviewView({
     runtimeTabId ? (state.byTabId[runtimeTabId]?.rect ?? null) : null,
   );
 
+  useEffect(() => {
+    setHoldControl(false);
+    setServerColorScheme("system");
+    setAspectRatioLocked(false);
+  }, [runtimeTabId]);
+
+  useEffect(() => {
+    const container = browserContainerRef.current;
+    if (!container || !serverBrowser) return;
+    const measure = () => {
+      const rect = container.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const next = { width: Math.round(rect.width), height: Math.round(rect.height) };
+      setBrowserContainerSize((current) =>
+        current.width === next.width && current.height === next.height ? current : next,
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [serverBrowser, visible]);
+
+  const lockedAspectRatio =
+    aspectRatioLocked && viewport._tag !== "fill" ? viewport.width / viewport.height : null;
+  const serverViewport = useBrowserViewportResize({
+    tabId: runtimeTabId ?? "inactive-preview",
+    viewport,
+    zoomFactor: 1,
+    containerSize: browserContainerSize,
+    deviceToolbarVisible: serverBrowser && viewport._tag !== "fill",
+    aspectRatio: lockedAspectRatio,
+  });
+
+  const handleHoldControlChange = useCallback(
+    (held: boolean) => {
+      if (serverBrowser) {
+        setHoldControl(held);
+        serverBrowserRef.current?.setHoldControl(held);
+        return;
+      }
+      if (!runtimeTabId || !previewBridge?.automation?.takeControl) return;
+      const operation = held
+        ? previewBridge.automation.takeControl
+        : previewBridge.automation.releaseControl;
+      setControlPending(true);
+      void operation(runtimeTabId)
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Unable to change browser control",
+            description: error instanceof Error ? error.message : "Try again.",
+          });
+        })
+        .finally(() => setControlPending(false));
+    },
+    [runtimeTabId, serverBrowser],
+  );
+
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;
   const latestHistoryUrl = recentHistoryEntries[0]?.url;
@@ -187,6 +267,13 @@ export function PreviewView({
 
   const navigateToResolvedUrl = useCallback(
     async (resolvedUrl: string) => {
+      if (tabId && serverBrowser) {
+        if (serverBrowserRef.current?.send({ type: "navigate", url: resolvedUrl })) {
+          rememberPreviewUrl(threadRef, resolvedUrl);
+          return true;
+        }
+        return false;
+      }
       if (runtimeTabId && previewBridge) {
         // The bridge mirrors the resolved URL back to the server.
         await previewBridge.navigate(runtimeTabId, resolvedUrl);
@@ -206,7 +293,7 @@ export function PreviewView({
       }
       return result._tag === "Success";
     },
-    [open, runtimeTabId, threadRef],
+    [open, runtimeTabId, serverBrowser, tabId, threadRef],
   );
 
   const handleSubmitUrl = useCallback(
@@ -238,24 +325,37 @@ export function PreviewView({
   );
 
   const handleRefresh = useCallback(() => {
+    if (serverBrowser && tabId) {
+      serverBrowserRef.current?.send({ type: "reload" });
+      return;
+    }
     if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser, tabId]);
 
   const handleZoomIn = useCallback(() => {
+    if (serverBrowser) return;
     if (previewBridge && runtimeTabId) void previewBridge.zoomIn(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser]);
 
   const handleZoomOut = useCallback(() => {
+    if (serverBrowser) return;
     if (previewBridge && runtimeTabId) void previewBridge.zoomOut(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser]);
 
   const handleResetZoom = useCallback(() => {
+    if (serverBrowser) return;
     if (previewBridge && runtimeTabId) void previewBridge.resetZoom(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser]);
 
   const handleViewportChange = useCallback(
     async (nextViewport: PreviewViewportSetting) => {
       if (!tabId) return;
+      if (serverBrowser) {
+        if (!serverBrowserRef.current?.send({ type: "set_viewport", viewport: nextViewport })) {
+          throw new Error("The browser is disconnected.");
+        }
+        return;
+      }
       const result = await resize({
         environmentId: threadRef.environmentId,
         input: {
@@ -275,7 +375,7 @@ export function PreviewView({
       }
       updatePreviewServerSnapshot(threadRef, result.value);
     },
-    [resize, tabId, threadRef],
+    [resize, serverBrowser, tabId, threadRef],
   );
 
   const handleToggleDeviceToolbar = () => {
@@ -289,7 +389,7 @@ export function PreviewView({
       runtimeTabId,
       browserResponsiveViewportForToggle({
         defaults: browserDefaults,
-        panelRect,
+        panelRect: serverBrowser ? { x: 0, y: 0, ...browserContainerSize } : panelRect,
         zoomFactor: desktopOverlay?.zoomFactor,
       }),
     ).catch(() => undefined);
@@ -301,12 +401,20 @@ export function PreviewView({
   }, [handleViewportChange, runtimeTabId]);
 
   const handleBack = useCallback(() => {
+    if (serverBrowser) {
+      serverBrowserRef.current?.send({ type: "back" });
+      return;
+    }
     if (previewBridge && runtimeTabId) void previewBridge.goBack(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser]);
 
   const handleForward = useCallback(() => {
+    if (serverBrowser) {
+      serverBrowserRef.current?.send({ type: "forward" });
+      return;
+    }
     if (previewBridge && runtimeTabId) void previewBridge.goForward(runtimeTabId);
-  }, [runtimeTabId]);
+  }, [runtimeTabId, serverBrowser]);
 
   const handleOpenInBrowser = useCallback(() => {
     if (!localApi || !url) return;
@@ -722,13 +830,17 @@ export function PreviewView({
         onRefresh={handleRefresh}
         onSubmit={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
-        onCapture={previewBridge && tabId ? handleCapture : undefined}
+        onCapture={!serverBrowser && previewBridge && tabId ? handleCapture : undefined}
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
-        onPictureInPicture={previewBridge && tabId ? handlePictureInPicture : undefined}
+        onPictureInPicture={
+          (serverBrowser || previewBridge) && tabId ? handlePictureInPicture : undefined
+        }
         pictureInPicture={miniPlayerTabId === tabId}
-        pictureInPictureDisabled={!desktopOverlay?.hasWebContents || isUnreachable}
-        onPickElement={previewBridge && tabId ? handlePickElement : undefined}
+        pictureInPictureDisabled={
+          (!serverBrowser && !desktopOverlay?.hasWebContents) || isUnreachable
+        }
+        onPickElement={!serverBrowser && previewBridge && tabId ? handlePickElement : undefined}
         pickActive={pickActive}
         // Disable when there's no tab (nothing to pick on) OR the page
         // failed to load (a React overlay covers the webview, so the
@@ -758,7 +870,23 @@ export function PreviewView({
           ) : null
         }
         trailingActions={
-          previewBridge ? (
+          serverBrowser && tabId ? (
+            <ServerPreviewMoreMenu
+              deviceToolbarVisible={viewport._tag !== "fill"}
+              onToggleDeviceToolbar={handleToggleDeviceToolbar}
+              holdControl={holdControl}
+              onHoldControlChange={handleHoldControlChange}
+              pictureInPicture={miniPlayerTabId === tabId}
+              onPictureInPicture={handlePictureInPicture}
+              onReload={handleRefresh}
+              colorScheme={serverColorScheme}
+              onColorSchemeChange={(colorScheme) => {
+                if (serverBrowserRef.current?.send({ type: "set_color_scheme", colorScheme })) {
+                  setServerColorScheme(colorScheme);
+                }
+              }}
+            />
+          ) : previewBridge ? (
             <PreviewMoreMenu
               environmentId={threadRef.environmentId}
               profileId={activeProfileId}
@@ -771,13 +899,55 @@ export function PreviewView({
               onToggleDeviceToolbar={handleToggleDeviceToolbar}
               nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
               onNativePictureInPicture={handleNativePictureInPicture}
+              holdControl={desktopOverlay?.nativeHumanControl ?? false}
+              onHoldControlChange={handleHoldControlChange}
+              controlPending={controlPending}
             />
           ) : null
         }
       />
 
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        {runtimeTabId && snapshot && !showEmptyState ? (
+      <div ref={browserContainerRef} className="relative min-h-0 flex-1 overflow-hidden">
+        {tabId && serverBrowser && !showEmptyState ? (
+          <>
+            {serverViewport.effectiveViewport._tag !== "fill" ? (
+              <BrowserDeviceToolbar
+                setting={serverViewport.effectiveViewport}
+                width={browserContainerSize.width}
+                aspectRatio={lockedAspectRatio}
+                onAspectRatioChange={(ratio) => setAspectRatioLocked(ratio !== null)}
+                onChange={serverViewport.commitViewportChange}
+              />
+            ) : null}
+            <div
+              className="absolute"
+              style={{
+                left: serverViewport.layout.viewportX,
+                top: serverViewport.layout.viewportY,
+                width: serverViewport.layout.viewportWidth,
+                height: serverViewport.layout.viewportHeight,
+              }}
+            >
+              <ServerBrowserView
+                ref={serverBrowserRef}
+                key={runtimeTabId}
+                threadRef={threadRef}
+                tabId={tabId}
+                viewport={viewport}
+                onHoldControlChange={setHoldControl}
+                visible={visible && !isUnreachable}
+              />
+            </div>
+            {serverViewport.effectiveViewport._tag !== "fill" ? (
+              <BrowserViewportResizeHandles
+                layout={serverViewport.layout}
+                activeDirection={serverViewport.activeDrag?.direction ?? null}
+                onPointerDown={serverViewport.handleResizePointerDown}
+                onKeyDown={serverViewport.handleResizeKeyDown}
+              />
+            ) : null}
+          </>
+        ) : runtimeTabId && snapshot && !showEmptyState ? (
           <BrowserSurfaceSlot
             key={runtimeTabId}
             tabId={runtimeTabId}

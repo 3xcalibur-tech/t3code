@@ -1339,13 +1339,14 @@ export function shouldRefocusComposerOnWindowFocus(
     activeElement.tagName === "IFRAME" ||
     activeElement.tagName === "WEBVIEW" ||
     activeElement.isContentEditable === true ||
-    activeElement.getAttribute("role") === "textbox"
+    activeElement.getAttribute("role") === "textbox" ||
+    activeElement.getAttribute("role") === "application"
   ) {
     return false;
   }
   return (
     activeElement.closest(
-      '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner]',
+      '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner], [data-browser-input-owner]',
     ) === null
   );
 }

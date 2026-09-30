@@ -19,6 +19,7 @@ import {
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import type { BrowserViewportResizeDirection } from "~/browser/browserViewportLayout";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
+import { previewRuntimeForEnvironment } from "~/browser/previewRuntime";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -33,10 +34,12 @@ import {
 } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useDeviceState } from "~/state/device";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { DeviceStreamView } from "../device/DeviceStreamView";
 import type { DeviceScreenSize } from "@t3tools/client-runtime/device/stream";
 import { previewBridge } from "./previewBridge";
+import { ServerBrowserView } from "./ServerBrowserView";
 import {
   clampPreviewMiniPlayerPosition,
   NO_PREVIEW_MINI_PLAYER_OBSTACLES,
@@ -153,7 +156,12 @@ function BrowserMiniPlayer({
   composerOverlayElement,
 }: Props & { readonly tabId: string }) {
   const previewState = useThreadPreviewState(threadRef);
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const snapshot = previewState.sessions[tabId] ?? null;
+  const streamed =
+    snapshot?.runtime === "server" ||
+    (primaryEnvironmentId !== null && primaryEnvironmentId !== threadRef.environmentId) ||
+    previewRuntimeForEnvironment(threadRef.environmentId) === "server";
   const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
   const recordingTabIds = useActiveBrowserRecordingTabIds();
   const recording =
@@ -200,51 +208,57 @@ function BrowserMiniPlayer({
       recording={recording}
       onOpenInPanel={openInPanel}
       pillActions={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
-                size="icon-xs"
-                aria-label={
-                  desktopOverlay?.pictureInPicture
-                    ? "Close popped-out preview"
-                    : "Pop preview into separate window"
-                }
-                disabled={!desktopOverlay?.hasWebContents}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={toggleNativePictureInPicture}
-              />
-            }
-          >
-            <PictureInPicture2 />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {desktopOverlay?.pictureInPicture
-              ? "Close separate window"
-              : "Pop into separate window"}
-          </TooltipPopup>
-        </Tooltip>
+        streamed ? null : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
+                  size="icon-xs"
+                  aria-label={
+                    desktopOverlay?.pictureInPicture
+                      ? "Close popped-out preview"
+                      : "Pop preview into separate window"
+                  }
+                  disabled={!desktopOverlay?.hasWebContents}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={toggleNativePictureInPicture}
+                />
+              }
+            >
+              <PictureInPicture2 />
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              {desktopOverlay?.pictureInPicture
+                ? "Close separate window"
+                : "Pop into separate window"}
+            </TooltipPopup>
+          </Tooltip>
+        )
       }
     >
-      {(frame) => (
-        <>
-          <BrowserSurfaceSlot
-            tabId={runtimeTabId}
-            visible={Boolean(desktopOverlay?.hasWebContents)}
-            cornerRadius={PREVIEW_MINI_PLAYER_CORNER_RADIUS}
-            zIndex={PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX}
-            fitSourceContent
-            layoutVersion={`${frame.x}:${frame.y}`}
-            className="absolute inset-0"
-          />
-          {!desktopOverlay?.hasWebContents ? (
-            <div className="pointer-events-none absolute inset-0 z-[49] flex items-center justify-center rounded-[inherit] bg-muted text-xs text-muted-foreground">
-              Reconnecting preview…
-            </div>
-          ) : null}
-        </>
-      )}
+      {(frame) =>
+        streamed ? (
+          <ServerBrowserView threadRef={threadRef} tabId={tabId} visible compact />
+        ) : (
+          <>
+            <BrowserSurfaceSlot
+              tabId={runtimeTabId}
+              visible={Boolean(desktopOverlay?.hasWebContents)}
+              cornerRadius={PREVIEW_MINI_PLAYER_CORNER_RADIUS}
+              zIndex={PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX}
+              fitSourceContent
+              layoutVersion={`${frame.x}:${frame.y}`}
+              className="absolute inset-0"
+            />
+            {!desktopOverlay?.hasWebContents ? (
+              <div className="pointer-events-none absolute inset-0 z-[49] flex items-center justify-center rounded-[inherit] bg-muted text-xs text-muted-foreground">
+                Reconnecting preview…
+              </div>
+            ) : null}
+          </>
+        )
+      }
     </MiniPlayerShell>
   );
 }

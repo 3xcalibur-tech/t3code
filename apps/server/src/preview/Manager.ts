@@ -36,10 +36,12 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as BrowserRuntime from "../browser/BrowserRuntime.ts";
 
 export class PreviewManager extends Context.Service<
   PreviewManager,
@@ -57,6 +59,8 @@ export class PreviewManager extends Context.Service<
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
+    /** Loopback native endpoints stay on the environment and never cross the wire. */
+    readonly browserStreamUrl: (threadId: string, tabId: string) => string | undefined;
   }
 >()("t3/preview/Manager/PreviewManager") {}
 
@@ -124,6 +128,7 @@ const buildLoadingSnapshot = (input: {
   readonly title: string;
   readonly viewport: PreviewViewportSetting;
   readonly profileId?: string | undefined;
+  readonly runtime?: "desktop" | "server" | undefined;
   readonly updatedAt: string;
 }): PreviewSessionSnapshot => ({
   threadId: input.threadId,
@@ -133,6 +138,7 @@ const buildLoadingSnapshot = (input: {
   canGoForward: false,
   viewport: input.viewport,
   ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+  ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
   updatedAt: input.updatedAt,
 });
 
@@ -141,6 +147,7 @@ const buildIdleSnapshot = (input: {
   readonly tabId: string;
   readonly viewport: PreviewViewportSetting;
   readonly profileId?: string | undefined;
+  readonly runtime?: "desktop" | "server" | undefined;
   readonly updatedAt: string;
 }): PreviewSessionSnapshot => ({
   threadId: input.threadId,
@@ -150,11 +157,18 @@ const buildIdleSnapshot = (input: {
   canGoForward: false,
   viewport: input.viewport,
   ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+  ...(input.runtime === undefined ? {} : { runtime: input.runtime }),
   updatedAt: input.updatedAt,
 });
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* PreviewManagerMake() {
+  const runtimeOption = yield* Effect.serviceOption(BrowserRuntime.BrowserRuntime);
+  const browserRuntime = Option.getOrUndefined(runtimeOption);
+  const nativeStreams = new Map<string, string>();
+  const activeServerTabs = new Set<string>();
+  const context = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(context);
   const serverEpoch = NodeCrypto.randomUUID();
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   // Unbounded PubSub is fine here — events are tiny and we don't want to
@@ -235,6 +249,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             title: "",
             viewport,
             profileId: input.profileId,
+            runtime: input.runtime,
             updatedAt,
           })
         : buildIdleSnapshot({
@@ -242,6 +257,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             tabId,
             viewport,
             profileId: input.profileId,
+            runtime: input.runtime,
             updatedAt,
           });
       yield* SynchronizedRef.modifyEffect(stateRef, (state) =>
@@ -253,6 +269,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             tabId,
             snapshot,
           });
+          if (snapshot.runtime === "server")
+            activeServerTabs.add(compositeKey(input.threadId, tabId));
           yield* PubSub.publish(eventsPubSub, {
             type: "opened",
             threadId: input.threadId,
@@ -265,6 +283,17 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           return [snapshot, { sessions, revision }] as const;
         }),
       );
+      if (snapshot.runtime === "server" && browserRuntime) {
+        yield* browserRuntime
+          .open(
+            snapshot,
+            (status) => {
+              runFork(reportStatus(status).pipe(Effect.catch(() => Effect.void)));
+            },
+            () => activeServerTabs.has(compositeKey(input.threadId, tabId)),
+          )
+          .pipe(Effect.tapError(() => close({ threadId: input.threadId, tabId })));
+      }
       return snapshot;
     },
   );
@@ -272,6 +301,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const navigate: PreviewManager["Service"]["navigate"] = Effect.fn("PreviewManager.navigate")(
     function* (input) {
       const url = yield* normalizeUrl(input.url);
+      if (browserRuntime?.has(input.threadId, input.tabId)) {
+        yield* browserRuntime.navigate(input.threadId, input.tabId, url);
+      }
       return yield* mutateExistingSession(
         input.threadId,
         input.tabId,
@@ -290,6 +322,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
             ...(session.snapshot.profileId === undefined
               ? {}
               : { profileId: session.snapshot.profileId }),
+            ...(session.snapshot.runtime === undefined
+              ? {}
+              : { runtime: session.snapshot.runtime }),
             updatedAt,
           };
           return {
@@ -316,16 +351,30 @@ export const make = Effect.gen(function* PreviewManagerMake() {
       input.tabId,
       Effect.fn("PreviewManager.reportSessionStatus")(function* (session) {
         const updatedAt = yield* currentIsoTimestamp;
+        if (
+          input.browserStreamUrl !== undefined &&
+          session.snapshot.runtime !== "server" &&
+          URL.canParse(input.browserStreamUrl)
+        ) {
+          const streamUrl = new URL(input.browserStreamUrl);
+          if (
+            (streamUrl.protocol === "ws:" || streamUrl.protocol === "wss:") &&
+            ["127.0.0.1", "localhost", "[::1]"].includes(streamUrl.hostname)
+          ) {
+            nativeStreams.set(compositeKey(input.threadId, input.tabId), streamUrl.href);
+          }
+        }
         const snapshot: PreviewSessionSnapshot = {
           threadId: session.threadId,
           tabId: session.tabId,
           navStatus: input.navStatus,
           canGoBack: input.canGoBack,
           canGoForward: input.canGoForward,
-          viewport: session.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
+          viewport: input.viewport ?? session.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
           ...(session.snapshot.profileId === undefined
             ? {}
             : { profileId: session.snapshot.profileId }),
+          ...(session.snapshot.runtime === undefined ? {} : { runtime: session.snapshot.runtime }),
           updatedAt,
         };
         const emit: PreviewEventDraft =
@@ -358,6 +407,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const resize: PreviewManager["Service"]["resize"] = Effect.fn("PreviewManager.resize")(
     function* (input) {
+      if (browserRuntime?.has(input.threadId, input.tabId)) {
+        yield* browserRuntime.resize(input.threadId, input.tabId, input.viewport);
+      }
       return yield* mutateExistingSession(
         input.threadId,
         input.tabId,
@@ -386,6 +438,9 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const refresh: PreviewManager["Service"]["refresh"] = Effect.fn("PreviewManager.refresh")(
     function* (input) {
+      if (browserRuntime?.has(input.threadId, input.tabId)) {
+        yield* browserRuntime.refresh(input.threadId, input.tabId);
+      }
       // Verify the session exists; the desktop bridge handles the actual reload
       // and will report progress back via `reportStatus`. No event emitted.
       yield* mutateExistingSession(input.threadId, input.tabId, (session) =>
@@ -396,6 +451,12 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const close: PreviewManager["Service"]["close"] = Effect.fn("PreviewManager.close")(
     function* (input) {
+      const current = yield* SynchronizedRef.get(stateRef);
+      for (const target of sessionsForThread(current, input.threadId)) {
+        if (input.tabId === undefined || input.tabId === target.tabId)
+          activeServerTabs.delete(compositeKey(input.threadId, target.tabId));
+      }
+      if (browserRuntime) yield* browserRuntime.close(input.threadId, input.tabId);
       const createdAt = yield* currentIsoTimestamp;
       yield* SynchronizedRef.modifyEffect(stateRef, (state) => {
         const eventsToEmit: PreviewEvent[] = [];
@@ -409,6 +470,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         for (const target of targets) {
           revision += 1;
           sessions.delete(compositeKey(target.threadId, target.tabId));
+          nativeStreams.delete(compositeKey(target.threadId, target.tabId));
           eventsToEmit.push({
             type: "closed",
             threadId: target.threadId,
@@ -455,6 +517,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     list,
     events,
     subscribeEvents: PubSub.subscribe(eventsPubSub),
+    browserStreamUrl: (threadId, tabId) => nativeStreams.get(compositeKey(threadId, tabId)),
   });
 }).pipe(Effect.withSpan("PreviewManager.make"));
 

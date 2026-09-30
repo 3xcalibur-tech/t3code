@@ -31,6 +31,7 @@ export interface DesktopPreviewOverlay {
   audioMuted: boolean;
   audible: boolean;
   controller: "human" | "agent" | "none";
+  nativeHumanControl?: boolean;
   favicon: DesktopPreviewFavicon | null;
 }
 
@@ -373,6 +374,7 @@ function isPreviewStateEqual(
       previous.audioMuted === next.audioMuted &&
       previous.audible === next.audible &&
       previous.controller === next.controller &&
+      Boolean(previous.nativeHumanControl) === Boolean(next.nativeHumanControl) &&
       previous.favicon?.dataUrl === next.favicon?.dataUrl &&
       previous.favicon?.pageUrl === next.favicon?.pageUrl &&
       previous.favicon?.capturedAt === next.favicon?.capturedAt)
@@ -461,7 +463,7 @@ export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
 
 export function isPreviewSupportedInRuntime(): boolean {
   if (typeof window === "undefined") return false;
-  return Boolean(window.desktopBridge?.preview);
+  return Boolean(window.desktopBridge?.preview) || typeof WebSocket !== "undefined";
 }
 
 export function resetPreviewStateForTests(): void {

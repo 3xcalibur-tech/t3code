@@ -156,6 +156,7 @@ describe("openTerminalLinkInPreview", () => {
       environmentId: "local",
       input: {
         threadId: "thread-1",
+        runtime: "server",
         url: "http://localhost:3000/",
         viewport: hydratedDefaults.viewport,
         profileId: hydratedDefaults.profileId,

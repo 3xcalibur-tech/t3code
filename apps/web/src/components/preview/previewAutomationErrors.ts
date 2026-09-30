@@ -172,6 +172,24 @@ const targetNotEditableDiagnostics = (
   };
 };
 
+export class PreviewAutomationHumanControlHostError extends Schema.TaggedError<PreviewAutomationHumanControlHostError>()(
+  "PreviewAutomationHumanControlHostError",
+  {
+    requestId: TrimmedNonEmptyString,
+    operation: PreviewAutomationOperation,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    tabId: PreviewTabId,
+  },
+) {
+  get responseTag() {
+    return "PreviewAutomationControlInterruptedError" as const;
+  }
+  override get message(): string {
+    return "A human controls this browser. Wait until they return control to the agent.";
+  }
+}
+
 export class PreviewAutomationOperationError extends Schema.TaggedError<PreviewAutomationOperationError>()(
   "PreviewAutomationOperationError",
   {
@@ -220,6 +238,7 @@ export const PreviewAutomationHostError = Schema.Union([
   PreviewAutomationTargetUnavailableError,
   PreviewAutomationRecordingNotActiveError,
   PreviewAutomationTargetNotEditableHostError,
+  PreviewAutomationHumanControlHostError,
   PreviewAutomationOperationError,
 ]);
 export type PreviewAutomationHostError = typeof PreviewAutomationHostError.Type;

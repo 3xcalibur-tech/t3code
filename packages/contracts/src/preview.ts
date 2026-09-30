@@ -1,10 +1,9 @@
 /**
  * Preview - Schemas for the in-app browser preview surface.
  *
- * The preview is desktop-only (Chromium <webview>); the server tracks per-thread
- * tab metadata so it survives client reconnects and multi-window. The desktop
- * renderer mediates: it owns the actual <webview> and reports navigation back to
- * the server via these RPCs, the server fans events to all subscribers.
+ * Local desktop tabs use native Chromium views. Environment-owned tabs run on
+ * the server and can be viewed by every client. Runtime ownership is fixed when
+ * a tab opens so attaching a viewer does not move its cookies or page state.
  *
  * @module Preview
  */
@@ -162,6 +161,9 @@ export const PreviewNavStatus = Schema.Union([
 ]);
 export type PreviewNavStatus = typeof PreviewNavStatus.Type;
 
+export const PreviewRuntimeKind = Schema.Literals(["desktop", "server"]);
+export type PreviewRuntimeKind = typeof PreviewRuntimeKind.Type;
+
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
@@ -176,6 +178,8 @@ export const PreviewSessionSnapshot = Schema.Struct({
    * switching would require tearing the guest down and losing page state.
    */
   profileId: Schema.optional(BrowserProfileId),
+  /** Missing on older servers means a native desktop tab. */
+  runtime: Schema.optional(PreviewRuntimeKind),
   updatedAt: Schema.String,
 });
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;
@@ -193,6 +197,8 @@ export const PreviewOpenInput = Schema.Struct({
   viewport: Schema.optional(PreviewViewportSetting),
   /** Omit to open under the client's configured default profile. */
   profileId: Schema.optional(BrowserProfileId),
+  /** Native desktop rendering or an environment-owned browser. */
+  runtime: Schema.optional(PreviewRuntimeKind),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
 
@@ -205,11 +211,14 @@ export const PreviewNavigateInput = Schema.Struct({
 export type PreviewNavigateInput = typeof PreviewNavigateInput.Type;
 
 export const PreviewReportStatusInput = Schema.Struct({
+  viewport: Schema.optional(PreviewViewportSetting),
   threadId: ThreadId,
   tabId: PreviewTabId,
   navStatus: PreviewNavStatus,
   canGoBack: Schema.Boolean,
   canGoForward: Schema.Boolean,
+  /** Desktop-local scoped stream endpoint. The server proxies it for other clients. */
+  browserStreamUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
 });
 export type PreviewReportStatusInput = typeof PreviewReportStatusInput.Type;
 
@@ -350,5 +359,19 @@ export class PreviewInvalidUrlError extends Schema.TaggedError<PreviewInvalidUrl
   }
 }
 
-export const PreviewError = Schema.Union([PreviewSessionLookupError, PreviewInvalidUrlError]);
+export class PreviewBrowserRuntimeError extends Schema.TaggedError<PreviewBrowserRuntimeError>()(
+  "PreviewBrowserRuntimeError",
+  {
+    threadId: Schema.String,
+    tabId: Schema.optional(Schema.String),
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export const PreviewError = Schema.Union([
+  PreviewSessionLookupError,
+  PreviewInvalidUrlError,
+  PreviewBrowserRuntimeError,
+]);
 export type PreviewError = typeof PreviewError.Type;

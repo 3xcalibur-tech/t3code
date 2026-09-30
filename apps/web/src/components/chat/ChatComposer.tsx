@@ -2208,7 +2208,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const blocksPasteToFocus =
         activeElement instanceof Element &&
         activeElement.closest(
-          'input, textarea, select, button, a[href], summary, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], [role="button"], [role="menuitem"], [role="option"]',
+          'input, textarea, select, button, a[href], summary, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], [role="button"], [role="menuitem"], [role="option"], [role="application"], [data-browser-input-owner]',
         ) !== null;
       if (
         (activeElement instanceof Node && composerFormRef.current?.contains(activeElement)) ||

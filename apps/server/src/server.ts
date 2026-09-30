@@ -75,6 +75,8 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as BrowserRuntime from "./browser/BrowserRuntime.ts";
+import { browserStreamProxyRouteLayer } from "./browser/BrowserStreamProxy.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { deviceHubProxyRouteLayer } from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -422,7 +424,11 @@ const TerminalLayerLive = TerminalManager.layer.pipe(
 );
 
 const PreviewLayerLive = Layer.empty.pipe(
-  Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(
+    PreviewManager.layer.pipe(
+      Layer.provideMerge(BrowserRuntime.layer.pipe(Layer.provide(ProcessRunner.layer))),
+    ),
+  ),
   Layer.provideMerge(PortScannerLayerLive),
 );
 
@@ -608,6 +614,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     assetRouteLayer,
     attachmentUploadRouteLayer,
     deviceHubProxyRouteLayer,
+    browserStreamProxyRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

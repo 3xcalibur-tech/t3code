@@ -2310,7 +2310,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(options?.models ? { models: options.models } : {}),
           binaryPath: effectiveConfig.binaryPath,
           launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment),
-          ...(effectiveEnvironment ? { environment: effectiveEnvironment } : {}),
+          environment: McpProviderSession.withAgentToolEnvironment(effectiveEnvironment ?? process.env, mcpSession),
           ...(effectiveConfig.homePath ? { homePath: effectiveConfig.homePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
@@ -2323,7 +2323,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(mcpSession
             ? {
                 environment: {
-                  ...McpProviderSession.withAgentDeviceEnvironment(
+                  ...McpProviderSession.withAgentToolEnvironment(
                     effectiveEnvironment ?? process.env,
                     mcpSession,
                   ),

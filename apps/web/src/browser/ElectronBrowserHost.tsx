@@ -7,35 +7,42 @@ import { useEffect, useMemo } from "react";
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
 import { useActivePreviewSessions } from "~/previewStateStore";
+import { usePrimaryEnvironmentId } from "~/state/environments";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { previewRuntimeTabId } from "./previewRuntimeTabId";
+import { previewRuntimeForEnvironment } from "./previewRuntime";
 
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const sessions = useMemo(
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
         const threadRef = parseScopedThreadKey(threadKey);
-        return threadRef
-          ? Object.values(previewState.sessions).map((snapshot) => ({
-              threadRef,
-              snapshot,
-              runtimeTabId: previewRuntimeTabId(
+        return threadRef &&
+          threadRef.environmentId === primaryEnvironmentId &&
+          previewRuntimeForEnvironment(threadRef.environmentId) === "desktop"
+          ? Object.values(previewState.sessions)
+              .filter((snapshot) => snapshot.runtime !== "server")
+              .map((snapshot) => ({
                 threadRef,
-                previewState.serverEpoch,
-                snapshot.tabId,
-              ),
-              pictureInPicture:
-                previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
-              zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
-            }))
+                snapshot,
+                runtimeTabId: previewRuntimeTabId(
+                  threadRef,
+                  previewState.serverEpoch,
+                  snapshot.tabId,
+                ),
+                pictureInPicture:
+                  previewState.desktopByTabId[snapshot.tabId]?.pictureInPicture ?? false,
+                zoomFactor: previewState.desktopByTabId[snapshot.tabId]?.zoomFactor ?? 1,
+              }))
           : [];
       }),
-    [previewByThreadKey],
+    [previewByThreadKey, primaryEnvironmentId],
   );
 
   useEffect(() => {

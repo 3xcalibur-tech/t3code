@@ -103,6 +103,11 @@ export const PREVIEW_AUTOMATION_TYPE_CHANNEL = "desktop:preview-automation-type"
 export const PREVIEW_AUTOMATION_PRESS_CHANNEL = "desktop:preview-automation-press";
 export const PREVIEW_AUTOMATION_SCROLL_CHANNEL = "desktop:preview-automation-scroll";
 export const PREVIEW_AUTOMATION_EVALUATE_CHANNEL = "desktop:preview-automation-evaluate";
+export const PREVIEW_AUTOMATION_AGENT_BROWSER_CHANNEL = "desktop:preview-automation-agent-browser";
+export const PREVIEW_AUTOMATION_STREAM_CHANNEL = "desktop:preview-automation-stream";
+export const PREVIEW_AUTOMATION_TAKE_CONTROL_CHANNEL = "desktop:preview-automation-take-control";
+export const PREVIEW_AUTOMATION_RELEASE_CONTROL_CHANNEL =
+  "desktop:preview-automation-release-control";
 export const PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL = "desktop:preview-automation-wait-for";
 export const PREVIEW_RECORDING_START_CHANNEL = "desktop:preview-recording-start";
 export const PREVIEW_RECORDING_STOP_CHANNEL = "desktop:preview-recording-stop";

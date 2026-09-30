@@ -7,6 +7,7 @@ import { isLoopbackHost, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { isLocalLoopbackHost, isPrivateNetworkHost } from "@t3tools/shared/hostClassification";
 
 import { readPreparedConnection } from "~/state/session";
+import { previewRuntimeForEnvironment } from "./previewRuntime";
 
 export {
   normalizeHostname,
@@ -28,6 +29,21 @@ const resolveEnvironmentPortTarget = (
   requestedUrl?: string,
   sourceUrl?: URL,
 ): PreviewUrlResolution => {
+  if (previewRuntimeForEnvironment(environmentId) === "server") {
+    const protocol = target.protocol ?? "http";
+    const path = target.path?.startsWith("/") ? target.path : `/${target.path ?? ""}`;
+    const resolved = sourceUrl
+      ? new URL(sourceUrl)
+      : new URL(path, `${protocol}://localhost:${target.port}`);
+    resolved.hostname = "localhost";
+    resolved.port = String(target.port);
+    return {
+      requestedUrl: requestedUrl ?? resolved.toString(),
+      resolvedUrl: resolved.toString(),
+      resolutionKind: "direct",
+      environmentId,
+    };
+  }
   if (!isPrivateNetworkHost(environmentUrl.hostname)) {
     throw new Error(
       "This environment port needs the planned authenticated preview gateway; its server address is not directly private-network reachable.",

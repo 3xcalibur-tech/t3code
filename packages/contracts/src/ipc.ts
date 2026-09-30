@@ -2,6 +2,8 @@ import * as Schema from "effect/Schema";
 
 import {
   PreviewAutomationClickInput,
+  PreviewAutomationAgentBrowserInput,
+  PreviewAutomationAgentBrowserResult,
   PreviewAutomationEvaluateInput,
   PreviewAutomationPressInput,
   PreviewAutomationScrollInput,
@@ -639,6 +641,7 @@ export interface DesktopPreviewTabState {
    */
   audible: boolean;
   controller: "human" | "agent" | "none";
+  nativeHumanControl?: boolean;
   favicon?: DesktopPreviewFavicon;
   updatedAt: string;
 }
@@ -649,6 +652,8 @@ export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed())
 
 export const DesktopPreviewAutomationStatusSchema = Schema.Struct({
   ...PreviewAutomationStatus.fields,
+  humanControl: Schema.optional(Schema.Boolean),
+  nativeHumanControl: Schema.optional(Schema.Boolean),
   tabId: Schema.NullOr(DesktopPreviewTabIdSchema),
 });
 export type DesktopPreviewAutomationStatus = typeof DesktopPreviewAutomationStatusSchema.Type;
@@ -1109,6 +1114,11 @@ export const DesktopPreviewAutomationEvaluateInputSchema = Schema.Struct({
   input: PreviewAutomationEvaluateInput,
 });
 
+export const DesktopPreviewAutomationAgentBrowserInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  args: PreviewAutomationAgentBrowserInput.fields.args,
+});
+
 export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationWaitForInput,
@@ -1345,6 +1355,13 @@ export interface DesktopPreviewBridge {
     press: (tabId: string, input: PreviewAutomationPressInput) => Promise<void>;
     scroll: (tabId: string, input: PreviewAutomationScrollInput) => Promise<void>;
     evaluate: (tabId: string, input: PreviewAutomationEvaluateInput) => Promise<unknown>;
+    agentBrowser: (
+      tabId: string,
+      args: ReadonlyArray<string>,
+    ) => Promise<PreviewAutomationAgentBrowserResult>;
+    stream: (tabId: string) => Promise<{ url: string }>;
+    takeControl: (tabId: string) => Promise<void>;
+    releaseControl: (tabId: string) => Promise<void>;
     waitFor: (tabId: string, input: PreviewAutomationWaitForInput) => Promise<void>;
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;

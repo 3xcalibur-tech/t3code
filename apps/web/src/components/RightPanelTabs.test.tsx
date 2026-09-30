@@ -213,6 +213,13 @@ describe("surface shortcut typing contexts", () => {
     expect(surfaceShortcutTargetsTypingContext(null)).toBe(false);
     expect(surfaceShortcutTargetsTypingContext(makeTarget(null))).toBe(false);
   });
+
+  it("leaves launcher letter shortcuts with the streamed browser page", () => {
+    expect(surfaceShortcutTargetsTypingContext(makeTarget('[role="application"]'))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("[data-browser-input-owner]"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("RightPanelTabs audio indicator", () => {
