@@ -212,7 +212,7 @@ export const make = Effect.gen(function* () {
       const previousAggregate = target.last_aggregate_json
         ? Option.getOrNull(decodePreviousActivity(target.last_aggregate_json))
         : null;
-      let alert: ReturnType<typeof androidAlertForState> = null;
+      let alert: ReturnType<typeof androidAlertForState | typeof androidAlertForAggregate> = null;
       // Deletion jobs can observe another thread's newly completed state. They
       // update the card, but must leave that transition for its own alert job.
       // Registration replay deliberately establishes a silent baseline.
