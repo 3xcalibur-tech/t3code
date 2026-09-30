@@ -105,8 +105,7 @@ export function UsageRouteScreen() {
   );
   const isFocused = useIsFocused();
   const availability = usageAvailability(selectedEnvironments, merged.contractMismatches);
-  const onlyIncompatibleUsage =
-    availability.notices.length > 0 && !availability.hasCompatibleSummary;
+  const usageUnavailable = availability.notices.length > 0 && !availability.hasCompatibleSummary;
   const limits = useRefreshLimits(selectedEnvironmentIds, isFocused && tab === "limits");
   const cursorAccessEnvironments = cursorKeychainAccessEnvironments(selectedEnvironments);
   const refreshAfterCursorEnable = () => {
@@ -328,7 +327,7 @@ export function UsageRouteScreen() {
                   {merged.duplicateSources.join(", ")}
                 </Text>
               ) : null}
-              {isPending ? (
+              {isPending && !availability.canRetry && merged.contractMismatches.length === 0 ? (
                 <Text className="py-16 text-center text-base text-foreground-muted">
                   Scanning provider transcripts…
                 </Text>
@@ -345,8 +344,12 @@ export function UsageRouteScreen() {
                       {message}
                     </Text>
                   ))}
-                  <UsageCompatibilityNotice availability={availability} />
-                  {!onlyIncompatibleUsage ? (
+                  <UsageCompatibilityNotice
+                    availability={availability}
+                    onRetry={refreshWindow}
+                    refreshing={refreshingUsage}
+                  />
+                  {!usageUnavailable ? (
                     <>
                       <ChartCard
                         merged={merged}

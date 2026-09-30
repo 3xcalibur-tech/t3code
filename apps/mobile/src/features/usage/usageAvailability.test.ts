@@ -39,6 +39,48 @@ describe("usageAvailability", () => {
     ).toBe(false);
   });
 
+  it("reports failed requests without guessing a version mismatch", () => {
+    const result = usageAvailability([{ ...mac, summary: null, error: "failed" }], []);
+    expect(result.hasCompatibleSummary).toBe(false);
+    expect(result.canRetry).toBe(true);
+    expect(result.notices[0]?.message).toContain("Could not load usage from MacBook Pro");
+    expect(result.notices[0]?.message).not.toContain("Update");
+  });
+
+  it("labels cached data as stale after a failed refresh", () => {
+    const result = usageAvailability([{ ...mac, error: "failed" }], []);
+    expect(result.hasCompatibleSummary).toBe(true);
+    expect(result.notices[0]?.message).toContain("saved usage");
+  });
+
+  it("retains healthy totals and reports the failed environment", () => {
+    const result = usageAvailability(
+      [
+        mac,
+        {
+          ...mac,
+          environmentId: "other" as EnvironmentId,
+          label: "Other",
+          summary: null,
+          error: "failed",
+        },
+      ],
+      [],
+    );
+    expect(result.hasCompatibleSummary).toBe(true);
+    expect(result.notices[0]?.message).toContain("Other");
+    expect(result.coverageMessage).toContain("exclude unavailable environments");
+  });
+
+  it("does not silently omit an environment still loading", () => {
+    const result = usageAvailability(
+      [mac, { ...mac, environmentId: "other" as EnvironmentId, summary: null }],
+      [],
+    );
+    expect(result.notices[0]?.message).toContain("Waiting for usage");
+    expect(result.canRetry).toBe(false);
+  });
+
   it("clears notices once the versions are compatible", () => {
     expect(usageAvailability([mac], []).notices).toEqual([]);
   });
