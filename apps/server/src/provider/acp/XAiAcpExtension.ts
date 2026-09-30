@@ -94,6 +94,17 @@ export function xAiPromptCompleteFromSessionUpdate(
   };
 }
 
+/**
+ * Grok answers a finished background command in its own turn, tagging every
+ * frame with a `task-completed-*` prompt id instead of the one T3 sent.
+ */
+export function isXAiTaskCompletedWakeNotification(
+  notification: EffectAcpSchema.SessionNotification,
+): boolean {
+  const promptId = notification._meta?.promptId;
+  return typeof promptId === "string" && promptId.startsWith(XAI_TASK_COMPLETED_PROMPT_ID_PREFIX);
+}
+
 interface PendingXAiPromptCompletion {
   readonly sessionId: string;
   readonly promptId: string;
@@ -1404,14 +1415,24 @@ function xAiPromptFailure(
     });
   }
   if (notification.stopReason === "error") {
+    // Grok's raw result is unbounded provider text: keep it only as the cause.
+    const agentResult = nonEmptyString(notification.agentResult);
     return new EffectAcpErrors.AcpRequestError({
       code: -32603,
-      errorMessage:
-        nonEmptyString(notification.agentResult) ?? "Grok ended the turn with an error.",
+      errorMessage: "Grok ended the turn with an error.",
+      operation: "receive-response",
+      ...(agentResult === undefined ? {} : { cause: new XAiPromptFailureText(agentResult) }),
     });
   }
   return null;
 }
+
+/**
+ * Grok's own text for a failed prompt. A plain Error rather than a schema
+ * error so the unbounded provider text never becomes a structured attribute;
+ * it is read back only at the presentation boundary.
+ */
+export class XAiPromptFailureText extends Error {}
 
 const registerXAiPromptCompletionFallback = (
   pendingRef: Ref.Ref<ReadonlyArray<PendingXAiPromptCompletion>>,
