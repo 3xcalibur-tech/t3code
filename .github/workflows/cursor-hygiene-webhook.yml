@@ -3,7 +3,8 @@ name: Forward to Cursor hygiene
 on:
   push:
     branches: [main]
-  pull_request:
+  # Forwards the event payload only. Never checks out or runs pull request code.
+  pull_request_target:
     types: [opened, reopened, ready_for_review]
   issues:
     types: [opened, closed, reopened]

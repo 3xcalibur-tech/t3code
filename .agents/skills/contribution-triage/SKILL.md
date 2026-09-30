@@ -172,5 +172,5 @@ retry blindly or claim success for an unverified action.
 Report the PR and assessed head, policy revision, eligibility outcome, supporting evidence and guide
 links, and actions actually completed or still pending. In a dry run, mark all comments and actions as
 unexecuted drafts. Event wiring, scheduling, and retry infrastructure belong to the enforcement rollout.
-That rollout must triage PR openings and updates regardless of draft status, including conversions
-to draft, without waiting for `ready_for_review`.
+That rollout triages PR openings, reopenings, and ready-for-review transitions regardless of draft
+status, and re-triages on maintainer request rather than on every push.
