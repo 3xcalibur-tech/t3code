@@ -2,6 +2,8 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
+import testConfig from "./vite.test-config.ts";
+
 /** Import restrictions every file keeps, including the one module exempt from the glyph rule. */
 const RESTRICTED_IMPORT_PATHS = [
   {
@@ -59,23 +61,7 @@ export default defineConfig({
       "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
     },
   },
-  test: {
-    environment: "node",
-    exclude: [
-      "**/.repos/**",
-      "**/node_modules/**",
-      "**/dist/**",
-      "**/dist-electron/**",
-      "**/.{idea,git,cache,output,temp}/**",
-    ],
-    hookTimeout: 60_000,
-    testTimeout: 60_000,
-    setupFiles: [
-      NodeURL.fileURLToPath(
-        new URL("./packages/shared/src/testing/longTempDir.ts", import.meta.url),
-      ),
-    ],
-  },
+  test: testConfig.test,
   staged: {
     // Formatter only for now — no lint or typecheck on commit.
     "*": "vp fmt --no-error-on-unmatched-pattern",
