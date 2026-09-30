@@ -810,7 +810,7 @@ index 1c844846a5c66e31cfa530ca462774d2fb6bbea1..a60b96b44e85d3f4b29dc0d190b95ab6
 +  BOOL reuseToolbarItems = navctr.topViewController == vc &&
 +      navctr.isToolbarHidden == (toolbarConfigsKey.count == 0) &&
 +      [objc_getAssociatedObject(navitem, &RNSAppliedToolbarConfigsKey) isEqual:toolbarCacheKey];
-+  if (!reuseToolbarItems) {
++  if (navctr.topViewController == vc && !reuseToolbarItems) {
 +    NSArray<UIBarButtonItem *> *toolbarItems = [config barButtonItemsFromConfigs:navigationToolbarConfigs
 +                                                                 withCurrentItems:@[]
 +                                                                   navigationItem:navitem

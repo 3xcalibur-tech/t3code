@@ -309,8 +309,8 @@ export function HomeScreen(props: HomeScreenProps) {
     (event: GestureResponderEvent, started: boolean) => {
       const { changedTouches, touches } = event.nativeEvent;
       swipeRowActivation.trackTouches(
-        started ? changedTouches.map((touch) => touch.identifier) : [],
-        touches.map((touch) => touch.identifier),
+        started ? changedTouches.map((touch) => String(touch.identifier)) : [],
+        touches.map((touch) => String(touch.identifier)),
       );
     },
     [swipeRowActivation],
