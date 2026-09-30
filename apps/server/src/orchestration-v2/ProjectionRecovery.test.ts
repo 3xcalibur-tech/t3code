@@ -23,11 +23,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import { EffectOutboxV2, layer as effectOutboxLayer } from "./EffectOutbox.ts";
-import { ProjectionStoreV2, layer as projectionStoreLayer } from "./ProjectionStore.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 
-const TestLayer = Layer.mergeAll(projectionStoreLayer, effectOutboxLayer).pipe(
+const TestLayer = Layer.mergeAll(ProjectionStore.layer, EffectOutbox.layer).pipe(
   Layer.provideMerge(SqlitePersistenceMemory),
 );
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -38,7 +38,7 @@ const createThread = Effect.fn(function* (
   name: string,
   overrides: Partial<OrchestrationV2AppThread> = {},
 ) {
-  const projections = yield* ProjectionStoreV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const now = yield* DateTime.now;
   const threadId = ThreadId.make(`thread:recovery:${name}`);
   const thread: OrchestrationV2AppThread = {
@@ -80,7 +80,7 @@ const createRun = Effect.fn(function* (
   status: OrchestrationV2Run["status"],
   overrides: Partial<OrchestrationV2Run> = {},
 ) {
-  const projections = yield* ProjectionStoreV2;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
   const now = yield* DateTime.now;
   const ordinal = overrides.ordinal ?? 1;
   const runId = RunId.make(`run:${threadId}:${ordinal}`);
@@ -114,8 +114,8 @@ const createRun = Effect.fn(function* (
 
 it.effect("selects unfinished recovery work without reading settled thread histories", () =>
   Effect.gen(function* () {
-    const projections = yield* ProjectionStoreV2;
-    const outbox = yield* EffectOutboxV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
     const sql = yield* SqlClient.SqlClient;
     const now = yield* DateTime.now;
     for (let index = 0; index < 600; index += 1) {
@@ -225,7 +225,7 @@ it.effect("selects unfinished recovery work without reading settled thread histo
 
 it.effect("recovers app-owned tasks whose row disagrees with their child's runs", () =>
   Effect.gen(function* () {
-    const projections = yield* ProjectionStoreV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sql = yield* SqlClient.SqlClient;
     const now = yield* DateTime.now;
     const parent = yield* createThread("subagent-parent");
@@ -298,7 +298,7 @@ it.effect("recovers app-owned tasks whose row disagrees with their child's runs"
 
 it.effect("includes shared sessions and provider-owned background rosters in recovery", () =>
   Effect.gen(function* () {
-    const projections = yield* ProjectionStoreV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
     const now = yield* DateTime.now;
     const first = yield* createThread("shared-first");
     const second = yield* createThread("shared-second", { archivedAt: now });
@@ -349,7 +349,9 @@ it.effect("includes shared sessions and provider-owned background rosters in rec
         forkedFrom: null,
         createdAt: now,
         updatedAt: now,
-        pendingBackgroundTasks: [{ taskId: "background", description: "Still running" }],
+        pendingBackgroundTasks: [
+          { taskId: "background", description: "Still running", kind: "command" },
+        ],
       },
     });
     const prepared = yield* createThread("prepared-continuation");
@@ -430,7 +432,7 @@ it.effect("includes shared sessions and provider-owned background rosters in rec
 
 it.effect("marks fork descendants unreadable when their source is missing or corrupt", () =>
   Effect.gen(function* () {
-    const projections = yield* ProjectionStoreV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sql = yield* SqlClient.SqlClient;
     const source = yield* createThread("source");
     const sourceRun = yield* createRun(source, "completed");

@@ -12,6 +12,8 @@ import { assertClaudeBackgroundWakeBeforeQueuedPromptOutput } from "./claude_bac
 import { claudeBackgroundWakeBeforeQueuedPromptNoEchoInput } from "./claude_background_wake_before_queued_prompt_no_echo/input.ts";
 import { assertClaudeBackgroundWakeBeforeQueuedPromptNoEchoOutput } from "./claude_background_wake_before_queued_prompt_no_echo/output.ts";
 import { assertClaudeBackgroundTaskInterruptOutput } from "./claude_background_task_interrupt/output.ts";
+import { claudeBackgroundMonitorWakeInput } from "./claude_background_monitor_wake/input.ts";
+import { assertClaudeBackgroundMonitorWakeOutput } from "./claude_background_monitor_wake/output.ts";
 import { claudeBackgroundTaskWakeInput } from "./claude_background_task_wake/input.ts";
 import { assertClaudeBackgroundTaskWakeOutput } from "./claude_background_task_wake/output.ts";
 import { claudeIdleResumeInput } from "./claude_idle_resume/input.ts";
@@ -24,10 +26,14 @@ import { grokAutoBlockedCommandInput } from "./grok_auto_blocked_command/input.t
 import { assertGrokAutoBlockedCommandOutput } from "./grok_auto_blocked_command/output.ts";
 import { grokBackgroundBashInput } from "./grok_background_bash/input.ts";
 import { assertGrokBackgroundBashOutput } from "./grok_background_bash/output.ts";
+import { grokBackgroundBashFastWakeInput } from "./grok_background_bash_fast_wake/input.ts";
+import { assertGrokBackgroundBashFastWakeOutput } from "./grok_background_bash_fast_wake/output.ts";
 import { grokBackgroundSubagentInput } from "./grok_background_subagent/input.ts";
 import { assertGrokBackgroundSubagentOutput } from "./grok_background_subagent/output.ts";
 import { grokMonitorInput } from "./grok_monitor/input.ts";
 import { assertGrokMonitorOutput } from "./grok_monitor/output.ts";
+import { grokPromptErrorInput } from "./grok_prompt_error/input.ts";
+import { assertGrokPromptErrorOutput } from "./grok_prompt_error/output.ts";
 import { grokSubagentLineageInput } from "./grok_subagent_lineage/input.ts";
 import { assertGrokSubagentLineageOutput } from "./grok_subagent_lineage/output.ts";
 import { assertClaudeMessageSteeringOutput } from "./message_steering/claude_output.ts";
@@ -93,6 +99,8 @@ import { assertThreadRollbackAfterRestartOutput } from "./thread_rollback_after_
 import { threadRollbackAfterRestartInput } from "./thread_rollback_after_restart/input.ts";
 import { threadRollbackAfterStopInput } from "./thread_rollback_after_stop/input.ts";
 import { assertPiThreadRollbackAfterStopOutput } from "./thread_rollback_after_stop/pi_output.ts";
+import { assertThreadRollbackToStoppedTurnOutput } from "./thread_rollback_to_stopped_turn/codex_output.ts";
+import { threadRollbackToStoppedTurnInput } from "./thread_rollback_to_stopped_turn/input.ts";
 import { assertTodoListOutput } from "./todo_list/codex_output.ts";
 import { assertTodoListCursorOutput } from "./todo_list/cursor_output.ts";
 import { assertTodoListGrokOutput } from "./todo_list/grok_output.ts";
@@ -242,6 +250,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     ],
   },
   {
+    name: "claude_background_monitor_wake",
+    buildInput: claudeBackgroundMonitorWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        transcriptFile: new URL(
+          "./claude_background_monitor_wake/claude_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CLAUDE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertClaudeBackgroundMonitorWakeOutput,
+      },
+    ],
+  },
+  {
     name: "claude_background_task_wake",
     buildInput: claudeBackgroundTaskWakeInput,
     providers: [
@@ -328,6 +352,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     ],
   },
   {
+    name: "grok_background_bash_fast_wake",
+    buildInput: grokBackgroundBashFastWakeInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("grok"),
+        transcriptFile: new URL(
+          "./grok_background_bash_fast_wake/grok_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: { ...GROK_MODEL_SELECTION, model: "grok-4.7-build-fast" },
+        runContinuationWorker: true,
+        assertOutput: assertGrokBackgroundBashFastWakeOutput,
+      },
+    ],
+  },
+  {
     name: "grok_background_subagent",
     buildInput: grokBackgroundSubagentInput,
     providers: [
@@ -353,6 +393,18 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         modelSelection: GROK_MODEL_SELECTION,
         runContinuationWorker: true,
         assertOutput: assertGrokMonitorOutput,
+      },
+    ],
+  },
+  {
+    name: "grok_prompt_error",
+    buildInput: grokPromptErrorInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("grok"),
+        transcriptFile: new URL("./grok_prompt_error/grok_transcript.ndjson", import.meta.url),
+        modelSelection: GROK_MODEL_SELECTION,
+        assertOutput: assertGrokPromptErrorOutput,
       },
     ],
   },
@@ -1155,6 +1207,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         ),
         modelSelection: PI_MODEL_SELECTION,
         assertOutput: assertPiThreadRollbackAfterStopOutput,
+      },
+    ],
+  },
+  {
+    name: "thread_rollback_to_stopped_turn",
+    buildInput: threadRollbackToStoppedTurnInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL(
+          "./thread_rollback_to_stopped_turn/codex_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: CODEX_MODEL_SELECTION,
+        runtimePolicyOverride: WORKSPACE_NEVER_POLICY,
+        assertOutput: assertThreadRollbackToStoppedTurnOutput,
       },
     ],
   },

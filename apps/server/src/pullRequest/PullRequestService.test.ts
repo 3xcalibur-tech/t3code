@@ -19,20 +19,20 @@ import type {
 } from "@t3tools/contracts";
 import { PullRequestOperationError } from "@t3tools/contracts";
 
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
-import { ForgejoCli } from "../sourceControl/ForgejoCli.ts";
+import * as ForgejoCli from "../sourceControl/ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
-import { PullRequestProviderRegistry, fromProviders } from "./PullRequestProviderRegistry.ts";
+import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import {
@@ -410,18 +410,21 @@ function makeService(input: {
   return Effect.flatMap(
     Layer.build(
       Layer.mergeAll(
-        Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
+        Layer.succeed(
+          PullRequestProviderRegistry.PullRequestProviderRegistry,
+          PullRequestProviderRegistry.fromProviders(input.providers),
+        ),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveLink: () => undefined,
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
         }),
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getProjectShells: (projectIds) =>
+        Layer.mock(ProjectService.ProjectService)({
+          listShells: (options) =>
             Effect.succeed(
-              input.projects.filter((project) => projectIds?.includes(project.id) ?? true),
+              input.projects.filter((project) => options?.projectIds?.includes(project.id) ?? true),
             ),
-          getProjectShellById: (projectId) =>
+          getShell: (projectId) =>
             Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
         }),
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
@@ -5718,7 +5721,7 @@ it.effect("tracks Forgejo viewed files through its diff and refuses truncated ba
     let diffReads = 0;
     const provider = yield* ForgejoPullRequestProvider.make.pipe(
       Effect.provide(
-        Layer.mock(ForgejoCli)({
+        Layer.mock(ForgejoCli.ForgejoCli)({
           api: (input) => {
             assert.strictEqual(input.host, "forge.example:3000");
             const viewer = input.path === "user";
