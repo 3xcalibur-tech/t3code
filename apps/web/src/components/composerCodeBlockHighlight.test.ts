@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vite-plus/test";
+import { Editor } from "@tiptap/core";
+import type { EditorView } from "@tiptap/pm/view";
+import StarterKit from "@tiptap/starter-kit";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { ComposerCodeBlockExtension } from "~/composer-rich-text-doc";
 import type { DiffThemeName } from "~/lib/diffRendering";
+import { getSyntaxHighlighterPromise } from "~/lib/syntaxHighlighting";
 
 import {
+  composerCodeBlockHighlight,
   MAX_HIGHLIGHTED_CODE_BLOCK_LENGTH,
   shouldHighlightCodeBlock,
   tokenizeBlock,
 } from "./composerCodeBlockHighlight";
+
+vi.mock("~/lib/syntaxHighlighting", () => ({ getSyntaxHighlighterPromise: vi.fn() }));
 
 const THEME = "github-dark" as DiffThemeName;
 
@@ -84,5 +92,61 @@ describe("the highlighting size cap", () => {
 
   it("leaves a fence past the cap plain", () => {
     expect(shouldHighlightCodeBlock("x".repeat(MAX_HIGHLIGHTED_CODE_BLOCK_LENGTH + 1))).toBe(false);
+  });
+});
+
+describe("a highlighter that fails to load", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Shiki can fail to initialize at all. The blocks it could not reach stay
+   * plain, the ones it could are still painted, and nothing is left rejected.
+   */
+  it("still repaints the blocks whose highlighter loaded", async () => {
+    vi.mocked(getSyntaxHighlighterPromise).mockImplementation((language) =>
+      language === "ts"
+        ? Promise.resolve(fakeHighlighter(() => "#ff0000"))
+        : Promise.reject(new Error("Shiki failed to initialize")),
+    );
+    const editor = new Editor({
+      extensions: [
+        StarterKit.configure({ codeBlock: false, trailingNode: false }),
+        ComposerCodeBlockExtension,
+        composerCodeBlockHighlight({ resolveTheme: () => THEME }),
+      ],
+      content: {
+        type: "doc",
+        content: [
+          { type: "codeBlock", attrs: { language: "ts" }, content: [{ type: "text", text: "a" }] },
+          { type: "codeBlock", attrs: { language: "py" }, content: [{ type: "text", text: "b" }] },
+        ],
+      },
+    });
+    // The plugin watches <html> for theme changes; the unit suite has no DOM.
+    vi.stubGlobal("document", { documentElement: {} });
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    // ProseMirror names each plugin after its key, though it does not type it.
+    const plugin = editor.extensionManager.plugins.find((candidate) =>
+      (candidate as unknown as { key: string }).key.startsWith("composerCodeBlockHighlight"),
+    );
+    const repainted = new Promise<void>((resolve) => {
+      const view = {
+        get state() {
+          return editor.state;
+        },
+        dispatch: () => resolve(),
+      } as unknown as EditorView;
+      plugin?.spec.view?.(view);
+    });
+
+    await expect(repainted).resolves.toBeUndefined();
   });
 });

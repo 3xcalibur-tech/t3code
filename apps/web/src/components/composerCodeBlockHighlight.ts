@@ -120,7 +120,9 @@ export function composerCodeBlockHighlight(options: {
                 return;
               }
 
-              void Promise.all(
+              // Settled rather than all: a block whose highlighter fails to
+              // load stays plain, and the others are still painted.
+              void Promise.allSettled(
                 pending.map(async ({ node }) => {
                   // The stored info string keeps everything after the language
                   // (`js title=x`); Shiki wants only the name.
