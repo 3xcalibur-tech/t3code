@@ -66,6 +66,8 @@ function start() {
   let buffer = "";
   current.stdin.on("error", () => {});
   current.stdout.on("data", (chunk) => {
+    // A replaced driver can still flush output; its calls were already failed.
+    if (child !== current) return;
     buffer += chunk;
     const lines = buffer.split("\\n");
     buffer = lines.pop();

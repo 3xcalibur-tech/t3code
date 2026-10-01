@@ -11,9 +11,10 @@ import * as Effect from "effect/Effect";
 import { endCuaSession, ensureCuaMcpProxy } from "./CuaMcpProxy.ts";
 
 // Stands in for `cua-driver mcp`: answers `initialize`, reports its pid and
-// whether the handshake finished, and never answers "hang".
+// whether the handshake finished, and answers "hang" only as it is stopped.
 const FAKE_DRIVER = `
 let initialized = false;
+let hanging = null;
 let input = "";
 const reply = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
 process.stdin.on("data", (chunk) => {
@@ -24,10 +25,15 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line);
     if (message.method === "initialize") reply({ id: message.id, result: { protocolVersion: "2025-06-18" } });
     if (message.method === "notifications/initialized") initialized = true;
+    if (message.method === "tools/call" && message.params.name === "hang") hanging = message.id;
     if (message.method === "tools/call" && message.params.name === "whoami") {
       reply({ id: message.id, result: { pid: process.pid, initialized } });
     }
   }
+});
+process.on("SIGTERM", () => {
+  if (hanging !== null) reply({ id: hanging, result: { late: true } });
+  process.exit(0);
 });
 `;
 
