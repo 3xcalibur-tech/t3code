@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { Editor } from "@tiptap/core";
+import { newlineInCode } from "@tiptap/pm/commands";
 import { TextSelection } from "@tiptap/pm/state";
 
 import {
@@ -7,6 +8,7 @@ import {
   indentCodeBlock,
   indentLines,
   convertCodeFenceOnEnter,
+  exitCodeBlockOnTrailingBlankLines,
   indentedNewlineInCodeBlock,
   leadingWhitespace,
   outdentLine,
@@ -130,6 +132,44 @@ describe("indentedNewlineInCodeBlock", () => {
       },
     });
     expect(indentedNewlineInCodeBlock(editor.state, (tr) => editor.view.dispatch(tr))).toBe(false);
+  });
+});
+
+/** Enter inside a fence, in the order the composer's key handler tries it. */
+function pressEnter(editor: Editor) {
+  const dispatch = (tr: Parameters<typeof editor.view.dispatch>[0]) => editor.view.dispatch(tr);
+  return (
+    exitCodeBlockOnTrailingBlankLines(editor.view) ||
+    indentedNewlineInCodeBlock(editor.state, dispatch) ||
+    newlineInCode(editor.state, dispatch)
+  );
+}
+
+describe("exitCodeBlockOnTrailingBlankLines", () => {
+  it("leaves the block once two blank lines end it", () => {
+    const editor = codeEditor("flush()");
+    pressEnter(editor);
+    pressEnter(editor);
+    expect(editor.state.doc.childCount).toBe(1);
+    pressEnter(editor);
+    expect(editor.state.doc.firstChild?.textContent).toBe("flush()");
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+  });
+
+  /** Enter carries indentation, so the blank lines after nested code are not empty. */
+  it("counts lines holding only carried indentation as blank", () => {
+    const editor = codeEditor("  nested()");
+    pressEnter(editor);
+    pressEnter(editor);
+    expect(editor.state.doc.childCount).toBe(1);
+    pressEnter(editor);
+    expect(editor.state.doc.firstChild?.textContent).toBe("  nested()");
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+  });
+
+  it("stays in the block when the caret is not at its end", () => {
+    const editor = codeEditor("a\n\n\nb", { from: 3 });
+    expect(exitCodeBlockOnTrailingBlankLines(editor.view)).toBe(false);
   });
 });
 

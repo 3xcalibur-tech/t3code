@@ -1,5 +1,7 @@
+import { exitCode } from "@tiptap/pm/commands";
 import type { EditorState, Transaction } from "@tiptap/pm/state";
 import { TextSelection } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
 
 /**
  * Spaces rather than a tab: the fence round-trips through Markdown on its way
@@ -90,6 +92,23 @@ export function indentedNewlineInCodeBlock(
     dispatch(transaction.scrollIntoView());
   }
   return true;
+}
+
+/**
+ * Two blank lines at the end of a fence leave it, the way every code editor
+ * does. Without this a fence at the end of the prompt is a trap: Enter only
+ * ever adds another line and there is no way back to prose. A line holding
+ * only the indentation Enter carried forward counts as blank, and is removed
+ * with the rest.
+ */
+export function exitCodeBlockOnTrailingBlankLines(view: EditorView): boolean {
+  const { $from, empty } = view.state.selection;
+  if (!empty || $from.parent.type.spec.code !== true) return false;
+  if ($from.parentOffset !== $from.parent.content.size) return false;
+  const trailing = /\n[ \t]*\n[ \t]*$/.exec($from.parent.textContent);
+  if (!trailing) return false;
+  view.dispatch(view.state.tr.delete($from.pos - trailing[0].length, $from.pos));
+  return exitCode(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
 }
 
 /**

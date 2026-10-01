@@ -2,7 +2,7 @@ import { Extension, InputRule, Node, wrappingInputRule, type JSONContent } from 
 import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { type Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { exitCode, newlineInCode, splitBlockKeepMarks } from "@tiptap/pm/commands";
+import { newlineInCode, splitBlockKeepMarks } from "@tiptap/pm/commands";
 import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import type { ResolvedPos } from "@tiptap/pm/model";
@@ -62,6 +62,7 @@ import {
 } from "~/composer-rich-text-doc";
 import {
   convertCodeFenceOnEnter,
+  exitCodeBlockOnTrailingBlankLines,
   indentCodeBlock,
   indentedNewlineInCodeBlock,
   selectionInOneCodeBlock,
@@ -668,20 +669,6 @@ const headingInputRule = new InputRule({
 /** Whether the caret sits inside a fenced code block. */
 function isInCodeBlock(view: EditorView): boolean {
   return view.state.selection.$from.parent.type.spec.code === true;
-}
-
-/**
- * Two blank lines at the end of a fence leave it, the way every code editor
- * does. Without this a fence at the end of the prompt is a trap: Enter only
- * ever adds another line and there is no way back to prose.
- */
-function exitCodeBlockOnTrailingBlankLines(view: EditorView): boolean {
-  const { $from, empty } = view.state.selection;
-  if (!empty || $from.parent.type.spec.code !== true) return false;
-  if ($from.parentOffset !== $from.parent.content.size) return false;
-  if (!$from.parent.textContent.endsWith("\n\n")) return false;
-  view.dispatch(view.state.tr.delete($from.pos - 2, $from.pos));
-  return exitCode(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
 }
 
 const MarkerPluginKey = new PluginKey("composer-rich-markers");
