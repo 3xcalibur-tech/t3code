@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { OrchestrationThread } from "@t3tools/contracts";
 import { DEFAULT_PROVIDER_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";

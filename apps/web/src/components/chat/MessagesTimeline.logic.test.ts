@@ -18,7 +18,7 @@ import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
 } from "@t3tools/client-runtime/state/threads";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,

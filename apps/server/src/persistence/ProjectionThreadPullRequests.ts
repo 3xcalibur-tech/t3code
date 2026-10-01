@@ -17,8 +17,8 @@ import { toPersistenceSqlError, type ProjectionRepositoryError } from "./Errors.
 
 import * as Layer from "effect/Layer";
 import * as Struct from "effect/Struct";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as SqlSchema from "effect/sql/SqlSchema";
 
 export const ProjectionThreadPullRequest = Schema.Struct({
   threadId: ThreadId,

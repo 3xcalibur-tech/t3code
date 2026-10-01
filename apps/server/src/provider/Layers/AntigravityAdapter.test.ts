@@ -18,7 +18,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as AcpErrors from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 

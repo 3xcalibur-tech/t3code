@@ -7,7 +7,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Arbitrary from "effect/unstable/arbitrary/Arbitrary";
+import * as Arbitrary from "effect/Arbitrary";
 
 import { encodeShellSnapshotForCache } from "./persistence.ts";
 

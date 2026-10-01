@@ -14,7 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { TestClock } from "effect/testing";
-import type { HttpClient } from "effect/unstable/http";
+import type { HttpClient } from "effect/http";
 
 import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import {

@@ -1,6 +1,6 @@
 import { ComposerContextId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert } from "react-native";
 import type { EnvironmentId } from "@t3tools/contracts";

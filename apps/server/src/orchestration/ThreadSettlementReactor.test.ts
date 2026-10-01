@@ -30,7 +30,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { GitManager, type GitBranchPullRequest } from "../git/GitManager.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -56,7 +56,7 @@ import * as ThreadPlanProgress from "./ThreadPlanProgress.ts";
 import * as ThreadSettlementReactor from "./ThreadSettlementReactor.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Path from "effect/Path";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { ServerConfig } from "../config.ts";
 import * as StorageCleanup from "../storageCleanup.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";

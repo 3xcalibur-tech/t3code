@@ -74,7 +74,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import {
   FetchHttpClient,
   HttpBody,
@@ -83,11 +83,11 @@ import {
   HttpClientResponse,
   HttpRouter,
   HttpServer,
-} from "effect/unstable/http";
-import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
-import * as NetAddress from "effect/unstable/net/NetAddress";
-import * as Socket from "effect/unstable/socket/Socket";
+} from "effect/http";
+import { OtlpSerialization, OtlpTracer } from "effect/observability";
+import { RpcClient, RpcSerialization } from "effect/rpc";
+import * as NetAddress from "effect/net/NetAddress";
+import * as Socket from "effect/socket/Socket";
 import { vi } from "vite-plus/test";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -109,7 +109,7 @@ const encodeTestJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unk
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as DeviceService from "./device/DeviceService.ts";
-import { HTTP_ROUTER_CONFIG, makeRoutesLayer } from "./server.ts";
+import { HTTP_ROUTER_CONFIG, makeRoutesLayer, withUntracedRequests } from "./server.ts";
 import {
   isThreadDetailEvent,
   resolveAvailableEditorsForConfig,
@@ -768,17 +768,19 @@ const buildAppUnderTest = (options?: {
       Layer.provide(Layer.succeed(HostProcessEnvironment, {})),
     );
 
-    const servedRoutesLayer = HttpRouter.serve(
-      // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
-      // database. Its own, in memory: nothing here shares a table with the auth store.
-      makeRoutesLayer.pipe(
-        Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory)),
+    const servedRoutesLayer = withUntracedRequests(
+      HttpRouter.serve(
+        // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
+        // database. Its own, in memory: nothing here shares a table with the auth store.
+        makeRoutesLayer.pipe(
+          Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory)),
+        ),
+        {
+          disableListenLog: true,
+          disableLogger: true,
+          routerConfig: HTTP_ROUTER_CONFIG,
+        },
       ),
-      {
-        disableListenLog: true,
-        disableLogger: true,
-        routerConfig: HTTP_ROUTER_CONFIG,
-      },
     ).pipe(
       Layer.provide(
         Layer.mergeAll(

@@ -16,7 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";

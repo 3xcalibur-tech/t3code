@@ -19,9 +19,9 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { HttpServer } from "effect/unstable/http";
-import * as NetAddress from "effect/unstable/net/NetAddress";
+import * as SqlClient from "effect/sql/SqlClient";
+import { HttpServer } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 
 import * as EnvironmentAuth from "../src/auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "../src/cloud/serviceLauncherClient.ts";

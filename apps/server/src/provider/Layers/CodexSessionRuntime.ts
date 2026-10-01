@@ -31,7 +31,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
@@ -1305,7 +1305,8 @@ export const makeCodexSessionRuntime = (
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const runtimeScope = yield* Scope.Scope;
+    // A child of the caller's scope, so `close` can end the runtime without closing the caller's.
+    const runtimeScope = yield* Scope.fork(yield* Scope.Scope);
     const crypto = yield* Crypto.Crypto;
     const events = yield* Queue.unbounded<ProviderEvent>();
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());

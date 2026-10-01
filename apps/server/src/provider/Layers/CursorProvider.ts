@@ -24,9 +24,9 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { HttpClient } from "effect/unstable/http";
-import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { HttpClient } from "effect/http";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import {
   createModelCapabilities,
   getProviderOptionBooleanSelectionValue,

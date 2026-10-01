@@ -16,7 +16,7 @@ import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { TestClock } from "effect/testing";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 import type {
   GitActionProgressEvent,

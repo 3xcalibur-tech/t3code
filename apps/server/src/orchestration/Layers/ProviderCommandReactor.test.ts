@@ -34,7 +34,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 

@@ -20,7 +20,7 @@ import {
   type ProviderApprovalDecision,
   type UserInputQuestion,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { threadEnvironment } from "../state/threads";
 import { scopedRequestKey } from "../lib/scopedEntities";

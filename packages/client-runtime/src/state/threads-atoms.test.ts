@@ -21,9 +21,9 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
-import { RpcClientError } from "effect/unstable/rpc";
-import { Socket } from "effect/unstable/socket";
+import { Atom, AtomRegistry } from "effect/reactivity";
+import { RpcClientError } from "effect/rpc";
+import { Socket } from "effect/socket";
 
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";

@@ -9,9 +9,9 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { Command, Flag } from "effect/unstable/cli";
-import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Command, Flag } from "effect/cli";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const CURRENT_SCHEMA_RELEASE = "v0.11.3";
 

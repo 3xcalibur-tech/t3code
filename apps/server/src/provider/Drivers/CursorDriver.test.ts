@@ -8,8 +8,8 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { HttpClient } from "effect/unstable/http";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import { HttpClient } from "effect/http";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";

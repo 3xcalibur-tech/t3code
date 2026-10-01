@@ -87,7 +87,7 @@ import {
 } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import {
   lazy,
   memo,
@@ -117,7 +117,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";

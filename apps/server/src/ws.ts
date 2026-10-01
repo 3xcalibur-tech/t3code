@@ -85,8 +85,8 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/http";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
@@ -165,7 +165,7 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
 import { pullRequestSyncKey } from "./pullRequest/pullRequestSyncKey.ts";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";

@@ -27,7 +27,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { GitManager, type GitBranchPullRequest } from "../git/GitManager.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";

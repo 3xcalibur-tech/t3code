@@ -19,8 +19,8 @@ import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
-import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
@@ -180,6 +180,10 @@ import { forkParked, ServerActivation } from "./serverActivation.ts";
 export const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
 } as const;
+
+// HttpRouter.serve builds the routes privately, so the server-wide span
+// predicate has to reach the served layer itself.
+export const withUntracedRequests = Layer.provide(untracedRequestsLayer);
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
 // T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
@@ -612,8 +616,6 @@ export const makeRoutesLayer = Layer.mergeAll(
     websocketRpcRouteLayer,
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-  // Last, so no route layer can replace the server's one TracerDisabledWhen.
-  untracedRequestsLayer,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
@@ -964,7 +966,10 @@ const makeServerLayer = Layer.unwrap(
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
-    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
+    }).pipe(
+      withUntracedRequests,
+      Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
+    );
     const serverApplicationLayer = Layer.mergeAll(
       routesLayer,
       httpListeningLayer,

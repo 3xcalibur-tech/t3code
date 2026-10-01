@@ -20,8 +20,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
   buildSshChildEnvironment,
@@ -98,7 +98,7 @@ interface SshTunnelEntry {
   readonly httpBaseUrl: string;
   readonly wsBaseUrl: string;
   readonly process: ChildProcessSpawner.ChildProcessHandle;
-  readonly scope: Scope.Scope;
+  readonly scope: Scope.Closeable;
 }
 
 type SshEnvironmentEffectContext =
@@ -1109,6 +1109,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   readonly wsBaseUrl: string;
   readonly authOptions: SshAuthOptions;
   readonly remoteServerKind: "external" | "managed" | null;
+  readonly scope: Scope.Closeable;
 }): Effect.fn.Return<
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
@@ -1117,7 +1118,6 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   | Path.Path
   | HttpClient.HttpClient
   | NetService.NetService
-  | Scope.Scope
 > {
   const hostSpec = yield* buildSshHostSpecEffect(input.resolvedTarget);
   const childEnvironment = yield* buildSshChildEnvironment({
@@ -1164,7 +1164,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   const sshCommand = yield* resolveSshCommand;
   const tunnelCommand = [sshCommand, ...args];
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const scope = yield* Scope.Scope;
+  const { scope } = input;
   yield* Effect.logDebug("ssh.tunnel.spawn.start", {
     ...sshTargetLogFields(input.resolvedTarget),
     command: tunnelCommand,
@@ -1185,6 +1185,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
       }),
     )
     .pipe(
+      Effect.provideService(Scope.Scope, scope),
       Effect.mapError(
         (cause) =>
           new SshCommandError({
@@ -1534,7 +1535,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           wsBaseUrl,
           authOptions,
           remoteServerKind: remoteLaunch.remoteServerKind,
-        }).pipe(Effect.provideService(Scope.Scope, entryScope)),
+          scope: entryScope,
+        }),
     }).pipe(
       Effect.onExit((exit) =>
         Exit.isSuccess(exit) ? Effect.void : Scope.close(entryScope, Exit.void).pipe(Effect.ignore),

@@ -3,13 +3,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { HostProcessArchitecture, HostProcessPlatform } from "./hostProcess.ts";
 
 import {
@@ -126,7 +126,7 @@ describe("RelayClient", () => {
           baseDir,
           releaseAsset: {
             url: "https://example.test/cloudflared",
-            sha256: Encoding.encodeHex(sha256(bytes)),
+            sha256: Hex.encode(sha256(bytes)),
             archive: "binary",
           },
         });
@@ -182,7 +182,7 @@ describe("RelayClient", () => {
         baseDir,
         releaseAsset: {
           url: "https://example.test/cloudflared",
-          sha256: Encoding.encodeHex(sha256(new TextEncoder().encode("expected"))),
+          sha256: Hex.encode(sha256(new TextEncoder().encode("expected"))),
           archive: "binary",
         },
       });
@@ -215,7 +215,7 @@ describe("RelayClient", () => {
         baseDir,
         releaseAsset: {
           url: "https://example.test/cloudflared",
-          sha256: Encoding.encodeHex(sha256(bytes)),
+          sha256: Hex.encode(sha256(bytes)),
           archive: "binary",
         },
       });
