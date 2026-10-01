@@ -865,12 +865,14 @@ function DeviceIntegrationControls({
 /**
  * Environment-wide switches for the opt-in computer access MCP servers. The
  * status comes from the selected environment, which is the machine they drive.
- * Turning a switch on opens its setup until that machine is ready.
+ * Turning a switch on opens its setup until that machine is ready, and only
+ * turns it on for that machine; turning it off applies to the whole scope.
  */
 function ComputerAccessSettings() {
   const { environment: selected } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const updateEnvironment = useAtomCommand(serverEnvironment.updateSettings, "Computer access");
   const [setup, setSetup] = useState<ComputerAccessSetupKind | null>(null);
   const environmentId =
     selected?.connection.phase === "connected" && selected.serverConfig !== null
@@ -888,6 +890,13 @@ function ComputerAccessSettings() {
   const browserTabsOn = settings.enableAgentBrowserTabs;
   const appsReady = status !== null && computerAppsReady(status);
   const browser = status === null ? undefined : computerBrowserReady(status);
+  // Readiness was checked on the selected Mac only, so only it is turned on.
+  const enable = (patch: {
+    readonly enableAgentComputerAccess?: true;
+    readonly enableAgentBrowserTabs?: true;
+  }) => {
+    if (environmentId) void updateEnvironment({ environmentId, input: { patch } });
+  };
   const setupButton = (kind: ComputerAccessSetupKind) => (
     <Button size="sm" variant="outline" onClick={() => setSetup(kind)}>
       Set up
@@ -910,9 +919,11 @@ function ComputerAccessSettings() {
               checked={appsOn}
               disabled={environmentId === null || !macHost}
               onCheckedChange={(checked) =>
-                checked && !appsReady
-                  ? setSetup("apps")
-                  : updateSettings({ enableAgentComputerAccess: Boolean(checked) })
+                !checked
+                  ? updateSettings({ enableAgentComputerAccess: false })
+                  : appsReady
+                    ? enable({ enableAgentComputerAccess: true })
+                    : setSetup("apps")
               }
               aria-label="Agent computer access"
             />
@@ -943,9 +954,11 @@ function ComputerAccessSettings() {
               checked={browserTabsOn}
               disabled={environmentId === null || !macHost}
               onCheckedChange={(checked) =>
-                checked && !browser
-                  ? setSetup("browser")
-                  : updateSettings({ enableAgentBrowserTabs: Boolean(checked) })
+                !checked
+                  ? updateSettings({ enableAgentBrowserTabs: false })
+                  : browser
+                    ? enable({ enableAgentBrowserTabs: true })
+                    : setSetup("browser")
               }
               aria-label="Agent browser tabs"
             />
@@ -972,7 +985,7 @@ function ComputerAccessSettings() {
           status={status}
           onRefresh={refresh}
           onFinish={() => {
-            updateSettings(
+            enable(
               setup === "apps"
                 ? { enableAgentComputerAccess: true }
                 : { enableAgentBrowserTabs: true },

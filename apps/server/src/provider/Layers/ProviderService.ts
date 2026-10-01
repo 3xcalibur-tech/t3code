@@ -1011,6 +1011,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
    * Ends the thread's Cua session, which removes the agent's cursor. Runs when
    * a turn ends, fails, or is stopped; the next tool call starts a new session.
    */
+  // A late terminal event from an earlier turn must not end the newer turn's session.
+  const latestTurnByThread = new Map<ThreadId, string>();
   const endComputerSession = (threadId: ThreadId) =>
     Option.isSome(computerAccess) &&
     McpProviderSession.readMcpProviderSession(threadId)?.localMcpServers?.some(
@@ -1152,12 +1154,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         provider: canonicalEvent.provider,
         eventType: canonicalEvent.type,
       });
-      if (
-        canonicalEvent.type === "turn.completed" ||
-        canonicalEvent.type === "turn.aborted" ||
-        canonicalEvent.type === "runtime.error"
+      if (canonicalEvent.type === "turn.started" && canonicalEvent.turnId !== undefined) {
+        latestTurnByThread.set(canonicalEvent.threadId, canonicalEvent.turnId);
+      } else if (
+        (canonicalEvent.type === "turn.completed" ||
+          canonicalEvent.type === "turn.aborted" ||
+          canonicalEvent.type === "runtime.error") &&
+        (canonicalEvent.turnId === undefined ||
+          (latestTurnByThread.get(canonicalEvent.threadId) ?? canonicalEvent.turnId) ===
+            canonicalEvent.turnId)
       ) {
         yield* endComputerSession(canonicalEvent.threadId);
+      } else if (canonicalEvent.type === "session.exited") {
+        latestTurnByThread.delete(canonicalEvent.threadId);
       }
       if (canonicalEvent.type === "turn.started") {
         yield* observeTurnStartedForAnalytics(source, canonicalEvent);

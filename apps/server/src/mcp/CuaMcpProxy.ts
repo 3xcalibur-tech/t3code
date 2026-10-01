@@ -84,12 +84,16 @@ function start() {
       process.stdout.write(line + "\\n");
     }
   });
-  current.on("exit", () => {
+  // A driver that fails to start, or later exits, fails the waiting calls;
+  // the next call tries again.
+  const stopped = () => {
     if (child !== current) return;
     child = null;
     restarted = true;
     failPending();
-  });
+  };
+  current.on("error", stopped);
+  current.on("exit", stopped);
   if (replay !== null) current.stdin.write(JSON.stringify({ ...initialize, id: replay }) + "\\n");
 }
 

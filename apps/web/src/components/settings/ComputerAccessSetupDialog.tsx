@@ -91,13 +91,13 @@ export function ComputerAccessSetupDialog({
     if (result._tag === "Failure") setError(ACTION_FAILURES[action]);
     onRefresh();
   };
-  // A request left running would keep waiting on the user for minutes.
-  const close = () => {
-    if (requesting) {
-      void run({ environmentId, input: { action: "cancel-cua-permissions" } });
-    }
-    onClose();
-  };
+  // A request left running would keep waiting on the user for minutes, so
+  // the dialog cancels it when it closes for any reason.
+  const cancelRequest = useEffectEvent(() => {
+    if (requesting) void run({ environmentId, input: { action: "cancel-cua-permissions" } });
+  });
+  useEffect(() => () => cancelRequest(), []);
+  const close = onClose;
 
   return (
     <Dialog
@@ -231,9 +231,10 @@ function AppsSetup({
                   to approve them.
                 </p>
               )}
-              {driver?.permissionsError && !requesting && !ready ? (
-                <p role="alert" className="whitespace-pre-line text-xs text-destructive">
-                  {driver.permissionsError}
+              {driver?.permissionsFailed && !requesting && !ready ? (
+                <p role="alert" className="text-xs text-destructive">
+                  Cua Driver did not get both permissions. Turn on CuaDriver in both lists in System
+                  Settings, then try again.
                 </p>
               ) : null}
             </div>
@@ -276,7 +277,7 @@ function AppsSetup({
           </>
         ) : (
           <Button disabled={busy} onClick={() => onAction("request-cua-permissions")}>
-            {driver?.permissionsError ? "Try again" : "Start"}
+            {driver?.permissionsFailed ? "Try again" : "Start"}
           </Button>
         )}
       </WizardFooter>

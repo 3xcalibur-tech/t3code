@@ -5077,8 +5077,11 @@ describe("agent browser access", () => {
       readonly onComputerAccess?: (access: ComputerAccess.ComputerAccessSettings) => void;
       /** Presses Stop on the session after it starts. */
       readonly interrupt?: boolean;
-      /** Has the provider report this turn ending after the session starts. */
-      readonly turnEnd?: "turn.completed" | "runtime.error";
+      /** Runtime events the provider reports after the session starts. */
+      readonly events?: ReadonlyArray<{
+        readonly type: "turn.started" | "turn.completed" | "runtime.error";
+        readonly turnId: string;
+      }>;
       readonly onComputerAccessStop?: () => void;
       /** Receives the session config before the layer's teardown clears it. */
       readonly onMcpSession?: (
@@ -5241,25 +5244,29 @@ describe("agent browser access", () => {
         });
         options?.onMcpSession?.(McpProviderSession.readMcpProviderSession(threadId));
         if (options?.interrupt) yield* provider.interruptTurn({ threadId });
-        if (options?.turnEnd) {
-          // Wait for the event to come out the other side; the session ends before then.
-          const processed = yield* Stream.take(provider.streamEvents, 1).pipe(
+        if (options?.events) {
+          // Wait for the events to come out the other side; sessions end before then.
+          const processed = yield* Stream.take(provider.streamEvents, options.events.length).pipe(
             Stream.runDrain,
             Effect.forkChild,
           );
           yield* Effect.yieldNow;
-          fake.emit({
-            type: options.turnEnd,
-            eventId: asEventId(`evt-computer-access-${options.turnEnd}`),
-            provider: driver,
-            createdAt: "2026-01-01T00:00:00.000Z",
-            threadId,
-            turnId: asTurnId("turn-computer-access"),
-            payload:
-              options.turnEnd === "turn.completed"
-                ? { state: "completed" }
-                : { message: "Provider crashed." },
-          });
+          for (const [index, event] of options.events.entries()) {
+            fake.emit({
+              type: event.type,
+              eventId: asEventId(`evt-computer-access-${index}`),
+              provider: driver,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              threadId,
+              turnId: asTurnId(event.turnId),
+              payload:
+                event.type === "turn.started"
+                  ? { model: "test" }
+                  : event.type === "turn.completed"
+                    ? { state: "completed" }
+                    : { message: "Provider crashed." },
+            });
+          }
           yield* Fiber.join(processed);
         }
       }).pipe(Effect.provide(providerLayer));
@@ -5347,8 +5354,30 @@ describe("agent browser access", () => {
 
   it.effect.each([
     ["Stop", { interrupt: true }, { apps: true, browserTabs: false }, 1],
-    ["a finished turn", { turnEnd: "turn.completed" }, { apps: true, browserTabs: false }, 1],
-    ["a provider error", { turnEnd: "runtime.error" }, { apps: true, browserTabs: false }, 1],
+    [
+      "a finished turn",
+      { events: [{ type: "turn.completed", turnId: "turn-1" }] },
+      { apps: true, browserTabs: false },
+      1,
+    ],
+    [
+      "a provider error",
+      { events: [{ type: "runtime.error", turnId: "turn-1" }] },
+      { apps: true, browserTabs: false },
+      1,
+    ],
+    // A late event from an earlier turn must not end the newer turn's session.
+    [
+      "only the latest turn",
+      {
+        events: [
+          { type: "turn.started", turnId: "turn-2" },
+          { type: "turn.completed", turnId: "turn-1" },
+        ],
+      },
+      { apps: true, browserTabs: false },
+      0,
+    ],
     ["Stop without Cua Driver", { interrupt: true }, { apps: false, browserTabs: true }, 0],
   ] as const)("%s ends the thread's Cua session", ([label, trigger, computer, expected]) =>
     Effect.gen(function* () {
