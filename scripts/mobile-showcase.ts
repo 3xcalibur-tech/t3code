@@ -1422,7 +1422,7 @@ async function captureAndroid(
     "-a",
     "android.intent.action.VIEW",
     "-d",
-    `${APP_SCHEME}://expo-development-client/?url=${metroUrl}&${DEV_CLIENT_LAUNCH_FLAGS}`,
+    `'${APP_SCHEME}://expo-development-client/?url=${metroUrl}&${DEV_CLIENT_LAUNCH_FLAGS}'`,
     "--es",
     "showcasePairingUrl",
     encodeAndroidPairingUrls(pairingUrls),
