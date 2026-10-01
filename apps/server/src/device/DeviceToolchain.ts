@@ -60,7 +60,7 @@ export class DeviceToolchainInstallError extends Schema.TaggedError<DeviceToolch
   }
 }
 
-interface ToolSpec {
+export interface ToolSpec {
   readonly name: string;
   readonly version: string;
   readonly entry: ReadonlyArray<string>;
@@ -205,6 +205,15 @@ export const ensureDeviceHub = (baseDir: string) =>
 
 export const ensureAgentDevice = (baseDir: string) =>
   ensureTool(baseDir, AGENT_DEVICE_SPEC, (paths) => paths.agentDevice);
+
+/** Same pinned install and lock for an npm tool outside device support. */
+export const ensurePinnedTool = Effect.fn("DeviceToolchain.ensurePinnedTool")(function* (
+  baseDir: string,
+  spec: ToolSpec,
+) {
+  const path = yield* Path.Path;
+  return yield* installLock.withPermit(installTool(spec, toolPaths(path, baseDir, spec)));
+});
 
 const isToolInstalled = Effect.fn("DeviceToolchain.isToolInstalled")(function* (
   baseDir: string,

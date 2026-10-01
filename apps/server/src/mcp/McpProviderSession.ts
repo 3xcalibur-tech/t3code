@@ -1,5 +1,7 @@
 import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 
+import type { LocalMcpServer } from "./ComputerAccess.ts";
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -15,6 +17,36 @@ export interface McpProviderSessionConfig {
    * already pointed at the server's daemon; the agent never handles a token.
    */
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
+  /**
+   * Opt-in stdio servers (Cua Driver, Chrome DevTools MCP) that non-Codex
+   * adapters attach next to `t3-code`, with their prompt text.
+   */
+  readonly localMcpServers?: ReadonlyArray<LocalMcpServer>;
+}
+
+/** Claude SDK `mcpServers` entries for the session's local servers. */
+export function claudeLocalMcpServers(config: McpProviderSessionConfig | undefined) {
+  return Object.fromEntries(
+    (config?.localMcpServers ?? []).map((server) => [
+      server.name,
+      {
+        type: "stdio" as const,
+        command: server.command,
+        args: [...server.args],
+        env: { ...server.env },
+      },
+    ]),
+  );
+}
+
+/** ACP stdio `mcpServers` entries for the session's local servers. */
+export function acpLocalMcpServers(config: McpProviderSessionConfig | undefined) {
+  return (config?.localMcpServers ?? []).map((server) => ({
+    name: server.name,
+    command: server.command,
+    args: [...server.args],
+    env: Object.entries(server.env).map(([name, value]) => ({ name, value })),
+  }));
 }
 
 /** Provider env with the device variables applied over `base`, or `base` untouched. */

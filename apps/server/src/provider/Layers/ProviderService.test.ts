@@ -16,6 +16,7 @@ import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   AssistantCitation,
   ApprovalRequestId,
+  defaultInstanceIdForDriver,
   EnvironmentId,
   EventId,
   MessageId,
@@ -74,6 +75,8 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import * as ServerConfig from "../../config.ts";
+import * as ComputerAccess from "../../mcp/ComputerAccess.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
@@ -5067,16 +5070,31 @@ describe("agent browser access", () => {
     access: boolean | { readonly browser: boolean; readonly device: boolean },
     threadId: ThreadId,
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
-    options?: { readonly withoutOrchestration?: boolean },
+    options?: {
+      readonly withoutOrchestration?: boolean;
+      readonly driver?: ProviderDriverKind;
+      readonly computer?: ComputerAccess.ComputerAccessSettings;
+      readonly onComputerAccess?: (access: ComputerAccess.ComputerAccessSettings) => void;
+      /** Presses Stop on the session after it starts. */
+      readonly interrupt?: boolean;
+      /** Has the provider report this turn ending after the session starts. */
+      readonly turnEnd?: "turn.completed" | "runtime.error";
+      readonly onComputerAccessStop?: () => void;
+      /** Receives the session config before the layer's teardown clears it. */
+      readonly onMcpSession?: (
+        session: McpProviderSession.McpProviderSessionConfig | undefined,
+      ) => void;
+    },
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
       const enableAgentDeviceAccess = typeof access === "boolean" ? access : access.device;
       const issued: Array<{ threadId: ThreadId; capabilities: ReadonlyArray<string> }> = [];
-      const codex = makeFakeCodexAdapter();
+      const driver = options?.driver ?? CODEX_DRIVER;
+      const fake = makeFakeCodexAdapter(driver);
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
-        makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
+        makeAdapterRegistryMock({ [driver]: fake.adapter }),
       );
       const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
         Layer.provide(SqlitePersistenceMemory),
@@ -5139,16 +5157,53 @@ describe("agent browser access", () => {
               threadId: request.threadId,
               capabilities: [...request.capabilities].toSorted(),
             });
-            return undefined;
+            // Computer access attaches to the session config, so it needs one.
+            return options?.computer
+              ? {
+                  config: {
+                    environmentId: EnvironmentId.make("environment-computer-access"),
+                    threadId: request.threadId,
+                    providerSessionId: "provider-session-computer-access",
+                    providerInstanceId: request.providerInstanceId,
+                    endpoint: "http://127.0.0.1/mcp",
+                    authorizationHeader: "Bearer test",
+                    capabilities: request.capabilities,
+                  },
+                }
+              : undefined;
           }),
       }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(options?.withoutOrchestration ? Layer.empty : projectionLayer),
         Layer.provide(
+          Layer.succeed(ComputerAccess.ComputerAccess, {
+            servers: (computer) =>
+              Effect.sync(() => {
+                options?.onComputerAccess?.(computer);
+                return computer.apps
+                  ? [
+                      {
+                        name: "cua-driver",
+                        command: "/usr/local/bin/cua-driver",
+                        args: ["mcp"],
+                        env: {},
+                        instructions: "Use cua-driver for native apps.",
+                      },
+                    ]
+                  : [];
+              }),
+            status: Effect.die("unused"),
+            runAction: () => Effect.die("unused"),
+            endSession: () => Effect.sync(() => options?.onComputerAccessStop?.()),
+          }),
+        ),
+        Layer.provide(
           ServerSettings.ServerSettingsService.layerTest({
             enableAgentBrowserAccess,
             enableAgentDeviceAccess,
+            enableAgentComputerAccess: options?.computer?.apps ?? false,
+            enableAgentBrowserTabs: options?.computer?.browserTabs ?? false,
             projectSettingsOverrides:
               projectOverride === undefined
                 ? {}
@@ -5178,12 +5233,35 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        return yield* provider.startSession(threadId, {
-          provider: CODEX_DRIVER,
-          providerInstanceId: codexInstanceId,
+        yield* provider.startSession(threadId, {
+          provider: driver,
+          providerInstanceId: defaultInstanceIdForDriver(driver),
           threadId,
           runtimeMode: "full-access",
         });
+        options?.onMcpSession?.(McpProviderSession.readMcpProviderSession(threadId));
+        if (options?.interrupt) yield* provider.interruptTurn({ threadId });
+        if (options?.turnEnd) {
+          // Wait for the event to come out the other side; the session ends before then.
+          const processed = yield* Stream.take(provider.streamEvents, 1).pipe(
+            Stream.runDrain,
+            Effect.forkChild,
+          );
+          yield* Effect.yieldNow;
+          fake.emit({
+            type: options.turnEnd,
+            eventId: asEventId(`evt-computer-access-${options.turnEnd}`),
+            provider: driver,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId,
+            turnId: asTurnId("turn-computer-access"),
+            payload:
+              options.turnEnd === "turn.completed"
+                ? { state: "completed" }
+                : { message: "Provider crashed." },
+          });
+          yield* Fiber.join(processed);
+        }
       }).pipe(Effect.provide(providerLayer));
 
       return issued;
@@ -5245,6 +5323,65 @@ describe("agent browser access", () => {
       const threadId = asThreadId("thread-project-browser-on");
       const issued = yield* startSessionWith({ browser: false, device: false }, threadId, true);
       assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("attaches computer access servers from the environment settings", () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-computer-access-on");
+      const requested: Array<ComputerAccess.ComputerAccessSettings> = [];
+      let session: McpProviderSession.McpProviderSessionConfig | undefined;
+      yield* startSessionWith(false, threadId, undefined, {
+        driver: CLAUDE_AGENT_DRIVER,
+        computer: { apps: true, browserTabs: false },
+        onComputerAccess: (computer) => requested.push(computer),
+        onMcpSession: (value) => (session = value),
+      });
+      assert.deepEqual(requested, [{ apps: true, browserTabs: false }]);
+      assert.deepEqual(
+        session?.localMcpServers?.map((server) => server.name),
+        ["cua-driver"],
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    ["Stop", { interrupt: true }, { apps: true, browserTabs: false }, 1],
+    ["a finished turn", { turnEnd: "turn.completed" }, { apps: true, browserTabs: false }, 1],
+    ["a provider error", { turnEnd: "runtime.error" }, { apps: true, browserTabs: false }, 1],
+    ["Stop without Cua Driver", { interrupt: true }, { apps: false, browserTabs: true }, 0],
+  ] as const)("%s ends the thread's Cua session", ([label, trigger, computer, expected]) =>
+    Effect.gen(function* () {
+      const threadId = asThreadId(`thread-computer-access-${label.replaceAll(" ", "-")}`);
+      let ended = 0;
+      yield* startSessionWith(false, threadId, undefined, {
+        driver: CLAUDE_AGENT_DRIVER,
+        computer,
+        ...trigger,
+        onComputerAccessStop: () => (ended += 1),
+      });
+      assert.equal(ended, expected);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    ["both settings are off", CLAUDE_AGENT_DRIVER, { apps: false, browserTabs: false }],
+    // Codex threads keep Codex's own Computer Use.
+    ["the session is Codex", CODEX_DRIVER, { apps: true, browserTabs: true }],
+  ] as const)("attaches no computer access servers when %s", ([, driver, computer]) =>
+    Effect.gen(function* () {
+      const threadId = asThreadId(`thread-computer-access-off-${driver}`);
+      const requested: Array<ComputerAccess.ComputerAccessSettings> = [];
+      let session: McpProviderSession.McpProviderSessionConfig | undefined;
+      yield* startSessionWith(true, threadId, undefined, {
+        driver,
+        computer,
+        onComputerAccess: (value) => requested.push(value),
+        onMcpSession: (value) => (session = value),
+      });
+      assert.deepEqual(requested, []);
+      assert.ok(session);
+      assert.equal(session.localMcpServers, undefined);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

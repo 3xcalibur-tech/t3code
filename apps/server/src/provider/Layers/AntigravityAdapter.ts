@@ -806,6 +806,7 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                         url: mcp.endpoint,
                         headers: [{ name: "Authorization", value: mcp.authorizationHeader }],
                       },
+                      ...McpProviderSession.acpLocalMcpServers(mcp),
                     ]
                   : [],
                 ...makeNativeLoggers({
@@ -1085,7 +1086,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
                   ...prompt,
                   {
                     type: "text",
-                    text: buildRuntimeInstructions({ harness: "Antigravity", model }),
+                    text: buildRuntimeInstructions({
+                      harness: "Antigravity",
+                      model,
+                      localMcpServers: McpProviderSession.readMcpProviderSession(input.threadId)
+                        ?.localMcpServers,
+                    }),
                   },
                 ],
               },

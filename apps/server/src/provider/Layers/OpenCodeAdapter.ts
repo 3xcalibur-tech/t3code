@@ -2881,6 +2881,18 @@ export function makeOpenCodeAdapter(
                     },
                   }),
                 );
+                for (const local of mcpSession.localMcpServers ?? []) {
+                  yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      name: local.name,
+                      config: {
+                        type: "local",
+                        command: [local.command, ...local.args],
+                        environment: { ...local.env },
+                      },
+                    }),
+                  );
+                }
               }
               // Resume: re-adopt the session named by the durable cursor —
               // OpenCode scopes history by session id. The probe recovers only
@@ -3284,6 +3296,14 @@ export function makeOpenCodeAdapter(
                     system: buildRuntimeInstructions({
                       harness: "OpenCode",
                       model: `${parsedModel.providerID}/${parsedModel.modelID}`,
+                      // External servers are shared, so T3 never adds servers to them.
+                      ...(context.server.external
+                        ? {}
+                        : {
+                            localMcpServers: McpProviderSession.readMcpProviderSession(
+                              context.session.threadId,
+                            )?.localMcpServers,
+                          }),
                     }),
                     parts: [...(text ? [{ type: "text" as const, text }] : []), ...fileParts],
                   },

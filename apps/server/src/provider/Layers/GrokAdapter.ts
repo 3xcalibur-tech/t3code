@@ -1025,6 +1025,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                         },
                       ],
                     },
+                    ...McpProviderSession.acpLocalMcpServers(mcpSession),
                   ],
                 }
               : {}),
@@ -1671,6 +1672,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       harness: "Grok",
                       model: displayModel,
                       reasoningEffort: normalizeGrokReasoningEffort(requestedTurnReasoningEffort),
+                      localMcpServers: McpProviderSession.readMcpProviderSession(input.threadId)
+                        ?.localMcpServers,
                     });
               for (let yieldAttempt = 0; yieldAttempt < 8; yieldAttempt += 1) {
                 yield* Effect.yieldNow;

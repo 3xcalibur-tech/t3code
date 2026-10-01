@@ -942,6 +942,12 @@ export function createServerEnvironmentAtoms<R, E>(
       ]),
     ).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
   );
+  const computerAccessSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) => {
+      const settings = get(settingsValueAtom(environmentId));
+      return `${settings?.enableAgentComputerAccess ?? false}:${settings?.enableAgentBrowserTabs ?? false}`;
+    }).pipe(Atom.withLabel(`environment-data:server:computer-access-settings:${environmentId}`)),
+  );
   const providersValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.providers ?? null).pipe(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
@@ -1082,6 +1088,12 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 60_000,
       refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
     }),
+    // Rechecked when either switch flips; turning Chrome on installs its server.
+    computerAccess: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-access",
+      tag: WS_METHODS.serverCheckComputerAccess,
+      refreshTrigger: ({ environmentId }) => computerAccessSettingsAtom(environmentId),
+    }),
     configProjection,
     welcome,
     consumeResetCredit: createEnvironmentRpcCommand(runtime, {
@@ -1131,6 +1143,11 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverUpdateSettings,
       scheduler: configScheduler,
       concurrency: configConcurrency,
+    }),
+    runComputerAccessAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:run-computer-access-action",
+      tag: WS_METHODS.serverRunComputerAccessAction,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",

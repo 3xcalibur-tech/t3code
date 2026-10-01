@@ -82,6 +82,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as ComputerAccess from "../../mcp/ComputerAccess.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -900,9 +901,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         (entry) => entry.enableAgentBrowserAccess !== undefined,
       );
       const deviceOverridden = entries.some((entry) => entry.enableAgentDeviceAccess !== undefined);
+      // Computer access is per environment: it reaches the machine, not a project.
+      const computer = {
+        apps: settings.enableAgentComputerAccess,
+        browserTabs: settings.enableAgentBrowserTabs,
+      };
       const environment = {
         browser: settings.enableAgentBrowserAccess,
         device: settings.enableAgentDeviceAccess,
+        computer,
       };
       if (!browserOverridden && !deviceOverridden) return environment;
       // Provider-only runtimes may omit orchestration. An unresolved project
@@ -911,6 +918,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const denied = {
         browser: browserOverridden ? false : environment.browser,
         device: deviceOverridden ? false : environment.device,
+        computer,
       };
       if (Option.isNone(projectionQuery)) return denied;
       const thread = yield* projectionQuery.value.getThreadShellById(threadId);
@@ -919,13 +927,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       return {
         browser: resolved.enableAgentBrowserAccess,
         device: resolved.enableAgentDeviceAccess,
+        computer,
       };
     },
     Effect.catch((cause) =>
       Effect.logWarning(
-        "Could not read server settings; withholding agent browser and device access for this session.",
+        "Could not read server settings; withholding agent browser, device, and computer access for this session.",
         { cause },
-      ).pipe(Effect.as({ browser: false, device: false })),
+      ).pipe(
+        Effect.as({ browser: false, device: false, computer: { apps: false, browserTabs: false } }),
+      ),
     ),
   );
 
@@ -936,11 +947,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     const access = yield* agentAccessSettings(threadId);
     if (access.browser) capabilities.add("preview");
     if (access.device) capabilities.add("device");
-    return capabilities;
+    return { capabilities, computer: access.computer };
   });
 
   /** Install only the local CLI here. device_open supplies a separate config for each host. */
   const hostPlatform = yield* HostProcessPlatform;
+  const computerAccess = yield* Effect.serviceOption(ComputerAccess.ComputerAccess);
   const agentDeviceEnvironment = Effect.gen(function* () {
     const devices = yield* Effect.serviceOption(DeviceService.DeviceService);
     if (Option.isNone(devices)) return undefined;
@@ -966,23 +978,46 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     } satisfies Record<string, string>;
   });
 
-  const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
+  const prepareMcpSession = (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+    provider: ProviderDriverKind,
+  ) =>
     Effect.gen(function* () {
-      const capabilities = yield* agentAccessCapabilities(threadId);
+      const { capabilities, computer } = yield* agentAccessCapabilities(threadId);
       const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
       if (credential) {
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
           : undefined;
+        // Codex threads keep Codex's own Computer Use.
+        const localMcpServers =
+          Option.isSome(computerAccess) &&
+          provider !== "codex" &&
+          (computer.apps || computer.browserTabs)
+            ? yield* computerAccess.value.servers(computer, threadId)
+            : [];
         yield* Effect.sync(() =>
           McpProviderSession.setMcpProviderSession({
             ...credential.config,
             ...(deviceEnvironment ? { agentDeviceEnvironment: deviceEnvironment } : {}),
+            ...(localMcpServers.length > 0 ? { localMcpServers } : {}),
           }),
         );
       }
       return credential;
     });
+  /**
+   * Ends the thread's Cua session, which removes the agent's cursor. Runs when
+   * a turn ends, fails, or is stopped; the next tool call starts a new session.
+   */
+  const endComputerSession = (threadId: ThreadId) =>
+    Option.isSome(computerAccess) &&
+    McpProviderSession.readMcpProviderSession(threadId)?.localMcpServers?.some(
+      (server) => server.name === "cua-driver",
+    )
+      ? computerAccess.value.endSession(threadId)
+      : Effect.void;
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
@@ -1117,6 +1152,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         provider: canonicalEvent.provider,
         eventType: canonicalEvent.type,
       });
+      if (
+        canonicalEvent.type === "turn.completed" ||
+        canonicalEvent.type === "turn.aborted" ||
+        canonicalEvent.type === "runtime.error"
+      ) {
+        yield* endComputerSession(canonicalEvent.threadId);
+      }
       if (canonicalEvent.type === "turn.started") {
         yield* observeTurnStartedForAnalytics(source, canonicalEvent);
       } else if (canonicalEvent.type === "model.rerouted") {
@@ -1295,7 +1337,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId, adapter.provider);
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -1526,7 +1568,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* prepareMcpSession(threadId, resolvedInstanceId, adapter.provider);
         const session = yield* adapter
           .startSession({
             ...input,
@@ -1982,6 +2024,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
+        // End the Cua session before the adapter winds down, so the cursor
+        // leaves as soon as the user presses Stop.
+        yield* endComputerSession(routed.threadId);
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,

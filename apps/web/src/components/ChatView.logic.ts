@@ -8,6 +8,7 @@ import {
   ProjectId,
   type MessageId,
   type ModelSelection,
+  type OrchestrationThreadActivity,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -89,6 +90,27 @@ export function agentControlledBrowserCloseConfirmation(
 }
 
 /** The floating player hides only while the same source is rendered in the panel. */
+/**
+ * Whether the running turn has driven the user's computer through Cua Driver,
+ * so the composer can say so next to a Stop action. Claude names the tools
+ * `mcp__cua-driver__*`; OpenCode uses `cua-driver_*`.
+ */
+export function isTurnUsingComputer(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  runningTurnId: TurnId | null,
+): boolean {
+  if (runningTurnId === null) return false;
+  return activities.some((activity) => {
+    if (activity.turnId !== runningTurnId || !activity.kind.startsWith("tool.")) return false;
+    const payload = activity.payload;
+    const data =
+      typeof payload === "object" && payload !== null && "data" in payload ? payload.data : null;
+    const toolName =
+      typeof data === "object" && data !== null && "toolName" in data ? data.toolName : null;
+    return typeof toolName === "string" && /cua-driver/.test(toolName);
+  });
+}
+
 export function shouldRenderPreviewMiniPlayer(
   source: PreviewMiniPlayerSource | null,
   renderedRightPanelSurface: RightPanelSurface | null,

@@ -562,6 +562,58 @@ export const EnvironmentTheme = Schema.Struct({
 });
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
 
+/** A Chromium browser on the environment's machine that agents can attach to. */
+export const ServerComputerAccessBrowser = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  /** Page where the user turns on remote debugging, such as `chrome://inspect/#remote-debugging`. */
+  inspectUrl: Schema.String,
+  /** Whether the browser is running with remote debugging on right now. */
+  remoteDebugging: Schema.Boolean,
+});
+export type ServerComputerAccessBrowser = typeof ServerComputerAccessBrowser.Type;
+
+/**
+ * What the computer access setup flows show. Computer access is macOS-only for
+ * now; other hosts report nothing installed. Checking also installs Chrome
+ * DevTools MCP when browser tab access is on, so a session does not wait for npm.
+ */
+export const ServerComputerAccessStatus = Schema.Struct({
+  cuaDriver: Schema.Struct({
+    /** Binary sessions would launch, or null when it is not installed. */
+    path: Schema.NullOr(Schema.String),
+    /** Grants held by Cua Driver. Unverified reads as false. */
+    permissions: Schema.Struct({ accessibility: Schema.Boolean, screenRecording: Schema.Boolean }),
+    /** Whether Cua's permission request is still waiting for the user. */
+    requestingPermissions: Schema.Boolean,
+    /** Why the last permission request ended without both grants. */
+    permissionsError: Schema.NullOr(Schema.String),
+  }),
+  browsers: Schema.Array(ServerComputerAccessBrowser),
+  /** Why Chrome DevTools MCP cannot start, or null when it is ready or turned off. */
+  browserToolError: Schema.NullOr(Schema.String),
+});
+export type ServerComputerAccessStatus = typeof ServerComputerAccessStatus.Type;
+
+export const ServerComputerAccessAction = Schema.Literals([
+  "install-cua-driver",
+  /** Starts, or restarts, Cua's permission request in the background. */
+  "request-cua-permissions",
+  "cancel-cua-permissions",
+  "open-accessibility-settings",
+  "open-screen-recording-settings",
+]);
+export type ServerComputerAccessAction = typeof ServerComputerAccessAction.Type;
+
+export class ServerComputerAccessError extends Schema.TaggedError<ServerComputerAccessError>()(
+  "ServerComputerAccessError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 /**
  * Whether a theme file carries anything to render. A file with neither seeds
  * nor colors would show as the stock palette wearing a name, which reads as a

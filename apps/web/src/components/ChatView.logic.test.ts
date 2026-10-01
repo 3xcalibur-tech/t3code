@@ -88,6 +88,7 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
+  isTurnUsingComputer,
 } from "./ChatView.logic";
 
 describe("agent browser close confirmation", () => {
@@ -2428,5 +2429,41 @@ describe("worktree setup visibility", () => {
       ...settledDone,
       sequence: 9,
     });
+  });
+});
+
+describe("isTurnUsingComputer", () => {
+  const runningTurnId = TurnId.make("turn-running");
+  const toolActivity = (toolName: string, turnId = runningTurnId) => ({
+    id: EventId.make(`activity-${toolName}-${turnId}`),
+    tone: "tool" as const,
+    kind: "tool.started",
+    summary: "MCP tool call started",
+    payload: { data: { toolName } },
+    turnId,
+    createdAt: "2026-10-01T00:00:00.000Z",
+  });
+
+  it("is true once the running turn calls a Cua Driver tool", () => {
+    expect(
+      isTurnUsingComputer(
+        [toolActivity("mcp__cua-driver__click"), toolActivity("Bash")],
+        runningTurnId,
+      ),
+    ).toBe(true);
+    expect(isTurnUsingComputer([toolActivity("cua-driver_click")], runningTurnId)).toBe(true);
+  });
+
+  it("ignores other tools, earlier turns, and finished turns", () => {
+    expect(isTurnUsingComputer([toolActivity("mcp__t3-code__preview_click")], runningTurnId)).toBe(
+      false,
+    );
+    expect(
+      isTurnUsingComputer(
+        [toolActivity("mcp__cua-driver__click", TurnId.make("turn-earlier"))],
+        runningTurnId,
+      ),
+    ).toBe(false);
+    expect(isTurnUsingComputer([toolActivity("mcp__cua-driver__click")], null)).toBe(false);
   });
 });

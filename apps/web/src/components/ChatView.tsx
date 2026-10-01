@@ -234,6 +234,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
+  MonitorIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
   DownloadIcon,
@@ -479,6 +480,7 @@ import {
   codexArtifactTemplatePromptToAppend,
   waitForStartedServerThread,
   shouldRefocusComposerOnWindowFocus,
+  isTurnUsingComputer,
 } from "./ChatView.logic";
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -6508,6 +6510,31 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
+  const usingComputer = useMemo(
+    () => isTurnUsingComputer(threadActivities, activeRunningTurnId),
+    [activeRunningTurnId, threadActivities],
+  );
+  // Stop also ends the Cua Driver session on the server, which removes its cursor.
+  const computerUseBannerItems = useMemo<ComposerBannerStackItem[]>(
+    () =>
+      usingComputer
+        ? [
+            {
+              id: "computer-use",
+              variant: "info",
+              priority: "activity",
+              icon: <MonitorIcon />,
+              title: "Using your computer",
+              actions: (
+                <Button size="xs" variant="ghost" onClick={() => void onInterrupt()}>
+                  Stop
+                </Button>
+              ),
+            },
+          ]
+        : [],
+    [onInterrupt, usingComputer],
+  );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
@@ -6520,6 +6547,7 @@ export default function ChatView(props: ChatViewProps) {
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...computerUseBannerItems,
         ...feedbackBannerItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -6531,6 +6559,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
+      ...computerUseBannerItems,
       ...feedbackBannerItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -6581,6 +6610,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeBranchMismatchKey,
     backgroundLivenessBannerItem,
+    computerUseBannerItems,
     feedbackBannerItems,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,

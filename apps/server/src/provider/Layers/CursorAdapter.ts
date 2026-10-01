@@ -574,6 +574,7 @@ export function makeCursorAdapter(
                         },
                       ],
                     },
+                    ...McpProviderSession.acpLocalMcpServers(mcpSession),
                   ],
                 }
               : {}),
@@ -1097,7 +1098,12 @@ export function makeCursorAdapter(
                     ...promptParts,
                     {
                       type: "text",
-                      text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                      text: buildRuntimeInstructions({
+                        harness: "Cursor",
+                        model: resolvedModel,
+                        localMcpServers: McpProviderSession.readMcpProviderSession(input.threadId)
+                          ?.localMcpServers,
+                      }),
                     },
                   ],
             })
