@@ -66,10 +66,15 @@ function press(value: string, spec: string) {
   // An unmounted editor's state does not carry them yet, so they come from
   // the extension manager.
   const event = chord(spec);
+  const before = editor.state.doc;
   const handled = editor.extensionManager.plugins.some((plugin) =>
     plugin.props.handleKeyDown?.call(plugin, editor.view, event),
   );
-  return { handled, value: serializeEditorDoc(editor.state.doc).value };
+  return {
+    handled,
+    changed: !editor.state.doc.eq(before),
+    value: serializeEditorDoc(editor.state.doc).value,
+  };
 }
 
 // Tiptap's own block shortcuts would nest a list, task list, code block or
@@ -104,5 +109,19 @@ describe("Tiptap's block shortcuts", () => {
   // the keymap, or every case above would pass without pressing anything.
   it("still delivers the composer's own keys", () => {
     expect(press("**bold**", "Mod-b").handled).toBe(true);
+  });
+
+  // Sinking or lifting an item moves it without touching its `indent`, so
+  // the stored draft keeps the old nesting and the next rebuild undoes the
+  // move. Nesting belongs to the composer's own Tab, which edits the source.
+  it.each([
+    ["- p\n- a", "Tab"],
+    ["- p\n  - a", "Shift-Tab"],
+    ["- [ ] p\n- [ ] a", "Tab"],
+    ["- [ ] p\n  - [ ] a", "Shift-Tab"],
+  ])("leave the nesting of %j alone on %s", (value, spec) => {
+    const result = press(value, spec);
+    expect(result.changed).toBe(false);
+    expect(result.value).toBe(value);
   });
 });

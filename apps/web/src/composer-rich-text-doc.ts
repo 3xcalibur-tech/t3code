@@ -85,6 +85,14 @@ export const ComposerTaskListExtension = TaskList.extend({
   },
 });
 
+/**
+ * Tiptap's Tab and Shift-Tab sink and lift an item without touching its
+ * `indent`, so the stored draft keeps the old nesting and the next rebuild
+ * undoes the move. The composer nests through its own Tab, which edits the
+ * source the way plain mode does.
+ */
+const LIST_NESTING_KEYS = ["Tab", "Shift-Tab"];
+
 export const ComposerTaskItemExtension = TaskItem.extend({
   addAttributes() {
     return {
@@ -93,6 +101,9 @@ export const ComposerTaskItemExtension = TaskItem.extend({
       markerSpace: { default: " " },
       contentSpace: { default: null },
     };
+  },
+  addKeyboardShortcuts() {
+    return withoutBlockChords(this.parent?.(), LIST_NESTING_KEYS);
   },
 }).configure({ nested: true });
 
@@ -151,6 +162,9 @@ const ComposerListItemExtension = ListItem.extend({
       marker: { default: "-" },
       space: { default: " " },
     };
+  },
+  addKeyboardShortcuts() {
+    return withoutBlockChords(this.parent?.(), LIST_NESTING_KEYS);
   },
   // The source marker rides on the item so the composer draws `3)` and a
   // nested `7.` as written, rather than the browser own numbering.
