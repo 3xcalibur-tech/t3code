@@ -35,10 +35,15 @@ export function SubscriptionUsage(props: SubscriptionUsageProps, environment: Wi
   return (
     // The card is one Button so a tap reaches the app's interaction listener,
     // which opens props.url. expo-widgets has no Android counterpart to widgetURL.
-    <Button colors={{ containerColor: colors.surface }} modifiers={[fillMaxSize()]}>
+    <Button
+      colors={{ containerColor: colors.surface }}
+      modifiers={[fillMaxSize()]}
+      onClick={() => {}}
+    >
       <Column modifiers={[fillMaxSize(), paddingAll(16)]}>
         {providers.map((provider, index) => {
-          const stale = provider.windows.length > 0 && now >= provider.expiresAt;
+          const stale =
+            provider.windows.length > 0 && provider.expiresAt > 0 && now >= provider.expiresAt;
           const shown = stale ? [] : provider.windows.slice(0, limit);
           const hidden = stale ? 0 : (provider.totalWindows ?? provider.windows.length) - limit;
           return (

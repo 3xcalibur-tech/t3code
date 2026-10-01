@@ -78,6 +78,12 @@ describe("SubscriptionUsage Android layout", () => {
     expect(tree).toContain("3 more in T3");
   });
 
+  it("keeps quotas without an expiry deadline visible", () => {
+    const tree = render({ ...snapshot, providers: [{ ...provider, expiresAt: 0 }] });
+    expect(tree).toContain("5 hours · 60% left");
+    expect(tree).not.toContain("Open T3 to refresh");
+  });
+
   it("invites connecting when nothing has been checked", () => {
     const tree = render({ checkedAt: 0, providers: [] }, "light");
     expect(tree).toContain("Tap to connect in T3");

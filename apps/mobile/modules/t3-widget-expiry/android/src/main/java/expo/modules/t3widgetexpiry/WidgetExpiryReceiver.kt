@@ -15,8 +15,23 @@ import android.content.Intent
  */
 class WidgetExpiryReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
+      val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+      for ((name, value) in stored.all) {
+        val deadlines = (value as? String)?.split(',')?.mapNotNull { it.toLongOrNull() }
+          ?.toLongArray() ?: continue
+        refresh(context, name)
+        schedule(context, name, deadlines)
+      }
+      return
+    }
     val name = intent.getStringExtra(EXTRA_NAME) ?: return
     val remaining = intent.getLongArrayExtra(EXTRA_DEADLINES) ?: LongArray(0)
+    refresh(context, name)
+    schedule(context, name, remaining)
+  }
+
+  private fun refresh(context: Context, name: String) {
     val provider = providerComponent(context, name)
     val ids = AppWidgetManager.getInstance(context).getAppWidgetIds(provider)
     if (ids.isNotEmpty()) {
@@ -26,18 +41,21 @@ class WidgetExpiryReceiver : BroadcastReceiver() {
           .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids)
       )
     }
-    schedule(context, name, remaining)
   }
 
   companion object {
     private const val EXTRA_NAME = "expo.modules.t3widgetexpiry.NAME"
     private const val EXTRA_DEADLINES = "expo.modules.t3widgetexpiry.DEADLINES"
+    private const val PREFERENCES = "expo.modules.t3widgetexpiry.DEADLINES"
 
     /** Arms one inexact, non-wakeup alarm for the next future deadline and carries the rest. */
     fun schedule(context: Context, name: String, deadlines: LongArray) {
       val alarms = context.getSystemService(AlarmManager::class.java)
       val now = System.currentTimeMillis()
       val pending = deadlines.filter { it > now }.sorted()
+      val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+      if (pending.isEmpty()) stored.remove(name) else stored.putString(name, pending.joinToString(","))
+      stored.apply()
       val intent = Intent(context, WidgetExpiryReceiver::class.java)
         .setAction("expo.modules.t3widgetexpiry.EXPIRE.$name")
         .putExtra(EXTRA_NAME, name)
