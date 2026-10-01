@@ -1,4 +1,4 @@
-import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { Fragment, type Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Code } from "@tiptap/extension-code";
 import { Blockquote } from "@tiptap/extension-blockquote";
 import { CodeBlock } from "@tiptap/extension-code-block";
@@ -873,6 +873,7 @@ function appendInlineRuns(
 }
 
 const LIST_NODE_NAMES = new Set(["taskList", "bulletList", "orderedList"]);
+const LIST_ITEM_NODE_NAMES = new Set(["taskItem", "listItem"]);
 
 /** The literal prefix an item serializes to. Empty items keep their exact spacing. */
 function listItemPrefix(item: ProseMirrorNode, empty: boolean): string {
@@ -994,6 +995,30 @@ function walkBlockquote(quote: ProseMirrorNode, quoteStart: number, acc: RichAcc
     if (child.type.name === "paragraph") appendInlineRuns(child, childPos + 1, acc);
     childPos += child.nodeSize;
   });
+}
+
+/**
+ * The stored Markdown of a selection, as copy and cut put it on the clipboard.
+ * A slice holds only the content of the blocks the ends share, so items or
+ * quote lines arrive without the list or quote that writes their markers. The
+ * shared block is put back around them, and an item's list around it.
+ */
+export function serializeSelection(doc: ProseMirrorNode, from: number, to: number): string {
+  const slice = doc.slice(from, to);
+  const $from = doc.resolve(from);
+  let depth = $from.sharedDepth(to);
+  let content: Fragment | ProseMirrorNode = slice.content;
+  if (slice.content.firstChild?.isInline) {
+    content = doc.type.schema.nodes.paragraph!.create(null, slice.content);
+  } else {
+    while (depth > 0) {
+      const shared = $from.node(depth);
+      content = shared.copy(Fragment.from(content));
+      if (!LIST_ITEM_NODE_NAMES.has(shared.type.name)) break;
+      depth -= 1;
+    }
+  }
+  return serializeEditorDoc(doc.type.create(null, content)).value;
 }
 
 export function serializeEditorDoc(doc: ProseMirrorNode): RichDocMap {

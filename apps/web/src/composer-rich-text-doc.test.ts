@@ -17,6 +17,7 @@ import {
   flatToPm,
   pmToFlat,
   serializeEditorDoc,
+  serializeSelection,
 } from "./composer-rich-text-doc";
 
 function stubAtom(name: string, attrs: Record<string, { default: unknown }>) {
@@ -754,5 +755,47 @@ describe("composer rich text document model", () => {
     expect(flatToMarkdown(map, 6)).toBe(10);
     expect(collapsedToFlat(map, 3)).toBe(2);
     expect(collapsedToFlat(map, 9)).toBe(6);
+  });
+});
+
+describe("serializeSelection", () => {
+  /** The stored Markdown of the selection from the start of `first` to the end of `last`. */
+  function copy(value: string, first: string, last: string) {
+    const doc = ProseMirrorNode.fromJSON(
+      schema,
+      buildDocJson(value, (name) => ({ label: name, description: null })),
+    );
+    let from = -1;
+    let to = -1;
+    doc.descendants((node, pos) => {
+      if (!node.isText) return true;
+      const text = node.text ?? "";
+      if (from < 0 && text.includes(first)) from = pos + text.indexOf(first);
+      if (text.includes(last)) to = pos + text.lastIndexOf(last) + last.length;
+      return false;
+    });
+    return serializeSelection(doc, from, to);
+  }
+
+  it("keeps the markers of the list items it spans", () => {
+    expect(copy("- one\n- two\n- three", "one", "two")).toBe("- one\n- two");
+    expect(copy("3) one\n4) two", "one", "two")).toBe("3) one\n4) two");
+    expect(copy("- [ ] one\n- [x] two", "one", "two")).toBe("- [ ] one\n- [x] two");
+  });
+
+  it("keeps the nesting of an item and its children", () => {
+    expect(copy("- p\n  - a\n  - b", "p", "a")).toBe("- p\n  - a");
+  });
+
+  it("keeps the prefix of the quote lines it spans", () => {
+    expect(copy("> one\n> two", "one", "two")).toBe("> one\n> two");
+  });
+
+  it("copies text within one block without its marker", () => {
+    expect(copy("- one two", "one", "one")).toBe("one");
+  });
+
+  it("copies across blocks as they are written", () => {
+    expect(copy("intro\n- one", "intro", "one")).toBe("intro\n- one");
   });
 });

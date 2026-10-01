@@ -58,6 +58,7 @@ import {
   flatToPm,
   pmToFlat,
   serializeEditorDoc,
+  serializeSelection,
   type SkillMeta,
 } from "~/composer-rich-text-doc";
 import {
@@ -1606,15 +1607,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
       const clipboardData = event.clipboardData;
       const { from, to } = editor.state.selection;
       if (from === to) return;
-      const { doc, schema } = editor.state;
-      const slice = doc.slice(from, to);
-      const first = slice.content.firstChild;
-      const content = first?.isInline
-        ? schema.nodes.paragraph!.create(null, slice.content)
-        : first?.type.name === "taskItem"
-          ? schema.nodes.taskList!.create(null, slice.content)
-          : slice.content;
-      const text = serializeEditorDoc(doc.type.create(null, content)).value;
+      const text = serializeSelection(editor.state.doc, from, to);
       const contextIds = Array.from(new Set(collectInlineContextIds(text)));
       const fragment = contextIds.length > 0 ? build?.(contextIds) : null;
       event.preventDefault();
