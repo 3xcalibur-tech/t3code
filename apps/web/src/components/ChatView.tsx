@@ -2064,6 +2064,10 @@ export default function ChatView(props: ChatViewProps) {
       ? run.id
       : null;
   }, [isServerThread, serverProjection, serverRuntime?.lastErrorClass]);
+  // The server keeps a usage-limited thread's queue closed until the limited run
+  // is continued, so only the composer's Resume can move it.
+  const queueBlockedByUsageLimit =
+    resumableRunId !== null && serverRuntime?.lastErrorClass === "usage_limit";
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -7980,7 +7984,7 @@ export default function ChatView(props: ChatViewProps) {
     if (
       !activeThread ||
       // Resuming mid-edit would send the saved text, not the draft being edited.
-      (target === "queue" && editingQueuedRun !== null) ||
+      (target === "queue" && (editingQueuedRun !== null || queueBlockedByUsageLimit)) ||
       (continueRunId === null && !hasHeldQueuedRuns) ||
       isSendBusy ||
       isResuming ||
@@ -10877,6 +10881,11 @@ export default function ChatView(props: ChatViewProps) {
                                     onEditQueuedRun={beginEditingQueuedRun}
                                     onCancelEdit={cancelEditingQueuedRun}
                                     onResumeQueue={() => void onResume("queue")}
+                                    resumeBlockedReason={
+                                      queueBlockedByUsageLimit
+                                        ? "Resume the limited thread first; its queue follows"
+                                        : null
+                                    }
                                     resumeDisabled={
                                       isSendBusy ||
                                       isResuming ||

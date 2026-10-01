@@ -67,6 +67,8 @@ export function QueuedRunsControl({
   /** Starts a held queue from its next message. */
   readonly onResumeQueue: () => void;
   readonly resumeDisabled: boolean;
+  /** Why the queue cannot resume on its own, shown on the disabled action. */
+  readonly resumeBlockedReason: string | null;
 }) {
   const projection = useThreadProjection(
     scopeThreadRef(props.environmentId, props.threadId),
@@ -288,7 +290,10 @@ export function QueuedRunsControl({
                     size="xs"
                     variant="ghost-muted"
                     disabled={
-                      props.resumeDisabled || busyRunId !== null || props.editingRunId !== null
+                      props.resumeDisabled ||
+                      props.resumeBlockedReason !== null ||
+                      busyRunId !== null ||
+                      props.editingRunId !== null
                     }
                     onClick={props.onResumeQueue}
                   >
@@ -297,9 +302,10 @@ export function QueuedRunsControl({
                   </Button>
                 </TooltipTrigger>
                 <TooltipPopup>
-                  {props.editingRunId !== null
-                    ? "Save or cancel the queued message edit first"
-                    : "Send the next queued message"}
+                  {props.resumeBlockedReason ??
+                    (props.editingRunId !== null
+                      ? "Save or cancel the queued message edit first"
+                      : "Send the next queued message")}
                 </TooltipPopup>
               </Tooltip>
             </ComposerBanner.Actions>

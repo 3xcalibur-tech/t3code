@@ -70,6 +70,7 @@ describe("QueuedRunsControl automatic completion delivery", () => {
         onCancelEdit={() => undefined}
         onResumeQueue={() => undefined}
         resumeDisabled={false}
+        resumeBlockedReason={null}
       />,
     );
 
@@ -113,6 +114,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         onCancelEdit={() => undefined}
         onResumeQueue={() => undefined}
         resumeDisabled={false}
+        resumeBlockedReason={null}
       />,
     );
 
@@ -151,6 +153,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         onCancelEdit={() => undefined}
         onResumeQueue={() => undefined}
         resumeDisabled={false}
+        resumeBlockedReason={null}
       />,
     );
 
@@ -171,6 +174,7 @@ describe("QueuedRunsControl attachments and edit mode", () => {
         onCancelEdit={() => undefined}
         onResumeQueue={() => undefined}
         resumeDisabled={false}
+        resumeBlockedReason={null}
       />,
     );
 
