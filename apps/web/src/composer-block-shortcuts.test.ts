@@ -1,5 +1,4 @@
 import { Editor } from "@tiptap/core";
-import { TaskList } from "@tiptap/extension-task-list";
 import { TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { describe, expect, it } from "vite-plus/test";
