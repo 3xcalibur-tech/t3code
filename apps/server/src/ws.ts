@@ -2214,6 +2214,7 @@ const makeWsRpcLayer = (
                 ? providerRegistry.refreshWorkspaceSnapshot({
                     instanceId: input.instanceId,
                     cwd: input.cwd,
+                    fresh: input.fresh === true,
                   })
                 : input.instanceId !== undefined
                   ? providerRegistry.refreshInstance(input.instanceId)
@@ -2897,6 +2898,16 @@ const makeWsRpcLayer = (
               Effect.mapError(
                 (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
               ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.projectsCreateNew]: () =>
+          observeRpcEffect(
+            WS_METHODS.projectsCreateNew,
+            Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message: "Starting a new project from a name is not available yet.",
+              }),
             ),
             { "rpc.aggregate": "orchestration" },
           ),
