@@ -89,7 +89,7 @@ const folderWords = (text: string) =>
     .slice(0, 48)
     .replace(/-+$/, "");
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
