@@ -89,7 +89,7 @@ const folderWords = (text: string) =>
     .slice(0, 48)
     .replace(/-+$/, "");
 
-const make = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -134,8 +134,6 @@ const make = Effect.gen(function* () {
     const id = yield* crypto.randomUUIDv4.pipe(
       Effect.mapError((cause) => new ScratchWorkspaceProjectError({ workspaceRoot, cause })),
     );
-    const projectError = (cause: unknown) =>
-      new ScratchWorkspaceProjectError({ workspaceRoot, cause });
     const bootstrapped = yield* projects
       .bootstrap({
         commandId: CommandId.make(`scratch-project:${id}`),
@@ -153,7 +151,7 @@ const make = Effect.gen(function* () {
               created: false,
             }),
         }),
-        Effect.mapError(projectError),
+        Effect.mapError((cause) => new ScratchWorkspaceProjectError({ workspaceRoot, cause })),
       );
     if (bootstrapped.created) {
       // A dashed chat bubble in neutral gray marks Scratch. Set once at
@@ -164,7 +162,9 @@ const make = Effect.gen(function* () {
           projectId: bootstrapped.project.id,
           projectIcon: { kind: "lucide", name: "message-square-dashed", color: "gray" },
         })
-        .pipe(Effect.mapError(projectError));
+        .pipe(
+          Effect.mapError((cause) => new ScratchWorkspaceProjectError({ workspaceRoot, cause })),
+        );
     }
     return { projectId: bootstrapped.project.id };
   });
@@ -209,8 +209,17 @@ const make = Effect.gen(function* () {
     const shortFolder = folderFor(id.slice(-8));
     if (yield* claim(shortFolder)) return Option.some(shortFolder);
     const fullFolder = folderFor(id);
-    yield* claim(fullFolder);
-    return Option.some(fullFolder);
+    if (yield* claim(fullFolder)) return Option.some(fullFolder);
+    // Ids that normalize alike, or a launch retried without its receipt, can
+    // find the full name taken too. A folder is never shared, so claim a fresh
+    // suffixed one instead.
+    while (true) {
+      const suffix = (yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError((cause) => new ScratchWorkspaceFolderError({ folder: fullFolder, cause })),
+      )).slice(0, 8);
+      const folder = `${fullFolder}-${suffix}`;
+      if (yield* claim(folder)) return Option.some(folder);
+    }
   });
 
   return ScratchWorkspace.of({ root, ensureProject, folderForThread });

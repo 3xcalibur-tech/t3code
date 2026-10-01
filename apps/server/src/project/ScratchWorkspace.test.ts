@@ -195,8 +195,17 @@ it.effect("gives each Scratch thread its own folder, named from its message", ()
         }),
       );
 
-      assert.notEqual(second, first);
-      for (const folder of [first, second]) {
+      // Ids that normalize to the same characters take both of its names.
+      const third = Option.getOrThrow(
+        yield* scratch.folderForThread({
+          projectId,
+          threadId: ThreadId.make("thread:b0123456789abcdef"),
+          text,
+        }),
+      );
+
+      assert.equal(new Set([first, second, third]).size, 3);
+      for (const folder of [first, second, third]) {
         assert.equal(path.dirname(folder), root);
         assert.match(path.basename(folder), /^\d{4}-\d{2}-\d{2}-convert-these-pngs-to-webp-/);
         assert.isTrue(yield* fileSystem.exists(folder));
