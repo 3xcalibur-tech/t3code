@@ -2883,6 +2883,18 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "source-control" },
           ),
+        // V2 does not offer Scratch yet: loadServerConfig never advertises
+        // scratchWorkspaceRoot, so clients do not call this.
+        [WS_METHODS.projectsEnsureScratch]: () =>
+          observeRpcEffect(
+            WS_METHODS.projectsEnsureScratch,
+            Effect.fail(
+              new OrchestrationDispatchCommandError({
+                message: "Threads without a project are not available yet.",
+              }),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [WS_METHODS.projectCloneCancel]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectCloneCancel,
