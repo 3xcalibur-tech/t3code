@@ -669,6 +669,14 @@ describe("composer rich text document model", () => {
     expect(after.content[0]?.attrs?.skillName).toBe("my-skill");
   });
 
+  it("keeps chips in a fence's info string and body each in their own place", () => {
+    const value = "``` @a.md\nsee @b.md\n```";
+    expect(roundTrip(value).value).toBe(value);
+    const json = buildDocJson(value, (n) => ({ label: n, description: null }));
+    const code = json.content[0] as { attrs: { language: string } };
+    expect(code.attrs.language).toBe(" @a.md");
+  });
+
   it.each([
     ["listItem", { marker: "-", space: "" }, "bulletList", "- text"],
     ["listItem", { marker: "1.", space: "" }, "orderedList", "1. text"],

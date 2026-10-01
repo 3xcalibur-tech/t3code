@@ -502,6 +502,9 @@ export function buildTiptapContent(
       else entries.push({ line: buildDocLine(line) });
       continue;
     }
+    // The info string went through the sentinel pass like every line, so a
+    // token in it is put back as source here, in order, before the body.
+    const language = restoreSources(opening.language);
     const body: string[] = [];
     let cursor = index + 1;
     let close = "";
@@ -521,9 +524,7 @@ export function buildTiptapContent(
     entries.push({
       code: {
         type: "codeBlock",
-        // The info string went through the sentinel pass like every line, so
-        // a token in it is put back as source here, in order, before the body.
-        attrs: { language: restoreSources(opening.language), fence: opening.fence, close },
+        attrs: { language, fence: opening.fence, close },
         ...(content ? { content: [{ type: "text", text: content }] } : {}),
       },
     });
