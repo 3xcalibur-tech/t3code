@@ -90,6 +90,10 @@ export const OPENCODE2_NESTED_BACKGROUND_PROMPT =
   "Use the subagent tool (foreground, do not set background) to delegate to the general subagent with this exact prompt: 'Use the subagent tool with background set to true to delegate to the general subagent with the prompt: Run the shell command `sleep 25` with the shell tool, then reply exactly GRANDCHILD_OK. As soon as it is launched, reply exactly MIDDLE_OK and end your turn without waiting for it.' Wait for that subagent to return, then reply exactly ROOT_OK.";
 export const OPENCODE2_BACKGROUND_PROMPT =
   "Use the subagent tool with background enabled to delegate to the general subagent with the prompt: 'Run the shell command `sleep 20` with the bash tool and then reply exactly CHILD_OK.' As soon as it is launched, reply exactly PARENT_OK and end your turn without waiting for it.";
+export const OPENCODE2_COMPACTION_FIRST_PROMPT = "Remember the codeword PAPAYA. Reply OK.";
+export const OPENCODE2_COMPACTION_RECALL_PROMPT = "What was the codeword? One word.";
+export const OPENCODE2_COMMAND_PROMPT = "/hello WORLD";
+export const OPENCODE2_SKILL_PROMPT = "Use $greet to say hi in three words.";
 export const TURN_INTERRUPT_PROMPT =
   "Do not answer immediately. First run the local shell command `sleep 30`, then respond with exactly: interrupt fixture should not finish naturally.";
 export const TURN_INTERRUPT_MID_TOOL_PROMPT =
@@ -1191,6 +1195,40 @@ export function assertProviderNativeSubagentRootTurns(result: OrchestratorV2Scen
       );
       if (wokenAfterEnd) {
         assert.notEqual(rootActivity.at(-1), "active", `child ${childThreadId} must end its turns`);
+        // Each extra turn answers a report: one of the child's own subagents
+        // ended before that turn started.
+        const childSubagentIds = new Set(child.subagents.map((nested) => nested.id));
+        const nestedEndIndexes = result.domainEvents.flatMap((event, index) =>
+          event.type === "subagent.updated" &&
+          childSubagentIds.has(event.payload.id) &&
+          !isOrchestrationV2WorkActive(event.payload.status)
+            ? [index]
+            : [],
+        );
+        const subagentEndIndex = result.domainEvents.findLastIndex(
+          (event) =>
+            event.type === "subagent.updated" &&
+            event.payload.id === subagent.id &&
+            !isOrchestrationV2WorkActive(event.payload.status),
+        );
+        const wakeStarts = rootEvents.filter(
+          (event, position) =>
+            event.index > subagentEndIndex &&
+            isOrchestrationV2WorkActive(event.status) &&
+            !isOrchestrationV2WorkActive(rootEvents[position - 1]?.status ?? "completed"),
+        );
+        assert.isNotEmpty(wakeStarts, `child ${childThreadId} woke without a new turn`);
+        assert.isAtMost(
+          wakeStarts.length,
+          nestedEndIndexes.length,
+          `child ${childThreadId} woke more often than its subagents ended`,
+        );
+        for (const wake of wakeStarts) {
+          assert.isTrue(
+            nestedEndIndexes.some((endIndex) => endIndex < wake.index),
+            `child ${childThreadId} woke before any of its subagents ended`,
+          );
+        }
       }
     }
   }
