@@ -195,6 +195,7 @@ import { linkCreatedPullRequest } from "./git/linkCreatedPullRequest.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
+import * as ScratchWorkspace from "./project/ScratchWorkspace.ts";
 import { projectMutationOperation } from "./project/ProjectMutation.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
@@ -1081,6 +1082,7 @@ const makeWsRpcLayer = (
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectStore = yield* ProjectStore.ProjectStoreV2;
       const projectService = yield* ProjectService.ProjectService;
+      const scratchWorkspace = yield* ScratchWorkspace.ScratchWorkspace;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
 
       const providerSessionsV2 = yield* ProviderSessionManager.ProviderSessionManagerV2;
@@ -1598,6 +1600,7 @@ const makeWsRpcLayer = (
           );
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
+          const scratchWorkspaceRoot = yield* scratchWorkspace.root;
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
             externalLauncher.resolveAvailableEditors(),
           );
@@ -1645,6 +1648,10 @@ const makeWsRpcLayer = (
                 }),
             threadResumeCompletionMarker: true,
             threadSnapshotPagination: true,
+            ...Option.match(scratchWorkspaceRoot, {
+              onNone: () => ({}),
+              onSome: (root) => ({ scratchWorkspaceRoot: root }),
+            }),
           };
         });
 
@@ -2883,15 +2890,13 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "source-control" },
           ),
-        // V2 does not offer Scratch yet: loadServerConfig never advertises
-        // scratchWorkspaceRoot, so clients do not call this.
         [WS_METHODS.projectsEnsureScratch]: () =>
           observeRpcEffect(
             WS_METHODS.projectsEnsureScratch,
-            Effect.fail(
-              new OrchestrationDispatchCommandError({
-                message: "Threads without a project are not available yet.",
-              }),
+            scratchWorkspace.ensureProject.pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+              ),
             ),
             { "rpc.aggregate": "orchestration" },
           ),
