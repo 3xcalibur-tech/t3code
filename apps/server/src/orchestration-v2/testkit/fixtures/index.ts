@@ -55,6 +55,10 @@ import { assertOpenCodeChildApprovalOutput } from "./opencode_child_approval/out
 import { openCodeRunningChildApprovalInput } from "./opencode_running_child_approval/input.ts";
 import { assertOpenCodeRunningChildApprovalOutput } from "./opencode_running_child_approval/output.ts";
 import { openCodeSubagentInput } from "./opencode_subagent/input.ts";
+import { openCode2InboxInput } from "./opencode2_inbox/input.ts";
+import { openCode2RevertInput } from "./opencode2_revert/input.ts";
+import { assertOpenCode2RevertOutput } from "./opencode2_revert/output.ts";
+import { assertOpenCode2InboxOutput } from "./opencode2_inbox/output.ts";
 import { openCode2InterruptInput } from "./opencode2_interrupt/input.ts";
 import { assertOpenCode2InterruptOutput } from "./opencode2_interrupt/output.ts";
 import { openCode2PermissionInput } from "./opencode2_permission/input.ts";
@@ -63,6 +67,8 @@ import { openCode2QuestionInput } from "./opencode2_question/input.ts";
 import { assertOpenCode2QuestionOutput } from "./opencode2_question/output.ts";
 import { openCode2BackgroundInput } from "./opencode2_background/input.ts";
 import { assertOpenCode2BackgroundOutput } from "./opencode2_background/output.ts";
+import { openCode2NestedBackgroundInput } from "./opencode2_nested_background/input.ts";
+import { assertOpenCode2NestedBackgroundOutput } from "./opencode2_nested_background/output.ts";
 import { openCode2SubagentInput } from "./opencode2_subagent/input.ts";
 import { assertOpenCode2SubagentOutput } from "./opencode2_subagent/output.ts";
 import { openCode2SimpleInput } from "./opencode2_simple/input.ts";
@@ -825,6 +831,36 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
     ],
   },
   {
+    name: "opencode2_inbox",
+    buildInput: openCode2InboxInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL("./opencode2_inbox/opencode_transcript.ndjson", import.meta.url),
+        modelSelection: {
+          instanceId: OPENCODE2_MODEL_SELECTION.instanceId,
+          model: "opencode/big-pickle",
+        },
+        assertOutput: assertOpenCode2InboxOutput,
+      },
+    ],
+  },
+  {
+    name: "opencode2_revert",
+    buildInput: openCode2RevertInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL("./opencode2_revert/opencode_transcript.ndjson", import.meta.url),
+        modelSelection: {
+          instanceId: OPENCODE2_MODEL_SELECTION.instanceId,
+          model: "opencode/big-pickle",
+        },
+        assertOutput: assertOpenCode2RevertOutput,
+      },
+    ],
+  },
+  {
     name: "opencode2_permission",
     buildInput: openCode2PermissionInput,
     providers: [
@@ -888,6 +924,24 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         },
         runContinuationWorker: true,
         assertOutput: assertOpenCode2BackgroundOutput,
+      },
+    ],
+  },
+  {
+    name: "opencode2_nested_background",
+    buildInput: openCode2NestedBackgroundInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./opencode2_nested_background/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: {
+          instanceId: OPENCODE2_MODEL_SELECTION.instanceId,
+          model: "openrouter/deepseek/deepseek-v4-flash",
+        },
+        assertOutput: assertOpenCode2NestedBackgroundOutput,
       },
     ],
   },
