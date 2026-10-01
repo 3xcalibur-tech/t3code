@@ -158,12 +158,31 @@ it.layer(NodeServices.layer)("forkThread", (it) => {
     }),
   );
 
-  it.effect("creates nothing when the provider refuses", () =>
+  it.effect("creates nothing for a busy, empty, or refused source", () =>
     Effect.gen(function* () {
       const log: Array<string> = [];
       const commands: Array<OrchestrationCommand> = [];
 
       const empty = yield* Effect.flip(runFork({ source: makeSource([]), log, commands }));
+      // T3 can hold an accepted prompt before the provider turn starts.
+      const starting = yield* Effect.flip(
+        runFork({
+          source: {
+            ...makeSource([message("m1", "user", "Fix the parser")]),
+            session: {
+              threadId: SOURCE_ID,
+              status: "starting",
+              providerName: "codex",
+              runtimeMode: "auto-accept-edits",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-09-30T10:00:00.000Z",
+            },
+          },
+          log,
+          commands,
+        }),
+      );
       const refused = yield* Effect.flip(
         runFork({
           source: makeSource([message("m1", "user", "Fix the parser")]),
@@ -180,6 +199,8 @@ it.layer(NodeServices.layer)("forkThread", (it) => {
       );
 
       expect(empty.message).toBe("This thread has no messages to fork yet.");
+      expect(starting.message).toBe("Wait for the current turn to finish.");
+      expect(log).toEqual([]);
       expect(refused.message).toBe("Wait for the current turn to finish.");
       expect(commands).toEqual([]);
     }),

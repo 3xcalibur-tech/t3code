@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as ProviderService from "../provider/Services/ProviderService.ts";
 import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
+import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 /**
  * Forks an idle thread into a new thread on the same provider instance and
@@ -37,6 +38,18 @@ export const forkThread = Effect.fn("forkThread")(
     }
     if (Option.isSome(yield* snapshots.getThreadShellById(input.targetThreadId))) {
       return yield* fail(`Thread '${input.targetThreadId}' already exists.`);
+    }
+    // The adapter only sees its own turn. A prompt T3 has accepted but not yet
+    // delivered would be copied as text the forked agent never received.
+    const sourceShell = Option.getOrUndefined(yield* snapshots.getThreadShellById(source.id));
+    if (
+      source.session?.status === "starting" ||
+      source.session?.status === "running" ||
+      source.latestTurn?.state === "running" ||
+      (sourceShell !== undefined &&
+        threadHasQueuedTurnStart(sourceShell, DateTime.formatIso(yield* DateTime.now)))
+    ) {
+      return yield* fail("Wait for the current turn to finish.");
     }
     // The `import:` namespace keeps copied history through rewinds and out of
     // queued-turn detection, the same as imported agent sessions.

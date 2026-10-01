@@ -5592,18 +5592,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     function* (threadId) {
       const context = yield* requireSession(threadId);
       const history = yield* openSessionHistory(threadId, context, "thread/fork");
-      const messages = yield* history.read(history.sessionId);
       const fork = yield* history.fork();
-      const forkMessages = yield* history.read(fork.sessionId);
-      // Rewinding the fork needs its turn starts under the copy's new UUIDs.
-      // Unmatched starts stay null, so rewind infers them later or refuses.
-      const turnStartMessageIds =
-        remapClaudeForkTurnBoundaries(
-          messages,
-          forkMessages,
-          messages.length,
-          context.turnStartMessageIds,
-        ) ?? context.turnStartMessageIds.map(() => null);
+      // T3 can rewind only turns sent in the fork, so every human prompt in the
+      // copy can stand for an inherited turn start. Recording all of them keeps
+      // rewinding the fork's first turn from clearing the inherited history,
+      // including history imported before T3 recorded turn starts.
+      const turnStartMessageIds = (yield* history.read(fork.sessionId))
+        .filter(isClaudeHumanTurnStart)
+        .map((message) => message.uuid);
       return {
         resumeCursor: {
           resume: fork.sessionId,
