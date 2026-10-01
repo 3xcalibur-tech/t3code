@@ -7973,10 +7973,13 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const onResume = async () => {
+  // The composer continues an interrupted or limited run first; the queue's own
+  // Resume sends its next message instead.
+  const onResume = async (target: "thread" | "queue" = "thread") => {
+    const continueRunId = target === "queue" ? null : resumableRunId;
     if (
       !activeThread ||
-      (resumableRunId === null && !hasHeldQueuedRuns) ||
+      (continueRunId === null && !hasHeldQueuedRuns) ||
       isSendBusy ||
       isResuming ||
       isConnecting ||
@@ -7993,7 +7996,7 @@ export default function ChatView(props: ChatViewProps) {
     setThreadError(threadId, null);
     try {
       const resume = async () => {
-        if (resumableRunId === null) {
+        if (continueRunId === null) {
           return resumeThreadQueue({ environmentId, input: { threadId } });
         }
         const createdAt = new Date().toISOString();
@@ -8011,7 +8014,7 @@ export default function ChatView(props: ChatViewProps) {
           environmentId,
           input: {
             threadId,
-            manualContinuationOfRunId: resumableRunId,
+            manualContinuationOfRunId: continueRunId,
             message: {
               messageId: newMessageId(),
               role: "user",
@@ -10871,6 +10874,13 @@ export default function ChatView(props: ChatViewProps) {
                                     editingRunId={editingQueuedRun?.runId ?? null}
                                     onEditQueuedRun={beginEditingQueuedRun}
                                     onCancelEdit={cancelEditingQueuedRun}
+                                    onResumeQueue={() => void onResume("queue")}
+                                    resumeDisabled={
+                                      isSendBusy ||
+                                      isResuming ||
+                                      isConnecting ||
+                                      activeEnvironmentUnavailable
+                                    }
                                   />
                                 ) : null
                               }
@@ -10945,7 +10955,7 @@ export default function ChatView(props: ChatViewProps) {
                               onPageScrollRelease={onComposerPageScrollRelease}
                               onCompactContext={onCompactContext}
                               onSend={onSend}
-                              onResume={onResume}
+                              onResume={() => void onResume()}
                               onInterrupt={onInterrupt}
                               onImplementPlanInNewThread={onImplementPlanInNewThread}
                               onRespondToApproval={onRespondToApproval}
