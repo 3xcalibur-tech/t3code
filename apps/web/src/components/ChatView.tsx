@@ -7979,6 +7979,8 @@ export default function ChatView(props: ChatViewProps) {
     const continueRunId = target === "queue" ? null : resumableRunId;
     if (
       !activeThread ||
+      // Resuming mid-edit would send the saved text, not the draft being edited.
+      (target === "queue" && editingQueuedRun !== null) ||
       (continueRunId === null && !hasHeldQueuedRuns) ||
       isSendBusy ||
       isResuming ||

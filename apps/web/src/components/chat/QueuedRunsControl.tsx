@@ -281,15 +281,27 @@ export function QueuedRunsControl({
               Nothing is sent until you resume.
             </ComposerBanner.Content>
             <ComposerBanner.Actions>
-              <Button
-                size="xs"
-                variant="ghost-muted"
-                disabled={props.resumeDisabled || busyRunId !== null}
-                onClick={props.onResumeQueue}
-              >
-                <PlayIcon />
-                Resume queue
-              </Button>
+              <Tooltip>
+                <TooltipTrigger render={<span className="flex shrink-0" />}>
+                  {/* Resuming mid-edit would send the saved text, not the draft being edited. */}
+                  <Button
+                    size="xs"
+                    variant="ghost-muted"
+                    disabled={
+                      props.resumeDisabled || busyRunId !== null || props.editingRunId !== null
+                    }
+                    onClick={props.onResumeQueue}
+                  >
+                    <PlayIcon />
+                    Resume queue
+                  </Button>
+                </TooltipTrigger>
+                <TooltipPopup>
+                  {props.editingRunId !== null
+                    ? "Save or cancel the queued message edit first"
+                    : "Send the next queued message"}
+                </TooltipPopup>
+              </Tooltip>
             </ComposerBanner.Actions>
           </ComposerBanner.Row>
         ) : null}
