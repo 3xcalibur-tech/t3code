@@ -141,54 +141,59 @@ describe("Cua permission requests", () => {
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped();
       yield* installDriver(path.join(root, "bin"));
-      const grants: Array<Deferred.Deferred<number>> = [];
-      const runner = ProcessRunner.ProcessRunner.of({
-        run: (input) =>
-          Effect.gen(function* () {
-            const exit = yield* Deferred.make<number>();
-            if (input.args.join(" ") === "permissions grant") grants.push(exit);
-            else yield* Deferred.succeed(exit, 0);
-            const code = yield* Deferred.await(exit);
-            return {
-              stdout: code === 0 ? "" : "Timed out waiting on: Screen Recording.",
-              stderr: "",
-              code: ChildProcessSpawner.ExitCode(code),
-              timedOut: false,
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              stdoutInvalidUtf8: false,
-              stderrInvalidUtf8: false,
-            };
-          }),
-      });
-      const access = yield* ComputerAccess.make.pipe(
-        Effect.provideService(ProcessRunner.ProcessRunner, runner),
-        Effect.provide(
-          Layer.mergeAll(
-            ServerConfig.layerTest(root, root),
-            ServerSettings.ServerSettingsService.layerTest(),
+      // Without CuaDriver.app, as on CI, the driver is found on PATH.
+      yield* Effect.gen(function* () {
+        const grants: Array<Deferred.Deferred<number>> = [];
+        const runner = ProcessRunner.ProcessRunner.of({
+          run: (input) =>
+            Effect.gen(function* () {
+              const exit = yield* Deferred.make<number>();
+              if (input.args.join(" ") === "permissions grant") grants.push(exit);
+              else yield* Deferred.succeed(exit, 0);
+              const code = yield* Deferred.await(exit);
+              return {
+                stdout: code === 0 ? "" : "Timed out waiting on: Screen Recording.",
+                stderr: "",
+                code: ChildProcessSpawner.ExitCode(code),
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              };
+            }),
+        });
+        const access = yield* ComputerAccess.make.pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provide(
+            Layer.mergeAll(
+              ServerConfig.layerTest(root, root),
+              ServerSettings.ServerSettingsService.layerTest(),
+            ),
           ),
-        ),
+        );
+        const requesting = Effect.map(access.status, (status) => status.cuaDriver);
+
+        yield* access.runAction("request-cua-permissions");
+        expect((yield* requesting).requestingPermissions).toBe(true);
+
+        // Restart replaces the waiting request instead of stacking a second one.
+        yield* access.runAction("request-cua-permissions");
+        expect(grants).toHaveLength(2);
+        yield* Deferred.succeed(grants[1]!, 1);
+        yield* Effect.yieldNow;
+        const failed = yield* requesting;
+        expect(failed.requestingPermissions).toBe(false);
+        expect(failed.permissionsError).toContain("Timed out waiting on: Screen Recording.");
+
+        yield* access.runAction("request-cua-permissions");
+        yield* access.runAction("cancel-cua-permissions");
+        const cancelled = yield* requesting;
+        expect(cancelled.requestingPermissions).toBe(false);
+        expect(cancelled.permissionsError).toBeNull();
+      }).pipe(
+        Effect.provideService(HostProcessEnvironment, { PATH: path.join(root, "bin"), HOME: root }),
       );
-      const requesting = Effect.map(access.status, (status) => status.cuaDriver);
-
-      yield* access.runAction("request-cua-permissions");
-      expect((yield* requesting).requestingPermissions).toBe(true);
-
-      // Restart replaces the waiting request instead of stacking a second one.
-      yield* access.runAction("request-cua-permissions");
-      expect(grants).toHaveLength(2);
-      yield* Deferred.succeed(grants[1]!, 1);
-      yield* Effect.yieldNow;
-      const failed = yield* requesting;
-      expect(failed.requestingPermissions).toBe(false);
-      expect(failed.permissionsError).toContain("Timed out waiting on: Screen Recording.");
-
-      yield* access.runAction("request-cua-permissions");
-      yield* access.runAction("cancel-cua-permissions");
-      const cancelled = yield* requesting;
-      expect(cancelled.requestingPermissions).toBe(false);
-      expect(cancelled.permissionsError).toBeNull();
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcessPlatform, "darwin"),
