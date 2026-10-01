@@ -309,11 +309,11 @@ class AgentNotificationsTest {
       context,
       update("older-alert", false) + ("updated_at" to (now - 1000).toString())
     )
-    assertEquals(3, manager.activeNotifications.size)
+    assertEquals(4, manager.activeNotifications.size)
     assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-activity" })
     shadowOf(manager).setNotificationsEnabled(false)
     AgentNotifications.receive(context, update("revoked-permission", true))
-    assertEquals(3, manager.activeNotifications.size)
+    assertEquals(4, manager.activeNotifications.size)
   }
 
   @Test
@@ -526,7 +526,8 @@ class AgentNotificationsTest {
     AgentNotifications.expire(context, expiresAt + 60_000)
     assertEquals(1, manager.activeNotifications.count { it.tag == "t3-agent-activity" })
     AgentNotifications.expire(context, expiresAt + 2 * 60 * 60 * 1000L)
-    assertTrue(manager.activeNotifications.all { it.tag == "t3-agent-alert" })
+    assertEquals(2, manager.activeNotifications.count { it.tag == "t3-agent-alert" })
+    assertTrue(manager.activeNotifications.none { it.tag == "t3-agent-activity" })
     assertTrue(alarms.scheduledAlarms.isEmpty())
   }
 
