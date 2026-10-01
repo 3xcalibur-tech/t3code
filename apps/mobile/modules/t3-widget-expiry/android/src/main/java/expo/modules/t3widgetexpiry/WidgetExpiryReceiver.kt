@@ -54,7 +54,11 @@ class WidgetExpiryReceiver : BroadcastReceiver() {
       val now = System.currentTimeMillis()
       val pending = deadlines.filter { it > now }.sorted()
       val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
-      if (pending.isEmpty()) stored.remove(name) else stored.putString(name, pending.joinToString(","))
+      if (pending.isEmpty()) {
+        stored.remove(name)
+      } else {
+        stored.putString(name, pending.joinToString(","))
+      }
       stored.apply()
       val intent = Intent(context, WidgetExpiryReceiver::class.java)
         .setAction("expo.modules.t3widgetexpiry.EXPIRE.$name")
