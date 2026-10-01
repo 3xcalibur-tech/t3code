@@ -881,7 +881,11 @@ function ComputerAccessSettings() {
   // Untested on Windows and Linux, and headless hosts have nothing to drive.
   const macHost = selected?.serverConfig?.environment.platform.os === "darwin";
   const hostLabel = selected?.label ?? "this Mac";
-  const { data: status, refresh } = useEnvironmentQuery(
+  const {
+    data: status,
+    error: statusError,
+    refresh,
+  } = useEnvironmentQuery(
     environmentId === null || !macHost
       ? null
       : serverEnvironment.computerAccess({ environmentId, input: {} }),
@@ -983,6 +987,7 @@ function ComputerAccessSettings() {
           environmentId={environmentId}
           hostLabel={hostLabel}
           status={status}
+          statusError={statusError}
           onRefresh={refresh}
           onFinish={() => {
             enable(

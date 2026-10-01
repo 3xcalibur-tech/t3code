@@ -73,11 +73,11 @@ const startProxy = Effect.fn(function* () {
     }
   });
   const send = (message: object) => proxy.stdin.write(`${JSON.stringify(message)}\n`);
-  const response = (id: number) =>
+  const response = (id: number | string) =>
     new Promise<(typeof received)[number]>((resolve) => {
       waiters.set(id, () => resolve(received.find((message) => message.id === id)!));
     });
-  const request = async (id: number, method: string, params: object) => {
+  const request = async (id: number | string, method: string, params: object) => {
     const answered = response(id);
     send({ jsonrpc: "2.0", id, method, params });
     return answered;
@@ -111,7 +111,12 @@ describe("Cua MCP proxy", () => {
       expect(second.result?.pid).not.toBe(first.result?.pid);
       // The proxy replayed the handshake, and its reply never reached the client.
       expect(second.result?.initialized).toBe(true);
-      expect(received.map((message) => message.id)).toEqual([1, 2, 3, 4]);
+      // A client id that matches the replayed handshake's id still gets its answer.
+      const sameId = yield* Effect.promise(() =>
+        request("t3-replay-1", "tools/call", { name: "whoami", arguments: {} }),
+      );
+      expect(sameId.result?.pid).toBe(second.result?.pid);
+      expect(received.map((message) => message.id)).toEqual([1, 2, 3, 4, "t3-replay-1"]);
 
       const exited = new Promise((resolve) => proxy.once("exit", resolve));
       proxy.stdin.end();

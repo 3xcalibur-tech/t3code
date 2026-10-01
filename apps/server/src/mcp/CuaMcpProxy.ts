@@ -60,7 +60,7 @@ function failPending() {
 
 function start() {
   const current = spawn(driver, ["mcp"], { stdio: ["pipe", "pipe", "inherit"] });
-  const replay = restarted && initialize ? "t3-replay-" + ++replayCount : null;
+  let replay = restarted && initialize ? "t3-replay-" + ++replayCount : null;
   child = current;
   ready = replay === null;
   let buffer = "";
@@ -76,6 +76,8 @@ function start() {
         if (initialized) {
           current.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\\n");
         }
+        // Only the first match is the replayed handshake; later ones are the client's.
+        replay = null;
         ready = true;
         flush();
         continue;
