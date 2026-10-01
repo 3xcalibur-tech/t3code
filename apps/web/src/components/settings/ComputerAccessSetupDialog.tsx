@@ -50,6 +50,7 @@ export function ComputerAccessSetupDialog({
   environmentId,
   hostLabel,
   status,
+  statusError,
   onRefresh,
   onFinish,
   onClose,
@@ -58,6 +59,8 @@ export function ComputerAccessSetupDialog({
   environmentId: EnvironmentId;
   hostLabel: string;
   status: ServerComputerAccessStatus | null;
+  /** Set when the status check failed, so setup offers a retry instead of loading forever. */
+  statusError: string | null;
   onRefresh: () => void;
   onFinish: () => void;
   onClose: () => void;
@@ -107,7 +110,24 @@ export function ComputerAccessSetupDialog({
       }}
     >
       <WizardPopup showCloseButton={!busy}>
-        {kind === "apps" ? (
+        {status === null && statusError !== null ? (
+          <>
+            <WizardHeader
+              title={kind === "apps" ? "Set up computer access" : "Use your browser tabs"}
+            />
+            <WizardPanel>
+              <p role="alert" className="text-sm text-destructive">
+                Could not check {hostLabel}. Make sure T3 Code is running there, then try again.
+              </p>
+            </WizardPanel>
+            <WizardFooter>
+              <Button variant="ghost" onClick={close}>
+                Finish later
+              </Button>
+              <Button onClick={onRefresh}>Check again</Button>
+            </WizardFooter>
+          </>
+        ) : kind === "apps" ? (
           <AppsSetup
             hostLabel={hostLabel}
             status={status}
@@ -298,8 +318,9 @@ function BrowserSetup({
   onFinish: () => void;
   onClose: () => void;
 }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard<string>();
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  // Only a successful copy marks its link as copied.
+  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({ onCopy: setCopiedUrl });
   const browsers = status?.browsers ?? [];
   const ready = status !== null && computerBrowserReady(status) !== undefined;
 
@@ -345,7 +366,6 @@ function BrowserSetup({
                       size="xs"
                       variant="outline"
                       onClick={() => {
-                        setCopiedUrl(browser.inspectUrl);
                         copyToClipboard(browser.inspectUrl, browser.inspectUrl);
                       }}
                     >
