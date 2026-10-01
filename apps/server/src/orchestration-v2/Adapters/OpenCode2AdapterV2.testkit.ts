@@ -207,7 +207,12 @@ export const openCode2ReplayRuntime = (
         instanceId: ProviderInstanceId.make("opencode"),
         model: "opencode/big-pickle",
       },
-      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+      // Opened where the adapter tests' threads run, as T3 opens a session for its first thread.
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/work/opencode2",
+      },
     });
   }).pipe(
     Effect.provide(Layer.mergeAll(replayServerConfig("opencode2_adapter"), IdAllocator.layer)),
