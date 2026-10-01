@@ -462,8 +462,8 @@ describe("Android delivery routing", () => {
     const left = androidAlertForState(
       {
         ...state,
-        environmentId: EnvironmentId.makeUnsafe("a/b"),
-        threadId: ThreadId.makeUnsafe("c"),
+        environmentId: EnvironmentId.make("a/b"),
+        threadId: ThreadId.make("c"),
         phase: "completed",
       },
       preferences,
@@ -472,8 +472,8 @@ describe("Android delivery routing", () => {
     const right = androidAlertForState(
       {
         ...state,
-        environmentId: EnvironmentId.makeUnsafe("a"),
-        threadId: ThreadId.makeUnsafe("b/c"),
+        environmentId: EnvironmentId.make("a"),
+        threadId: ThreadId.make("b/c"),
         phase: "completed",
       },
       preferences,
