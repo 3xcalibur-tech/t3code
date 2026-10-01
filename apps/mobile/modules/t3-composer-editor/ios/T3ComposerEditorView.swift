@@ -979,9 +979,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     if availableWidth <= 0 {
       chipsNeedMeasuredWidth = true
     }
-    let maximumLabelWidth = availableWidth > 0
-      ? max(chipFontSize * 3, availableWidth - padding * 2 - iconWidth - iconGap)
-      : CGFloat.greatestFiniteMagnitude
+    let maximumLabelWidth = max(chipFontSize * 3, availableWidth - padding * 2 - iconWidth - iconGap)
     paragraph.lineBreakMode = .byTruncatingMiddle
     attributedLabel.addAttribute(
       .paragraphStyle,
