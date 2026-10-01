@@ -140,6 +140,15 @@ export interface ProviderAdapterShape<TError> {
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**
+   * Copy a session's whole conversation into a new native conversation that
+   * the source never sees again. Returns the resume cursor that starts the
+   * copy. Omitted means the provider cannot fork.
+   */
+  readonly forkThread?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<{ readonly resumeCursor: unknown }, TError>;
+
+  /**
    * Upload a thread to the provider when the adapter supports feedback.
    */
   readonly uploadFeedback?: (

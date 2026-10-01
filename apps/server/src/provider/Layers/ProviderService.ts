@@ -2298,6 +2298,58 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const forkConversation: ProviderServiceMethod<"forkConversation"> = Effect.fn("forkConversation")(
+    function* (input) {
+      const operation = "ProviderService.forkConversation";
+      // Check support before recovery so an unsupported provider never spawns.
+      const unrecovered = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation,
+        allowRecovery: false,
+      });
+      if (unrecovered.adapter.forkThread === undefined) {
+        return yield* toValidationError(
+          operation,
+          `Provider '${unrecovered.adapter.provider}' cannot fork threads.`,
+        );
+      }
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation,
+        allowRecovery: true,
+      });
+      const forkThread = routed.adapter.forkThread;
+      if (forkThread === undefined) {
+        return yield* toValidationError(
+          operation,
+          `Provider '${routed.adapter.provider}' cannot fork threads.`,
+        );
+      }
+      const source = (yield* routed.adapter.listSessions()).find(
+        (session) => session.threadId === routed.threadId,
+      );
+      if (source === undefined) {
+        return yield* toValidationError(operation, "The thread's agent session did not start.");
+      }
+      if (source.status === "running" || source.activeTurnId !== undefined) {
+        return yield* toValidationError(operation, "Wait for the current turn to finish.");
+      }
+      const { resumeCursor } = yield* forkThread(routed.threadId);
+      yield* directory.upsert({
+        threadId: input.targetThreadId,
+        provider: routed.adapter.provider,
+        providerInstanceId: routed.instanceId,
+        runtimeMode: source.runtimeMode,
+        status: "stopped",
+        resumeCursor,
+        runtimePayload: { cwd: source.cwd ?? null, model: source.model ?? null },
+      });
+      yield* analytics.record("provider.conversation.forked", {
+        provider: routed.adapter.provider,
+      });
+    },
+  );
+
   const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -2462,6 +2514,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getInstanceInfo,
     assertConversationRollbackSupported,
     rollbackConversation,
+    forkConversation,
     uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each

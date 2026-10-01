@@ -223,6 +223,8 @@ export interface CodexSessionRuntimeShape {
   readonly rollbackThread: (
     numTurns: number,
   ) => Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
+  /** Copies the whole thread into a new Codex thread and returns the copy's id. */
+  readonly forkThread: Effect.Effect<string, CodexSessionRuntimeError>;
   readonly uploadFeedback: (
     reason?: string,
   ) => Effect.Effect<EffectCodexSchema.V2FeedbackUploadResponse, CodexSessionRuntimeError>;
@@ -1294,6 +1296,26 @@ export const rollbackCodexThread = Effect.fn("rollbackCodexThread")(function* (
     yield* client.raw.request("thread/revert", { threadId, beforeTurnId: firstRemoved.id });
   }
   return { threadId, turns: snapshot.turns.slice(0, retainedCount) };
+});
+
+const CodexForkedThread = Schema.Struct({ thread: Schema.Struct({ id: Schema.String }) });
+const decodeCodexForkedThread = Schema.decodeUnknownEffect(CodexForkedThread);
+
+export const forkCodexThread = Effect.fn("forkCodexThread")(function* (
+  client: CodexHistoryClient,
+  threadId: string,
+): Effect.fn.Return<string, CodexErrors.CodexAppServerError> {
+  // Only the new id is needed. Excluding turns keeps long histories off the wire.
+  const response = yield* client.raw.request("thread/fork", { threadId, excludeTurns: true });
+  const forked = yield* decodeCodexForkedThread(response).pipe(
+    Effect.mapError((error) =>
+      CodexErrors.CodexAppServerRequestError.invalidPayload("thread/fork", "decode-payload", error),
+    ),
+  );
+  // The fork thread resumes the copy in its own app-server. Unloading it here
+  // keeps this session from holding it. A failed unload is harmless.
+  yield* client.request("thread/unsubscribe", { threadId: forked.thread.id }).pipe(Effect.ignore);
+  return forked.thread.id;
 });
 
 export const makeCodexSessionRuntime = (
@@ -2668,6 +2690,10 @@ export const makeCodexSessionRuntime = (
           });
           return snapshot;
         }),
+      forkThread: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        return yield* forkCodexThread(client, providerThreadId);
+      }),
       uploadFeedback: (reason) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

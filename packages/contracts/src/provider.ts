@@ -140,6 +140,31 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
   }
 }
 
+/** Copies an idle thread's provider conversation into a new thread. The client mints `targetThreadId`. */
+export const ProviderForkThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  targetThreadId: ThreadId,
+});
+export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;
+
+export const ProviderForkThreadResult = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderForkThreadResult = typeof ProviderForkThreadResult.Type;
+
+export class ProviderForkThreadError extends Schema.TaggedError<ProviderForkThreadError>()(
+  "ProviderForkThreadError",
+  {
+    threadId: ThreadId,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({

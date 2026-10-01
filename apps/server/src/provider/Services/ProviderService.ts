@@ -122,6 +122,15 @@ export interface ProviderServiceShape {
   }) => Effect.Effect<void, ProviderServiceError>;
 
   /**
+   * Copy an idle thread's native conversation and bind the copy to
+   * `targetThreadId` as a stopped session. The target's first turn resumes it.
+   */
+  readonly forkConversation: (input: {
+    readonly threadId: ThreadId;
+    readonly targetThreadId: ThreadId;
+  }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
    * Upload a thread and return the provider's shareable feedback identifier.
    */
   readonly uploadFeedback: (

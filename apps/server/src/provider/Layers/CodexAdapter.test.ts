@@ -104,6 +104,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     }),
   );
 
+  public readonly forkThreadImpl = vi.fn(() => Promise.resolve("provider-thread-fork"));
+
   public readonly uploadFeedbackImpl = vi.fn((_reason?: string) =>
     Promise.resolve({ threadId: "provider-thread-1" }),
   );
@@ -145,6 +147,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
   }
+
+  forkThread = Effect.promise(() => this.forkThreadImpl());
 
   uploadFeedback(reason?: string) {
     return Effect.promise(() => this.uploadFeedbackImpl(reason));

@@ -257,6 +257,11 @@ function makeFakeCodexAdapter(
       Effect.succeed({ threadId, turns: [] }),
   );
 
+  const forkThread = vi.fn(
+    (threadId: ThreadId): Effect.Effect<{ resumeCursor: unknown }, ProviderAdapterError> =>
+      Effect.succeed({ resumeCursor: { opaque: `fork-of-${String(threadId)}` } }),
+  );
+
   const uploadFeedback = vi.fn(
     (
       input: ProviderUploadFeedbackInput,
@@ -294,7 +299,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
-    ...(provider === CODEX_DRIVER ? { uploadFeedback } : {}),
+    ...(provider === CODEX_DRIVER ? { uploadFeedback, forkThread } : {}),
     stopAll,
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
@@ -331,6 +336,7 @@ function makeFakeCodexAdapter(
     hasSession,
     readThread,
     rollbackThread,
+    forkThread,
     uploadFeedback,
     stopAll,
   };
@@ -1289,6 +1295,90 @@ unsupportedRollback.layer("ProviderServiceLive unsupported rewind", (it) => {
         assert.equal(unsupportedRollback.codex.rollbackThread.mock.calls.length, 0);
         assert.deepEqual(yield* directory.getBinding(threadId), originalBinding);
       }
+    }),
+  );
+});
+
+const forking = makeProviderServiceLayer();
+forking.layer("ProviderServiceLive conversation fork", (it) => {
+  it.effect("binds the native copy to the target thread as a stopped session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const threadId = asThreadId("thread-fork-source");
+      const targetThreadId = asThreadId("thread-fork-target");
+      yield* provider.startSession(threadId, {
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "approval-required",
+      });
+      // A stopped source resumes so the provider can copy it.
+      yield* forking.codex.stopSession(threadId);
+      const sourceBinding = yield* directory.getBinding(threadId);
+
+      yield* provider.forkConversation({ threadId, targetThreadId });
+
+      assert.deepEqual(forking.codex.forkThread.mock.calls, [[threadId]]);
+      const target = Option.getOrThrow(yield* directory.getBinding(targetThreadId));
+      assert.equal(target.status, "stopped");
+      assert.equal(target.providerInstanceId, codexInstanceId);
+      assert.equal(target.runtimeMode, "approval-required");
+      assert.deepEqual(target.resumeCursor, { opaque: `fork-of-${threadId}` });
+      assert.equal((target.runtimePayload as { cwd?: unknown }).cwd, fixtureCwd("project"));
+      assert.deepEqual(
+        Option.getOrThrow(yield* directory.getBinding(threadId)).resumeCursor,
+        Option.getOrThrow(sourceBinding).resumeCursor,
+      );
+    }),
+  );
+
+  it.effect("refuses a running turn and providers without native fork", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const running = asThreadId("thread-fork-running");
+      yield* provider.startSession(running, {
+        providerInstanceId: codexInstanceId,
+        threadId: running,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "approval-required",
+      });
+      forking.codex.updateSession(running, (session) => ({ ...session, status: "running" }));
+      const unsupported = asThreadId("thread-fork-unsupported");
+      yield* provider.startSession(unsupported, {
+        providerInstanceId: ProviderInstanceId.make("cursor"),
+        threadId: unsupported,
+        cwd: fixtureCwd("project"),
+        runtimeMode: "approval-required",
+      });
+      yield* forking.cursor.stopSession(unsupported);
+      forking.cursor.startSession.mockClear();
+      forking.codex.forkThread.mockClear();
+
+      const runningError = yield* Effect.flip(
+        provider.forkConversation({
+          threadId: running,
+          targetThreadId: asThreadId("thread-fork-running-target"),
+        }),
+      );
+      const unsupportedError = yield* Effect.flip(
+        provider.forkConversation({
+          threadId: unsupported,
+          targetThreadId: asThreadId("thread-fork-unsupported-target"),
+        }),
+      );
+
+      assert.instanceOf(runningError, ProviderValidationError);
+      assert.include(runningError.message, "Wait for the current turn to finish");
+      assert.instanceOf(unsupportedError, ProviderValidationError);
+      assert.include(unsupportedError.message, "cannot fork threads");
+      // The unsupported provider is never resumed just to refuse.
+      assert.equal(forking.cursor.startSession.mock.calls.length, 0);
+      assert.equal(forking.codex.forkThread.mock.calls.length, 0);
+      assert.isTrue(
+        Option.isNone(yield* directory.getBinding(asThreadId("thread-fork-running-target"))),
+      );
     }),
   );
 });

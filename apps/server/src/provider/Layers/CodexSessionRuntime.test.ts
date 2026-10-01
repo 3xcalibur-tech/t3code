@@ -17,6 +17,7 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
   describeMcpElicitation,
+  forkCodexThread,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
@@ -67,6 +68,32 @@ describe("Codex thread history", () => {
       }),
     );
   }
+
+  it.effect("forks without turns and releases the copy from the source app-server", () =>
+    Effect.gen(function* () {
+      const calls: Array<readonly [string, unknown]> = [];
+      const client = {
+        request: (method: string, params: unknown) =>
+          Effect.sync(() => {
+            calls.push([method, params]);
+            return {};
+          }),
+        raw: {
+          request: (method: string, params: unknown) =>
+            Effect.sync(() => {
+              calls.push([method, params]);
+              return { thread: { id: "thread-fork", turns: [] } };
+            }),
+        },
+      } as unknown as Parameters<typeof forkCodexThread>[0];
+
+      NodeAssert.equal(yield* forkCodexThread(client, "thread-1"), "thread-fork");
+      NodeAssert.deepEqual(calls, [
+        ["thread/fork", { threadId: "thread-1", excludeTurns: true }],
+        ["thread/unsubscribe", { threadId: "thread-fork" }],
+      ]);
+    }),
+  );
 
   for (const cursors of [
     ["next", "next"],

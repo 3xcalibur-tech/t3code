@@ -117,6 +117,17 @@ This removes the selected message and later conversation from the active thread
 and provider history. It does not undo external actions or separate provider
 memory. The action is available only when the provider supports rewind.
 
+## Fork a thread
+
+On web and desktop, use **Fork thread** in the command palette to continue a
+Codex or Claude conversation in a new thread. The agent in the fork has the full
+conversation, and the fork keeps the model, settings, and working directory. The
+original thread does not change.
+
+The fork shows earlier messages as text only. Both threads work in the same
+files, so changes from one appear in the other. Wait for the current turn to
+finish before you fork.
+
 ## Prompt stash
 
 On web and desktop, press `Cmd+S` on macOS or `Ctrl+S` on Windows and Linux to save

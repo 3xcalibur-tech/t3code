@@ -53,6 +53,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  GitForkIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -109,7 +110,13 @@ import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useServerConfigs, useThreadShells, waitForProject } from "../state/entities";
+import {
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+  waitForProject,
+  waitForThreadShell,
+} from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
@@ -138,6 +145,7 @@ import {
   isMacPlatform,
   isWindowsPlatform,
   newProjectId,
+  newThreadId,
 } from "../lib/utils";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
@@ -742,6 +750,7 @@ function OpenCommandPaletteDialog(props: {
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
+  const forkThread = useAtomCommand(threadEnvironment.fork, { reportFailure: false });
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -2014,6 +2023,35 @@ function OpenCommandPaletteDialog(props: {
         if (refreshed._tag === "Failure") throw squashAtomCommandFailure(refreshed);
       },
     });
+    const forkInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const forkProvider = providerEntryByEnvironmentAndInstanceId.get(
+      `${thread.environmentId}:${forkInstanceId}`,
+    );
+    if (forkProvider?.snapshot.supportsConversationFork === true) {
+      actionItems.push({
+        kind: "action",
+        value: "action:fork-thread",
+        searchTerms: ["fork", "branch", "copy", "duplicate", "conversation"],
+        title: "Fork thread",
+        icon: <GitForkIcon className={ITEM_ICON_CLASS} />,
+        disabled: thread.session?.status === "running",
+        // The server copies the provider's conversation into a new thread on
+        // the same checkout. Failures throw into executeItem's error toast.
+        run: async () => {
+          const targetRef = scopeThreadRef(thread.environmentId, newThreadId());
+          const forked = await forkThread({
+            environmentId: thread.environmentId,
+            input: { threadId: thread.id, targetThreadId: targetRef.threadId },
+          });
+          if (forked._tag === "Failure") throw squashAtomCommandFailure(forked);
+          await waitForThreadShell(targetRef);
+          await navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(targetRef),
+          });
+        },
+      });
+    }
   }
 
   actionItems.push({
