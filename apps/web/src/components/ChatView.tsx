@@ -10881,6 +10881,8 @@ export default function ChatView(props: ChatViewProps) {
                                       isSendBusy ||
                                       isResuming ||
                                       isConnecting ||
+                                      isRevertingCheckpoint ||
+                                      threadDetailLoading ||
                                       activeEnvironmentUnavailable
                                     }
                                   />
