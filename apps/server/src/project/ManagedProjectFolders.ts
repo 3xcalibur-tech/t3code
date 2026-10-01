@@ -17,6 +17,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -113,7 +114,8 @@ export class ManagedProjectFolders extends Context.Service<
      * (adding `-2`, `-3`, ... when taken), makes it a Git repository with a
      * README, an icon, and a first commit, then creates the project. A failed
      * commit (no Git identity, a signing prompt) keeps the project and returns
-     * why in `commitError`.
+     * why in `commitError`. The folder is removed when the create fails or is
+     * cancelled before the project exists, never once another project owns it.
      */
     readonly createNamedProject: (input: { readonly name: string }) => Effect.Effect<
       {
@@ -455,14 +457,17 @@ const make = Effect.gen(function* () {
   )(function* (input) {
     const workspaceRoot = yield* claimNamedFolder(input.name);
     const removeFolder = fileSystem.remove(workspaceRoot, { recursive: true }).pipe(Effect.ignore);
-    const commitError = yield* scaffoldRepository(workspaceRoot, input.name).pipe(
-      Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
-      Effect.onError(() => removeFolder),
-    );
-    const id = yield* crypto.randomUUIDv4.pipe(
-      Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })),
-      Effect.tapError(() => removeFolder),
-    );
+    // Until the create is dispatched nothing else can use the folder, so any
+    // exit but success removes it, an interrupt included.
+    const prepared = yield* Effect.all([
+      scaffoldRepository(workspaceRoot, input.name).pipe(
+        Effect.mapError((cause) => new NamedProjectFolderError({ folder: workspaceRoot, cause })),
+      ),
+      crypto.randomUUIDv4.pipe(
+        Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })),
+      ),
+    ]).pipe(Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : removeFolder)));
+    const [commitError, id] = prepared;
     const project = yield* projects
       .create({
         commandId: CommandId.make(`named-project:${id}`),
@@ -471,10 +476,20 @@ const make = Effect.gen(function* () {
         workspaceRoot,
       })
       .pipe(
+        // A rejected create leaves the folder unused, so remove it. An
+        // interrupt can land after the create is committed, and a conflict
+        // means another project owns the folder, so it stays then; the owner
+        // is checked again first, since deleting another project's files is
+        // never acceptable.
+        Effect.tapError((error) =>
+          error._tag === "ProjectConflictError"
+            ? Effect.void
+            : projects.getByWorkspaceRoot(workspaceRoot).pipe(
+                Effect.flatMap((owner) => (Option.isNone(owner) ? removeFolder : Effect.void)),
+                Effect.ignore,
+              ),
+        ),
         Effect.mapError((cause) => new NamedProjectCreateError({ workspaceRoot, cause })),
-        // Only a rejected create means no project uses the folder. An
-        // interrupt can land after the create is committed, so keep it then.
-        Effect.tapError(() => removeFolder),
       );
     return {
       projectId: project.id,

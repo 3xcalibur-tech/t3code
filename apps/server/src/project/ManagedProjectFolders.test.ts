@@ -1,7 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CommandId, GitCommandError, ProjectId, ThreadId } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -53,16 +55,29 @@ const enrichmentLayer = ProjectEnrichmentService.layer.pipe(
 
 const realGitLayer = GitVcsDriver.layer.pipe(Layer.provide(VcsProcess.layer));
 
+interface HarnessOptions {
+  /** A git driver for failures real git cannot produce on demand. */
+  readonly git?: Layer.Layer<GitVcsDriver.GitVcsDriver>;
+  /** Wraps the real ProjectService, for failures it cannot produce on demand. */
+  readonly projects?: (
+    real: ProjectService.ProjectService["Service"],
+  ) => ProjectService.ProjectService["Service"];
+}
+
 /**
  * The service over a real ProjectService and real git, with its data dir at
- * `baseDir`. `options.git` swaps in a git driver for failures real git cannot
- * produce on demand.
+ * `baseDir`.
  */
-const makeLayer = (
-  baseDir: string,
-  options?: { readonly git?: Layer.Layer<GitVcsDriver.GitVcsDriver> },
-) =>
+const makeLayer = (baseDir: string, options?: HarnessOptions) =>
   ManagedProjectFolders.layer.pipe(
+    Layer.provide(
+      options?.projects === undefined
+        ? Layer.empty
+        : Layer.effect(
+            ProjectService.ProjectService,
+            ProjectService.ProjectService.pipe(Effect.map(options.projects)),
+          ),
+    ),
     Layer.provideMerge(ProjectServiceLayerLive),
     Layer.provideMerge(enrichmentLayer),
     Layer.provideMerge(WorkspacePaths.layer),
@@ -85,7 +100,7 @@ const withScratch = <A, E>(
     | NodeServices.NodeServices
     | Scope.Scope
   >,
-  options?: { readonly git?: Layer.Layer<GitVcsDriver.GitVcsDriver> },
+  options?: HarnessOptions,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -415,7 +430,7 @@ it.effect("keeps a named project and reports why when Git cannot commit", () =>
   ),
 );
 
-it.effect("removes the folder when the project create is rejected", () =>
+it.effect("keeps a folder that another project owns when the create conflicts", () =>
   withScratch(({ baseDir }) =>
     withGitEnv(
       TEST_IDENTITY,
@@ -425,9 +440,8 @@ it.effect("removes the folder when the project create is rejected", () =>
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const taken = path.join(folders.namedProjectsRoot, "taken");
-        // Another project already owns the folder this create will claim, the
-        // way a hand-registered folder under projects/ would: create is
-        // rejected with a workspace conflict.
+        // A project registered at this path some other way (by hand, or a
+        // client that predates the claim) owns the folder the create claims.
         yield* projects.create({
           commandId: CommandId.make("command:owner"),
           projectId: ProjectId.make("project:owner"),
@@ -441,11 +455,85 @@ it.effect("removes the folder when the project create is rejected", () =>
 
         assert.equal(failure._tag, "NamedProjectCreateError");
         assert.equal(failure.message, "Failed to create the project.");
-        assert.isFalse(yield* fileSystem.exists(taken));
-        assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), []);
+        assert.isTrue(yield* fileSystem.exists(path.join(taken, "README.md")));
+        const owner = yield* projects.getByWorkspaceRoot(taken);
+        assert.equal(Option.getOrThrow(owner).id, ProjectId.make("project:owner"));
+        assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), [
+          "taken",
+        ]);
       }),
     ),
   ),
+);
+
+it.effect("removes the folder when the project create is rejected for another reason", () =>
+  withScratch(
+    ({ baseDir }) =>
+      withGitEnv(
+        TEST_IDENTITY,
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+
+          const failure = yield* Effect.flip(folders.createNamedProject({ name: "Rejected" }));
+
+          assert.equal(failure._tag, "NamedProjectCreateError");
+          assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), []);
+        }),
+      ),
+    {
+      // The project store failing the create is not something a real
+      // ProjectService can be made to do on demand.
+      projects: (real) =>
+        ProjectService.ProjectService.of({
+          ...real,
+          create: (input) =>
+            Effect.fail(
+              new ProjectService.ProjectOperationError({
+                operation: "dispatch-project-command",
+                projectId: input.projectId,
+                cause: "store unavailable",
+              }),
+            ),
+        }),
+    },
+  ),
+);
+
+it.effect("removes the folder when the create is cancelled before the project exists", () =>
+  Effect.gen(function* () {
+    const scaffolding = yield* Deferred.make<void>();
+    yield* withScratch(
+      ({ baseDir }) =>
+        Effect.gen(function* () {
+          const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+          const projects = yield* ProjectService.ProjectService;
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+
+          const fiber = yield* folders
+            .createNamedProject({ name: "Cancelled" })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(scaffolding);
+          assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), [
+            "cancelled",
+          ]);
+          yield* Fiber.interrupt(fiber);
+
+          assert.deepEqual(yield* fileSystem.readDirectory(path.resolve(baseDir, "projects")), []);
+          assert.deepEqual((yield* projects.snapshot).projects, []);
+        }),
+      {
+        // Holds `git init` open so the create can be interrupted mid-scaffold.
+        git: Layer.mock(GitVcsDriver.GitVcsDriver)({
+          readConfigValue: () => Effect.succeed(null),
+          execute: () =>
+            Deferred.succeed(scaffolding, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+      },
+    );
+  }),
 );
 
 it.effect("removes the folder when the repository cannot be made", () =>

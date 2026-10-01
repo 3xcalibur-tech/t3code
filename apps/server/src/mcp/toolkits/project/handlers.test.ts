@@ -252,8 +252,14 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
     yield* handle({ title: "Existing", workspaceRoot: "/work/existing" });
     expect(registered).toEqual(["/work/existing"]);
 
-    const rejected = yield* handle({ title: "Scripted", scripts: [] });
-    expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    // Fields this mode cannot apply are rejected, not dropped.
+    for (const extra of [
+      { scripts: [] },
+      { defaultModelSelection: { instanceId: providerInstanceId, model: "gpt-5" } },
+    ]) {
+      const rejected = yield* handle({ title: "Configured", ...extra });
+      expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
+    }
     expect(named).toEqual(["Pinball Stats"]);
   }),
 );
