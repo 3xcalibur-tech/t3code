@@ -454,8 +454,32 @@ describe("Android delivery routing", () => {
     ).toMatchObject({
       alert_title: `${"T".repeat(117)}...`,
       alert_body: `Done: ${"P".repeat(111)}...`,
-      alert_group: `${state.environmentId}/${state.threadId}`,
+      alert_group: JSON.stringify([state.environmentId, state.threadId]),
     });
+  });
+
+  it("keeps notification groups distinct when identifiers contain slashes", () => {
+    const left = androidAlertForState(
+      {
+        ...state,
+        environmentId: EnvironmentId.makeUnsafe("a/b"),
+        threadId: ThreadId.makeUnsafe("c"),
+        phase: "completed",
+      },
+      preferences,
+      0,
+    );
+    const right = androidAlertForState(
+      {
+        ...state,
+        environmentId: EnvironmentId.makeUnsafe("a"),
+        threadId: ThreadId.makeUnsafe("b/c"),
+        phase: "completed",
+      },
+      preferences,
+      0,
+    );
+    expect(left?.alert_group).not.toBe(right?.alert_group);
   });
 
   it.effect(

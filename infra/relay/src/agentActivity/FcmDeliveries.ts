@@ -67,7 +67,7 @@ export function androidAlertForState(
   const notification = notificationForActivity({ ...state, status: statusForPhase(state.phase) });
   return {
     alert_id: JSON.stringify([state.environmentId, state.threadId, state.phase, state.updatedAt]),
-    alert_group: `${state.environmentId}/${state.threadId}`,
+    alert_group: JSON.stringify([state.environmentId, state.threadId]),
     alert_title: notification.title,
     alert_body: notification.body,
     alert_path: notification.deepLink,
@@ -93,7 +93,7 @@ export function androidAlertForAggregate(input: {
     const notification = notificationForActivity(first);
     return {
       alert_id: JSON.stringify([first.environmentId, first.threadId, first.phase, first.updatedAt]),
-      alert_group: `${first.environmentId}/${first.threadId}`,
+      alert_group: JSON.stringify([first.environmentId, first.threadId]),
       alert_title: notification.title,
       alert_body: notification.body,
       alert_path: notification.deepLink,
