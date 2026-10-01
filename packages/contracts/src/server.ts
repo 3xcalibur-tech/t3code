@@ -612,8 +612,8 @@ export const ServerComputerAccessStatus = Schema.Struct({
     permissions: Schema.Struct({ accessibility: Schema.Boolean, screenRecording: Schema.Boolean }),
     /** Whether Cua's permission request is still waiting for the user. */
     requestingPermissions: Schema.Boolean,
-    /** Why the last permission request ended without both grants. */
-    permissionsError: Schema.NullOr(Schema.String),
+    /** Whether the last permission request ended without both grants. */
+    permissionsFailed: Schema.Boolean,
   }),
   browsers: Schema.Array(ServerComputerAccessBrowser),
   /** Why Chrome DevTools MCP cannot start, or null when it is ready or turned off. */
@@ -633,10 +633,23 @@ export type ServerComputerAccessAction = typeof ServerComputerAccessAction.Type;
 
 export class ServerComputerAccessError extends Schema.TaggedError<ServerComputerAccessError>()(
   "ServerComputerAccessError",
-  { detail: Schema.String },
+  {
+    action: ServerComputerAccessAction,
+    reason: Schema.Literals(["unsupported-platform", "driver-missing", "command-failed"]),
+    /** The runner failure or the failed command's result. Never shown to users. */
+    cause: Schema.optional(Schema.Defect()),
+  },
 ) {
   override get message(): string {
-    return this.detail;
+    if (this.reason === "unsupported-platform") {
+      return "Computer access is only available on macOS for now.";
+    }
+    if (this.reason === "driver-missing") return "Install Cua Driver first.";
+    return this.action === "install-cua-driver"
+      ? "Cua Driver did not install."
+      : this.action === "request-cua-permissions"
+        ? "Cua Driver did not get both permissions."
+        : "System Settings did not open.";
   }
 }
 

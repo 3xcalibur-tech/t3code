@@ -26,7 +26,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
-import { ServerConfig } from "../config.ts";
+import * as ServerConfig from "../config.ts";
 import { ensurePinnedTool, type ToolSpec } from "../device/DeviceToolchain.ts";
 import { cuaControlPath, endCuaSession, ensureCuaMcpProxy } from "./CuaMcpProxy.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -91,7 +91,7 @@ export const UNAVAILABLE_STATUS: ServerComputerAccessStatus = {
     path: null,
     permissions: { accessibility: false, screenRecording: false },
     requestingPermissions: false,
-    permissionsError: null,
+    permissionsFailed: false,
   },
   browsers: [],
   browserToolError: null,
@@ -188,10 +188,6 @@ const CuaPermissionsJson = Schema.fromJsonString(
 );
 const decodeCuaPermissions = Schema.decodeEffect(CuaPermissionsJson);
 
-/** Last lines of a failed command, for an error the user can act on. */
-const outputTail = (result: ProcessRunner.ProcessRunOutput) =>
-  `${result.stderr}\n${result.stdout}`.trim().split("\n").slice(-4).join("\n");
-
 export class ComputerAccess extends Context.Service<
   ComputerAccess,
   {
@@ -214,12 +210,13 @@ export class ComputerAccess extends Context.Service<
 >()("t3/mcp/ComputerAccess") {}
 
 export const make = Effect.gen(function* () {
-  const config = yield* ServerConfig;
+  const config = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
   const platform = yield* HostProcessPlatform;
+  const environment = yield* HostProcessEnvironment;
   const scope = yield* Scope.Scope;
   const actionLock = yield* Semaphore.make(1);
   // `cua-driver permissions grant` waits up to minutes for the user, so it
@@ -227,12 +224,14 @@ export const make = Effect.gen(function* () {
   let permissionRequest: Fiber.Fiber<void> | undefined;
   let permissionRequestId = 0;
   let requestingPermissions = false;
-  let permissionsError: string | null = null;
+  let permissionsFailed = false;
   const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ProcessRunner.ProcessRunner, runner),
+      Effect.provideService(HostProcessPlatform, platform),
+      Effect.provideService(HostProcessEnvironment, environment),
     );
 
   const cuaDriver = provide(resolveCuaDriverPath());
@@ -346,7 +345,7 @@ export const make = Effect.gen(function* () {
         path: driverPath,
         permissions,
         requestingPermissions,
-        permissionsError,
+        permissionsFailed,
       },
       browsers: (yield* browsers).map(({ id, name, inspectUrl, remoteDebugging }) => ({
         id,
@@ -358,16 +357,17 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const runChecked = (input: ProcessRunner.ProcessRunInput, failure: string) =>
+  // The command's output stays in `cause`; users see the error's own message.
+  const runChecked = (action: ServerComputerAccessAction, input: ProcessRunner.ProcessRunInput) =>
     runner.run(input).pipe(
       Effect.mapError(
-        (cause) => new ServerComputerAccessError({ detail: `${failure} ${cause.message}` }),
+        (cause) => new ServerComputerAccessError({ action, reason: "command-failed", cause }),
       ),
       Effect.flatMap((result) =>
         result.code === 0
           ? Effect.void
           : Effect.fail(
-              new ServerComputerAccessError({ detail: `${failure}\n${outputTail(result)}` }),
+              new ServerComputerAccessError({ action, reason: "command-failed", cause: result }),
             ),
       ),
     );
@@ -376,58 +376,58 @@ export const make = Effect.gen(function* () {
     action: ServerComputerAccessAction,
   ) {
     if (platform !== "darwin") {
-      return yield* new ServerComputerAccessError({
-        detail: "Computer access is only available on macOS for now.",
-      });
+      return yield* new ServerComputerAccessError({ action, reason: "unsupported-platform" });
     }
     yield* actionLock.withPermit(
       Effect.gen(function* () {
         if (action === "install-cua-driver") {
           // Cua's official installer, pinned to the version T3 was tested with.
           // On macOS it checks the app's signature before replacing anything.
-          return yield* runChecked(
-            {
-              command: "/bin/bash",
-              args: [
-                "-c",
-                `set -o pipefail; curl -fsSL ${CUA_DRIVER_INSTALL_SCRIPT} | /bin/bash -s -- --no-modify-path`,
-              ],
-              env: { CUA_DRIVER_RS_VERSION: CUA_DRIVER_VERSION },
-              timeout: "10 minutes",
-            },
-            "Cua Driver did not install.",
-          );
+          return yield* runChecked(action, {
+            command: "/bin/bash",
+            args: [
+              "-c",
+              `set -o pipefail; curl -fsSL ${CUA_DRIVER_INSTALL_SCRIPT} | /bin/bash -s -- --no-modify-path`,
+            ],
+            env: { CUA_DRIVER_RS_VERSION: CUA_DRIVER_VERSION },
+            timeout: "10 minutes",
+          });
         }
         if (
           action === "open-accessibility-settings" ||
           action === "open-screen-recording-settings"
         ) {
-          return yield* runChecked(
-            { command: "/usr/bin/open", args: [PRIVACY_PANES[action]] },
-            "System Settings did not open.",
-          );
+          return yield* runChecked(action, {
+            command: "/usr/bin/open",
+            args: [PRIVACY_PANES[action]],
+          });
         }
         if (permissionRequest) yield* Fiber.interrupt(permissionRequest);
         permissionRequest = undefined;
         requestingPermissions = false;
-        permissionsError = null;
+        permissionsFailed = false;
         if (action === "cancel-cua-permissions") return;
         const driverPath = yield* cuaDriver;
         if (!driverPath) {
-          return yield* new ServerComputerAccessError({ detail: "Install Cua Driver first." });
+          return yield* new ServerComputerAccessError({ action, reason: "driver-missing" });
         }
         // Shows macOS's prompts for CuaDriver, then waits for both grants and
         // verifies a live capture. Its own timeouts end it within minutes.
         const id = ++permissionRequestId;
         requestingPermissions = true;
-        permissionRequest = yield* runChecked(
-          { command: driverPath, args: ["permissions", "grant"], timeout: "8 minutes" },
-          "Cua Driver did not get both permissions.",
-        ).pipe(
+        permissionRequest = yield* runChecked(action, {
+          command: driverPath,
+          args: ["permissions", "grant"],
+          timeout: "8 minutes",
+        }).pipe(
           Effect.catch((error) =>
-            Effect.sync(() => {
-              permissionsError = error.detail;
-            }),
+            Effect.logWarning("Cua Driver did not get both permissions.", { cause: error }).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  permissionsFailed = true;
+                }),
+              ),
+            ),
           ),
           // A newer request owns the state once it has started.
           Effect.ensuring(
@@ -443,10 +443,7 @@ export const make = Effect.gen(function* () {
   });
 
   const endSession = (threadId: string) =>
-    cuaControlPath(config.stateDir, threadId).pipe(
-      Effect.provideService(Path.Path, path),
-      Effect.flatMap(endCuaSession),
-    );
+    provide(cuaControlPath(config.stateDir, threadId)).pipe(Effect.flatMap(endCuaSession));
 
   return ComputerAccess.of({ servers, status, runAction, endSession });
 });

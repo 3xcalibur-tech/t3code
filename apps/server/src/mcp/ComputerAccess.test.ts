@@ -184,13 +184,13 @@ describe("Cua permission requests", () => {
         yield* Effect.yieldNow;
         const failed = yield* requesting;
         expect(failed.requestingPermissions).toBe(false);
-        expect(failed.permissionsError).toContain("Timed out waiting on: Screen Recording.");
+        expect(failed.permissionsFailed).toBe(true);
 
         yield* access.runAction("request-cua-permissions");
         yield* access.runAction("cancel-cua-permissions");
         const cancelled = yield* requesting;
         expect(cancelled.requestingPermissions).toBe(false);
-        expect(cancelled.permissionsError).toBeNull();
+        expect(cancelled.permissionsFailed).toBe(false);
       }).pipe(
         Effect.provideService(HostProcessEnvironment, { PATH: path.join(root, "bin"), HOME: root }),
       );
