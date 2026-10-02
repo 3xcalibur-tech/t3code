@@ -6,6 +6,7 @@ import {
 } from "@t3tools/shared/hostProcess";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -574,6 +575,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
+  const crypto = yield* Crypto.Crypto;
   const host = input.host ?? { execPath: hostExecPath };
   const xmlSafeInstallerDirectories = installerPath.split(":").filter(
     (directory) =>
@@ -648,6 +650,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     Effect.provideService(FileSystem.FileSystem, fs),
     Effect.provideService(ProcessRunner.ProcessRunner, runner),
     Effect.provideService(HostProcessPlatform, platform),
+    Effect.provideService(Crypto.Crypto, crypto),
   );
 
   const logFailure = (error: { readonly message: string }) =>
@@ -762,9 +765,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     readonly start?: boolean;
   }) {
     const manager = yield* requireManager;
-    const alreadyInstalled = yield* fs.exists(unitPath).pipe(
-      Effect.mapError((cause) => new BootServiceInstallError({ cause })),
-    );
+    const alreadyInstalled = yield* fs
+      .exists(unitPath)
+      .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
     if (!alreadyInstalled) yield* requireStopped;
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
@@ -932,6 +935,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return false;
     }
     yield* runSteps(manager.stop);
+    yield* requireStopped;
     yield* runSteps(manager.activate).pipe(
       // Same recovery as a failed repair: a service that was running should
       // not be left stopped because daemon-reload or enable failed.

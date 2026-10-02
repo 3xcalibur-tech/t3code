@@ -1,11 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@t3tools/contracts";
+import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
 import { acquireServerOwnershipLock } from "./serverOwnershipLock.ts";
+import * as ServerRuntimeState from "./serverRuntimeState.ts";
 import {
   compareExactServiceVersions,
   decodeServiceState,
@@ -99,11 +102,58 @@ const writeFakeRuntime = (
   });
 
 it.layer(NodeServices.layer)("service state persistence", (it) => {
+  it.effect("parks on ownership refusal until explicitly stopped instead of restarting", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-refused-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        path.join(root, "runtime", "versions", "1.0.0"),
+        `process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});\n`,
+      );
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+      const refused = Promise.withResolvers<void>();
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+            if (String(chunk).includes("waiting for a service restart")) refused.resolve();
+            return true;
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      let completed = false;
+      const running = launcher.run().finally(() => {
+        completed = true;
+      });
+      yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+      yield* Effect.promise(() => refused.promise);
+      assert.isFalse(completed);
+      yield* Effect.promise(() => launcher.stop("SIGTERM"));
+      yield* Effect.promise(() => running);
+      assert.isTrue(completed);
+    }),
+  );
+
   it.effect("refuses backup and interrupted restore beside a live database owner", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      for (const recovery of ["backup", "restore"] as const) {
+      for (const [recovery, ownerKind] of [
+        ["backup", "locked"],
+        ["restore", "locked"],
+        ["backup", "legacy"],
+        ["restore", "legacy"],
+      ] as const) {
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-owned-" });
         const statePath = path.join(root, "runtime", "service-state.json");
         const databasePath = path.join(root, "userdata", "state.sqlite");
@@ -136,18 +186,32 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           }),
         );
         const before = yield* fs.readFileString(statePath);
-        yield* Effect.acquireRelease(
-          Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
-          (lock) => Effect.sync(() => lock.close()),
+        if (ownerKind === "locked") {
+          yield* Effect.acquireRelease(
+            Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
+            (lock) => Effect.sync(() => lock.close()),
+          );
+        } else {
+          yield* ServerRuntimeState.persistServerRuntimeState({
+            path: path.join(path.dirname(databasePath), "server-runtime.json"),
+            state: yield* ServerRuntimeState.makePersistedServerRuntimeState({
+              config: { host: undefined, devUrl: undefined },
+              port: 3773,
+            }),
+          });
+        }
+        const launcher = new Launcher(
+          root,
+          yield* Effect.promise(() => readServiceState(statePath)),
         );
-        const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
         const failure = yield* Effect.tryPromise(() => launcher.run()).pipe(Effect.flip);
         const error = failure.cause;
 
         assert.isTrue(
           error instanceof Error &&
             (("errcode" in error && error.errcode === 5) ||
-              ("code" in error && error.code === "SQLITE_BUSY")),
+              ("code" in error &&
+                error.code === (ownerKind === "locked" ? "SQLITE_BUSY" : "T3_STATE_DIR_OWNED"))),
         );
         assert.equal(yield* fs.readFileString(databasePath), "live database");
         assert.equal(yield* fs.readFileString(`${databasePath}-wal`), "live wal");

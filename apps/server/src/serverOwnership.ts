@@ -26,7 +26,7 @@ export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyR
 ) {
   // Distinct process exit code so a supervisor can tell "owned by another
   // server" apart from a crash and stop restarting.
-  readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
+  override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
 
   override get message(): string {
     return `A T3 Code server already owns ${this.stateDir}. Finish active agent work, stop that server through the app or terminal that started it, then retry this command with the same home directory. No server was stopped.`;
@@ -52,7 +52,9 @@ export class ServerOwnershipReleasedError extends Schema.TaggedError<ServerOwner
 }
 
 const encodeRuntimeState = Schema.encodeSync(Schema.fromJsonString(PersistedServerRuntimeState));
-const decodeRuntimeState = Schema.decodeUnknownSync(Schema.fromJsonString(PersistedServerRuntimeState));
+const decodeRuntimeState = Schema.decodeUnknownSync(
+  Schema.fromJsonString(PersistedServerRuntimeState),
+);
 
 /** Treat a legacy record as stale only when process start time proves PID reuse. */
 const legacyOwnerIsLive = Effect.fn("legacyOwnerIsLive")(function* (

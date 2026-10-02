@@ -34,6 +34,9 @@ import {
 const HANDOFF_DELAY_MS = 2_000;
 const PREPARED_TIMEOUT_MS = 120_000;
 const TERMINATE_GRACE_MS = 5_000;
+// Matches SERVER_EXIT_CODE_STATE_DIR_OWNED in contracts/desktopBootstrap.
+// Keep the standalone launcher independent of the Effect-backed contracts.
+const STATE_DIR_OWNED_EXIT_CODE = 78;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
@@ -113,7 +116,9 @@ async function syncDirectory(directory: string): Promise<void> {
  * database writes from an earlier attempt by the same trial.
  */
 async function backupDatabaseOnce(baseDir: string, pending: PendingServiceUpdate): Promise<void> {
-  const ownership = await acquireServerOwnershipLock(NodePath.dirname(pending.dbPath));
+  const ownership = await acquireServerOwnershipLock(NodePath.dirname(pending.dbPath), {
+    guardLegacyOwner: true,
+  });
   try {
     const backupDir = databaseBackupDir(baseDir, pending.id);
     if (await pathExists(backupDir)) return;
@@ -161,8 +166,13 @@ async function markDatabaseRestorePending(backupDir: string): Promise<void> {
 }
 
 /** Restore is retryable after any process crash while the backup directory remains. */
-async function restoreDatabaseBackup(baseDir: string, pending: PendingServiceUpdate): Promise<void> {
-  const ownership = await acquireServerOwnershipLock(NodePath.dirname(pending.dbPath));
+async function restoreDatabaseBackup(
+  baseDir: string,
+  pending: PendingServiceUpdate,
+): Promise<void> {
+  const ownership = await acquireServerOwnershipLock(NodePath.dirname(pending.dbPath), {
+    guardLegacyOwner: true,
+  });
   try {
     const backupDir = databaseBackupDir(baseDir, pending.id);
     if (!(await pathExists(backupDir))) return;
@@ -587,6 +597,15 @@ export class Launcher {
   ): Promise<void> {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
+    if (code === STATE_DIR_OWNED_EXIT_CODE && signal === null) {
+      this.#clearTimer();
+      // Stay idle until explicitly restarted or stopped. Returning a failure
+      // would make systemd/launchd repeatedly launch another refused server.
+      process.stderr.write(
+        "[service-launcher] Another server owns this T3 home; waiting for a service restart. Stop that server, then restart this service.\n",
+      );
+      return;
+    }
     if (child.role === "trial") {
       this.#clearTimer();
       const pending = this.#state.update;
