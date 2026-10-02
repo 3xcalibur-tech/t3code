@@ -904,6 +904,13 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_queue_read",
 ];
 
+// Claude Code aborts an HTTP MCP call after 60 s ("The operation timed out.")
+// unless the server config sets `timeout`. T3's wait tools (t3_thread_wait,
+// delegate_task mode=wait) legitimately block for up to an hour
+// (MAX_WAIT_TIMEOUT_MS in OrchestratorMcpService), so the budget sits just
+// above that and the server's own wait timeout is what ends a long call.
+export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
+
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
 // separate `tools` option. Attaching the t3-code MCP server therefore always
 // pre-approves its tools (headless modes like `dontAsk` deny anything that is
@@ -934,6 +941,7 @@ export function claudeMcpQueryOverrides(input: {
         headers: {
           Authorization: session.authorizationHeader,
         },
+        timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
     },
   };
