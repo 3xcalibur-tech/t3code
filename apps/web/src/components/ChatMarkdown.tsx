@@ -79,6 +79,7 @@ import type {
   Options as ReactMarkdownOptions,
 } from "react-markdown";
 import ReactMarkdown from "react-markdown";
+import { MermaidPreview } from "./MermaidPreview";
 import { toHtml } from "hast-util-to-html";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
@@ -3289,27 +3290,33 @@ const CHAT_MARKDOWN_COMPONENTS = {
         }
         isStreaming={isStreaming}
       >
-        <RenderErrorBoundary
-          resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
-          fallback={<pre {...props}>{children}</pre>}
+        <MermaidPreview
+          source={codeBlock.code}
+          theme={resolvedTheme}
+          enabled={language === "mermaid" && !isStreaming && isClosedCodeFence(node, text)}
         >
-          {/* Reserve the block's height but stay hidden until Shiki has colored
-              it, so plain text never flashes before the highlighted version. */}
-          <Suspense
-            fallback={
-              <pre {...props} className="invisible" aria-hidden>
-                {children}
-              </pre>
-            }
+          <RenderErrorBoundary
+            resetKeys={[codeBlock.code, language, diffThemeName, isStreaming]}
+            fallback={<pre {...props}>{children}</pre>}
           >
-            <SuspenseShikiCodeBlock
-              className={codeBlock.className}
-              code={codeBlock.code}
-              themeName={diffThemeName}
-              isStreaming={isStreaming}
-            />
-          </Suspense>
-        </RenderErrorBoundary>
+            {/* Reserve the block's height but stay hidden until Shiki has colored
+              it, so plain text never flashes before the highlighted version. */}
+            <Suspense
+              fallback={
+                <pre {...props} className="invisible" aria-hidden>
+                  {children}
+                </pre>
+              }
+            >
+              <SuspenseShikiCodeBlock
+                className={codeBlock.className}
+                code={codeBlock.code}
+                themeName={diffThemeName}
+                isStreaming={isStreaming}
+              />
+            </Suspense>
+          </RenderErrorBoundary>
+        </MermaidPreview>
       </MarkdownCodeBlock>
     );
   },

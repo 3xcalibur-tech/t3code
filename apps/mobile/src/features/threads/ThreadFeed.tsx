@@ -781,6 +781,7 @@ interface MarkdownLinkHandlers {
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  readonly isStreaming?: boolean | undefined;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
@@ -809,6 +810,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       <SelectableMarkdownText
         key={`markdown:${segment.sourceOffset}`}
         markdown={markdown}
+        isStreaming={props.isStreaming}
         skills={props.skills}
         textStyle={props.markdownStyles.nativeTextStyle}
         {...props.linkHandlers}
@@ -1699,6 +1701,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              isStreaming={message.streaming}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
               onUseArtifactTemplate={props.onUseArtifactTemplate}
