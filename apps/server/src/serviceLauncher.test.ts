@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { acquireServerOwnershipLock } from "./serverOwnershipLock.ts";
 import {
   compareExactServiceVersions,
   decodeServiceState,
@@ -98,6 +99,65 @@ const writeFakeRuntime = (
   });
 
 it.layer(NodeServices.layer)("service state persistence", (it) => {
+  it.effect("refuses backup and interrupted restore beside a live database owner", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (const recovery of ["backup", "restore"] as const) {
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-owned-" });
+        const statePath = path.join(root, "runtime", "service-state.json");
+        const databasePath = path.join(root, "userdata", "state.sqlite");
+        const backupDir = path.join(root, "runtime", "db-backup", "owned-update");
+        yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+        yield* fs.writeFileString(databasePath, "live database");
+        yield* fs.writeFileString(`${databasePath}-wal`, "live wal");
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", "1.1.0"),
+          'throw new Error("Recovery must not start a trial beside the live owner");\n',
+        );
+        if (recovery === "restore") {
+          yield* fs.makeDirectory(backupDir, { recursive: true });
+          yield* fs.writeFileString(path.join(backupDir, "database"), "older backup");
+          yield* fs.writeFileString(path.join(backupDir, ".restore-pending"), "");
+        }
+        yield* Effect.promise(() =>
+          writeServiceState(statePath, {
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.0.0",
+            update: {
+              id: "owned-update",
+              fromVersion: "1.0.0",
+              targetVersion: "1.1.0",
+              dbPath: databasePath,
+              status: "pending",
+            },
+          }),
+        );
+        const before = yield* fs.readFileString(statePath);
+        yield* Effect.acquireRelease(
+          Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
+          (lock) => Effect.sync(() => lock.close()),
+        );
+        const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+        const failure = yield* Effect.tryPromise(() => launcher.run()).pipe(Effect.flip);
+        const error = failure.cause;
+
+        assert.isTrue(
+          error instanceof Error &&
+            (("errcode" in error && error.errcode === 5) ||
+              ("code" in error && error.code === "SQLITE_BUSY")),
+        );
+        assert.equal(yield* fs.readFileString(databasePath), "live database");
+        assert.equal(yield* fs.readFileString(`${databasePath}-wal`), "live wal");
+        assert.equal(yield* fs.readFileString(statePath), before);
+        assert.equal(yield* fs.exists(backupDir), recovery === "restore");
+        assert.isFalse(yield* fs.exists(`${backupDir}.staging`));
+      }
+    }),
+  );
+
   it.effect("durably replaces and strictly reads one state document", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
