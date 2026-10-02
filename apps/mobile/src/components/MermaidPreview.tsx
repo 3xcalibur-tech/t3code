@@ -52,14 +52,16 @@ export function MermaidPreview({ source, children }: { source: string; children:
         image?.key === key ? (
           <WebView
             source={{ html: image.html }}
-            style={{ height: image.height, backgroundColor: "transparent" }}
+            style={{ flex: 0, height: image.height, backgroundColor: "transparent" }}
             javaScriptEnabled={false}
             scrollEnabled
             nestedScrollEnabled
             allowFileAccess={false}
             allowUniversalAccessFromFileURLs={false}
             setSupportMultipleWindows={false}
-            originWhitelist={["about:blank"]}
+            // Static HTML needs an unrestricted origin whitelist; the request
+            // callback denies every navigation except the initial blank page.
+            originWhitelist={["*"]}
             onShouldStartLoadWithRequest={(request) => request.url === "about:blank"}
           />
         ) : (
