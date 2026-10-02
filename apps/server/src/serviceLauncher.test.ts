@@ -7,7 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
-import { acquireServerOwnershipLock } from "./serverOwnershipLock.ts";
+import * as ServerOwnershipLock from "./serverOwnershipLock.ts";
 import * as ServerRuntimeState from "./serverRuntimeState.ts";
 import {
   compareExactServiceVersions,
@@ -153,6 +153,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
         ["restore", "locked"],
         ["backup", "legacy"],
         ["restore", "legacy"],
+        ["backup", "released"],
       ] as const) {
         const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-owned-" });
         const statePath = path.join(root, "runtime", "service-state.json");
@@ -167,10 +168,13 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           path.join(root, "runtime", "versions", "1.1.0"),
           'throw new Error("Recovery must not start a trial beside the live owner");\n',
         );
-        if (recovery === "restore") {
+        const hasBackup = recovery === "restore" || ownerKind === "released";
+        if (hasBackup) {
           yield* fs.makeDirectory(backupDir, { recursive: true });
           yield* fs.writeFileString(path.join(backupDir, "database"), "older backup");
-          yield* fs.writeFileString(path.join(backupDir, ".restore-pending"), "");
+          if (recovery === "restore") {
+            yield* fs.writeFileString(path.join(backupDir, ".restore-pending"), "");
+          }
         }
         yield* Effect.promise(() =>
           writeServiceState(statePath, {
@@ -189,8 +193,36 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           Effect.gen(function* () {
             if (ownerKind === "locked") {
               yield* Effect.acquireRelease(
-                Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
+                Effect.promise(() =>
+                  ServerOwnershipLock.acquireServerOwnershipLock(path.dirname(databasePath)),
+                ),
                 (lock) => Effect.sync(() => lock.close()),
+              );
+            } else if (ownerKind === "released") {
+              const acquire = ServerOwnershipLock.acquireServerOwnershipLock;
+              const foreignOwner = yield* Effect.promise(() => acquire(path.dirname(databasePath)));
+              let released = false;
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  if (!released) foreignOwner.close();
+                }),
+              );
+              yield* Effect.acquireRelease(
+                Effect.sync(() =>
+                  vi
+                    .spyOn(ServerOwnershipLock, "acquireServerOwnershipLock")
+                    .mockImplementationOnce(async (...args) => {
+                      try {
+                        return await acquire(...args);
+                      } finally {
+                        // Real contention occurs, then ownership ends before
+                        // the launcher can attempt an unsafe second acquire.
+                        foreignOwner.close();
+                        released = true;
+                      }
+                    }),
+                ),
+                (spy) => Effect.sync(() => spy.mockRestore()),
               );
             } else {
               yield* ServerRuntimeState.persistServerRuntimeState({
@@ -217,7 +249,10 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
             );
             const running = launcher.run();
             yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
-            yield* Effect.promise(() => refused.promise);
+            yield* Effect.promise(() =>
+              Promise.race([refused.promise, running.catch(() => undefined)]),
+            );
+            assert.equal(yield* fs.readFileString(databasePath), "live database");
             const cancelled = yield* Effect.promise(() => readServiceState(statePath));
             assert.equal(cancelled.update?.status, "failed");
             assert.equal(
@@ -226,7 +261,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
             );
             assert.equal(yield* fs.readFileString(databasePath), "live database");
             assert.equal(yield* fs.readFileString(`${databasePath}-wal`), "live wal");
-            assert.equal(yield* fs.exists(backupDir), recovery === "restore");
+            assert.equal(yield* fs.exists(backupDir), hasBackup);
             assert.isFalse(yield* fs.exists(`${backupDir}.staging`));
             yield* Effect.promise(() => launcher.stop("SIGTERM"));
             yield* Effect.promise(() => running);

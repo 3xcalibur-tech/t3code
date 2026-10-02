@@ -38,6 +38,11 @@ const TERMINATE_GRACE_MS = 5_000;
 // Keep the standalone launcher independent of the Effect-backed contracts.
 const STATE_DIR_OWNED_EXIT_CODE = 78;
 
+const isOwnershipConflict = (cause: unknown): cause is Error =>
+  cause instanceof Error &&
+  (("errcode" in cause && cause.errcode === 5) ||
+    ("code" in cause && (cause.code === "SQLITE_BUSY" || cause.code === "T3_STATE_DIR_OWNED")));
+
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";
 
@@ -335,10 +340,7 @@ export class Launcher {
 
   async #handleFailure(cause: unknown): Promise<void> {
     const error = cause instanceof Error ? cause : new Error(String(cause));
-    if (
-      ("errcode" in error && error.errcode === 5) ||
-      ("code" in error && (error.code === "SQLITE_BUSY" || error.code === "T3_STATE_DIR_OWNED"))
-    ) {
+    if (isOwnershipConflict(error)) {
       try {
         await this.#suspendForOwnership();
       } catch (cause) {
@@ -458,7 +460,10 @@ export class Launcher {
     // The previous child is dead here, so all three SQLite files are quiescent.
     try {
       await backupDatabaseOnce(this.#baseDir, pending);
-    } catch {
+    } catch (cause) {
+      // Preserve the first refusal even if that owner stops before a second
+      // acquisition. Its writes may have invalidated an existing snapshot.
+      if (isOwnershipConflict(cause)) throw cause;
       await this.#returnToPrevious(pending, "failed", "db-backup-failed");
       return;
     }
