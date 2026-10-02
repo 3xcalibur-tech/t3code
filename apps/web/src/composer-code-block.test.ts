@@ -167,6 +167,16 @@ describe("exitCodeBlockOnTrailingBlankLines", () => {
     expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
   });
 
+  /** An unclosed fence runs to the end of the draft, so leaving it must close it. */
+  it("closes an unclosed fence on the way out", () => {
+    const editor = codeEditor("flush()");
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(0, "close", ""));
+    pressEnter(editor);
+    pressEnter(editor);
+    pressEnter(editor);
+    expect(editor.state.doc.firstChild?.attrs.close).toBe("\n```");
+  });
+
   it("stays in the block when the caret is not at its end", () => {
     const editor = codeEditor("a\n\n\nb", { from: 3 });
     expect(exitCodeBlockOnTrailingBlankLines(editor.view)).toBe(false);
@@ -184,6 +194,13 @@ describe("indentCodeBlock", () => {
     const editor = codeEditor("one\ntwo\nthree", { from: 1, to: 9 });
     indentCodeBlock(editor.state, "in", (tr) => editor.view.dispatch(tr));
     expect(textOf(editor)).toBe("  one\n  two\n  three");
+  });
+
+  /** A selection of whole lines ends at the start of the next one, which it does not touch. */
+  it("leaves the line a selection ends at the start of", () => {
+    const editor = codeEditor("one\ntwo", { from: 0, to: 4 });
+    indentCodeBlock(editor.state, "in", (tr) => editor.view.dispatch(tr));
+    expect(textOf(editor)).toBe("  one\ntwo");
   });
 
   it("outdents every line a selection touches", () => {

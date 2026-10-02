@@ -109,7 +109,13 @@ export function exitCodeBlockOnTrailingBlankLines(view: EditorView): boolean {
   if ($from.parentOffset !== $from.parent.content.size) return false;
   const trailing = /\n[ \t]*\n[ \t]*$/.exec($from.parent.textContent);
   if (!trailing) return false;
-  view.dispatch(view.state.tr.delete($from.pos - trailing[0].length, $from.pos));
+  const transaction = view.state.tr.delete($from.pos - trailing[0].length, $from.pos);
+  // An unclosed fence runs to the end of the draft; the prose after it would
+  // be read back as code, so leaving it writes the closing fence.
+  if (!$from.parent.attrs.close) {
+    transaction.setNodeAttribute($from.before(), "close", `\n${$from.parent.attrs.fence}`);
+  }
+  view.dispatch(transaction);
   return exitCode(view.state, (tr) => view.dispatch(tr.scrollIntoView()));
 }
 
@@ -141,7 +147,8 @@ export function indentCodeBlock(
   // Grow the range to whole lines so indenting is stable no matter where in the
   // first and last lines the selection happens to start and end.
   const lineStart = block.text.lastIndexOf("\n", Math.max(0, startOffset - 1)) + 1;
-  const newlineAfter = block.text.indexOf("\n", endOffset);
+  // A selection ending at the start of a line does not touch that line.
+  const newlineAfter = block.text.indexOf("\n", Math.max(startOffset, endOffset - 1));
   const lineEnd = newlineAfter === -1 ? block.text.length : newlineAfter;
 
   const originalLines = block.text.slice(lineStart, lineEnd).split("\n");
