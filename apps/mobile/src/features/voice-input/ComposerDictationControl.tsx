@@ -368,6 +368,8 @@ export function ComposerDictationPrimaryAction(props: {
   readonly presentation: VoiceComposerPresentation;
   readonly isAvailable: boolean;
   readonly disabled?: boolean;
+  /** The send button owns the spinner while a dictation it started transcribes. */
+  readonly sending?: boolean;
   readonly onStart: () => void;
   readonly onConfirm: () => void;
   readonly onCancel: () => void;
@@ -377,19 +379,39 @@ export function ComposerDictationPrimaryAction(props: {
       <VoiceActionButton
         accessibilityLabel={
           props.presentation.confirmationEnabled
-            ? "Finish dictation"
+            ? "Insert dictation"
             : (props.presentation.statusLabel ?? "Preparing voice input")
         }
         disabled={!props.presentation.confirmationEnabled}
         icon="checkmark"
-        loading={!props.presentation.confirmationEnabled}
+        loading={!props.presentation.confirmationEnabled && !props.sending}
         onPress={props.onConfirm}
-        variant="primary"
       />
     );
   }
 
   return <ComposerDictationStartAction {...props} />;
+}
+
+/** Finishes dictation and sends the message once the transcript lands in the draft. */
+export function ComposerDictationSendAction(props: {
+  readonly presentation: VoiceComposerPresentation;
+  readonly sending: boolean;
+  readonly disabled?: boolean;
+  readonly icon?: AppSymbolName;
+  readonly onSend: () => void;
+}) {
+  if (props.presentation.trailingAction !== "confirm") return null;
+  return (
+    <VoiceActionButton
+      accessibilityLabel={props.sending ? "Sending dictation" : "Send dictation"}
+      disabled={props.disabled || !props.presentation.confirmationEnabled}
+      icon={props.icon ?? "arrow.up"}
+      loading={props.sending}
+      onPress={props.onSend}
+      variant="primary"
+    />
+  );
 }
 
 export function ComposerDictationStartAction(props: {

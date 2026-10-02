@@ -96,12 +96,14 @@ import {
   ComposerDictationCancelAction,
   ComposerDictationDraftContent,
   ComposerDictationPrimaryAction,
+  ComposerDictationSendAction,
   ComposerDictationStartAction,
   ComposerDictationStatus,
   ComposerDictationToolbar,
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+import { useVoiceInputSend } from "../voice-input/useVoiceInputSend";
 import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
@@ -518,6 +520,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.title,
     voiceInput.blocksSubmission,
   ]);
+  const voiceSend = useVoiceInputSend({
+    stop: voiceInput.stop,
+    // A send that is blocked once the transcript lands leaves the text in the draft.
+    send: () => {
+      if (canSend) void handleSend();
+    },
+  });
 
   // ── Model menu ───────────────────────────────────────────
   const modelOptions = useMemo(
@@ -986,10 +995,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     presentation={voicePresentation}
                     isAvailable={voiceInput.isAvailable}
                     onStart={voiceInput.start}
+                    sending={voiceSend.sending}
                     onConfirm={voiceInput.stop}
                     onCancel={voiceInput.cancel}
                   />
-                  {showStopAction ? (
+                  {voicePresentation.trailingAction === "confirm" ? (
+                    <ComposerDictationSendAction
+                      presentation={voicePresentation}
+                      sending={voiceSend.sending}
+                      onSend={() => void voiceSend.sendDictation()}
+                    />
+                  ) : showStopAction ? (
                     <ComposerActionButton
                       accessibilityLabel="Stop agent"
                       icon="stop.fill"

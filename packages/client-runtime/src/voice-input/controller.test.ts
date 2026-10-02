@@ -366,6 +366,33 @@ describe("VoiceInputController", () => {
     expect(harness.controller.currentState.phase).toBe("idle");
   });
 
+  it("reports whether stop added the transcript to the draft", async () => {
+    const committed = createHarness();
+    await committed.controller.start();
+    await expect(committed.controller.stop()).resolves.toBe(true);
+    expect(committed.controller.currentState.phase).toBe("idle");
+
+    const silent = createHarness({
+      getTranscriber: () => ({ prepare: async () => preparedTranscription(async () => "  ") }),
+    });
+    await silent.controller.start();
+    await expect(silent.controller.stop()).resolves.toBe(false);
+    expect(silent.controller.currentState.error).toBe("No speech was detected.");
+
+    const canceled = createHarness({
+      getTranscriber: () => ({
+        prepare: async () => preparedTranscription(() => new Promise<string>(() => {})),
+      }),
+    });
+    await canceled.controller.start();
+    const stopping = canceled.controller.stop();
+    canceled.controller.cancel();
+    await expect(stopping).resolves.toBe(false);
+    expect(canceled.commits).toEqual([]);
+
+    await expect(committed.controller.stop()).resolves.toBe(false);
+  });
+
   it("releases the microphone before transcription starts", async () => {
     const events: string[] = [];
     const harness = createHarness({

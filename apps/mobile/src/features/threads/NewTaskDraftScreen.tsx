@@ -71,11 +71,13 @@ import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
   ComposerDictationCancelAction,
   ComposerDictationPrimaryAction,
+  ComposerDictationSendAction,
   ComposerDictationStatus,
   ComposerDictationToolbar,
 } from "../voice-input/ComposerDictationControl";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { resolveVoiceComposerPresentation } from "../voice-input/voiceInputPresentation";
+import { useVoiceInputSend } from "../voice-input/useVoiceInputSend";
 import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
@@ -1324,6 +1326,28 @@ export function NewTaskDraftScreen(props: {
     scheduleUnusedComposerAttachmentCleanup(draftSnapshot.attachments);
   }
 
+  const canStart =
+    !isImportingContext &&
+    !cloneBlocksStart &&
+    attachmentBlockReason === null &&
+    !modelUnavailable &&
+    Boolean(flow.selectedProject) &&
+    Boolean(flow.selectedModel) &&
+    flow.prompt.trim().length > 0 &&
+    isIncomingShareReady &&
+    !isImportingShare &&
+    !flow.submitting &&
+    pendingPastedTextAttachmentCount === 0 &&
+    !voiceInput.blocksSubmission &&
+    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
+  const voiceSend = useVoiceInputSend({
+    stop: voiceInput.stop,
+    // A start that is blocked once the transcript lands leaves the text in the draft.
+    send: () => {
+      if (canStart) void handleStart();
+    },
+  });
+
   if (!selectedProject) {
     return (
       <View className="flex-1 bg-sheet" collapsable={false}>
@@ -1344,20 +1368,6 @@ export function NewTaskDraftScreen(props: {
   }
 
   const isAndroid = Platform.OS === "android";
-  const canStart =
-    !isImportingContext &&
-    !cloneBlocksStart &&
-    attachmentBlockReason === null &&
-    !modelUnavailable &&
-    Boolean(flow.selectedProject) &&
-    Boolean(flow.selectedModel) &&
-    flow.prompt.trim().length > 0 &&
-    isIncomingShareReady &&
-    !isImportingShare &&
-    !flow.submitting &&
-    pendingPastedTextAttachmentCount === 0 &&
-    !voiceInput.blocksSubmission &&
-    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     // A draft attachment lives only in the draft. Without its key the screen would fall through
     // to a remote lookup for bytes the server has never seen.
@@ -1732,8 +1742,16 @@ export function NewTaskDraftScreen(props: {
                 isAvailable={voiceInput.isAvailable}
                 disabled={isIncomingShareTransferPending || isImportingShare || flow.submitting}
                 onStart={voiceInput.start}
+                sending={voiceSend.sending}
                 onConfirm={voiceInput.stop}
                 onCancel={voiceInput.cancel}
+              />
+              <ComposerDictationSendAction
+                presentation={voicePresentation}
+                sending={voiceSend.sending}
+                disabled={isIncomingShareTransferPending || isImportingShare || flow.submitting}
+                icon={queuesInsteadOfStarting ? "tray.and.arrow.up" : "arrow.up"}
+                onSend={() => void voiceSend.sendDictation()}
               />
               {voicePresentation.showsSend ? (
                 <ComposerActionButton
