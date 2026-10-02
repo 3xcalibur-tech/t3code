@@ -185,39 +185,73 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
             },
           }),
         );
-        const before = yield* fs.readFileString(statePath);
-        if (ownerKind === "locked") {
-          yield* Effect.acquireRelease(
-            Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
-            (lock) => Effect.sync(() => lock.close()),
-          );
-        } else {
-          yield* ServerRuntimeState.persistServerRuntimeState({
-            path: path.join(path.dirname(databasePath), "server-runtime.json"),
-            state: yield* ServerRuntimeState.makePersistedServerRuntimeState({
-              config: { host: undefined, devUrl: undefined },
-              port: 3773,
-            }),
-          });
-        }
-        const launcher = new Launcher(
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            if (ownerKind === "locked") {
+              yield* Effect.acquireRelease(
+                Effect.promise(() => acquireServerOwnershipLock(path.dirname(databasePath))),
+                (lock) => Effect.sync(() => lock.close()),
+              );
+            } else {
+              yield* ServerRuntimeState.persistServerRuntimeState({
+                path: path.join(path.dirname(databasePath), "server-runtime.json"),
+                state: yield* ServerRuntimeState.makePersistedServerRuntimeState({
+                  config: { host: undefined, devUrl: undefined },
+                  port: 3773,
+                }),
+              });
+            }
+            const refused = Promise.withResolvers<void>();
+            yield* Effect.acquireRelease(
+              Effect.sync(() =>
+                vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+                  if (String(chunk).includes("waiting for a service restart")) refused.resolve();
+                  return true;
+                }),
+              ),
+              (spy) => Effect.sync(() => spy.mockRestore()),
+            );
+            const launcher = new Launcher(
+              root,
+              yield* Effect.promise(() => readServiceState(statePath)),
+            );
+            const running = launcher.run();
+            yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+            yield* Effect.promise(() => refused.promise);
+            const cancelled = yield* Effect.promise(() => readServiceState(statePath));
+            assert.equal(cancelled.update?.status, "failed");
+            assert.equal(
+              cancelled.update?.status === "failed" ? cancelled.update.reason : undefined,
+              "state-dir-owned",
+            );
+            assert.equal(yield* fs.readFileString(databasePath), "live database");
+            assert.equal(yield* fs.readFileString(`${databasePath}-wal`), "live wal");
+            assert.equal(yield* fs.exists(backupDir), recovery === "restore");
+            assert.isFalse(yield* fs.exists(`${backupDir}.staging`));
+            yield* Effect.promise(() => launcher.stop("SIGTERM"));
+            yield* Effect.promise(() => running);
+          }),
+        );
+
+        // Simulate accepted foreign work before its owner stops. An explicit
+        // service restart must discard the cancelled snapshot, never restore it.
+        yield* fs.writeFileString(databasePath, "foreign owner's accepted writes");
+        yield* fs.remove(path.join(path.dirname(databasePath), "server-runtime.json"), {
+          force: true,
+        });
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", "1.0.0"),
+          "process.exit(1);\n",
+        );
+        const restarted = new Launcher(
           root,
           yield* Effect.promise(() => readServiceState(statePath)),
         );
-        const failure = yield* Effect.tryPromise(() => launcher.run()).pipe(Effect.flip);
-        const error = failure.cause;
-
-        assert.isTrue(
-          error instanceof Error &&
-            (("errcode" in error && error.errcode === 5) ||
-              ("code" in error &&
-                error.code === (ownerKind === "locked" ? "SQLITE_BUSY" : "T3_STATE_DIR_OWNED"))),
-        );
-        assert.equal(yield* fs.readFileString(databasePath), "live database");
-        assert.equal(yield* fs.readFileString(`${databasePath}-wal`), "live wal");
-        assert.equal(yield* fs.readFileString(statePath), before);
-        assert.equal(yield* fs.exists(backupDir), recovery === "restore");
-        assert.isFalse(yield* fs.exists(`${backupDir}.staging`));
+        yield* Effect.tryPromise(() => restarted.run()).pipe(Effect.flip);
+        assert.equal(yield* fs.readFileString(databasePath), "foreign owner's accepted writes");
+        assert.isFalse(yield* fs.exists(backupDir));
       }
     }),
   );

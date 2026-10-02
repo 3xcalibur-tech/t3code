@@ -330,9 +330,46 @@ export class Launcher {
   #enqueue(transition: () => Promise<void>): void {
     this.#transitions = this.#transitions
       .then(transition, transition)
-      .catch((cause: unknown) =>
-        this.#fatal(cause instanceof Error ? cause : new Error(String(cause))),
-      );
+      .catch((cause: unknown) => this.#handleFailure(cause));
+  }
+
+  async #handleFailure(cause: unknown): Promise<void> {
+    const error = cause instanceof Error ? cause : new Error(String(cause));
+    if (
+      ("errcode" in error && error.errcode === 5) ||
+      ("code" in error && (error.code === "SQLITE_BUSY" || error.code === "T3_STATE_DIR_OWNED"))
+    ) {
+      try {
+        await this.#suspendForOwnership();
+      } catch (cause) {
+        await this.#fatal(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+      return;
+    }
+    await this.#fatal(error);
+  }
+
+  async #suspendForOwnership(): Promise<void> {
+    this.#clearTimer();
+    const pending = this.#state.update;
+    if (pending?.status === "pending") {
+      // Another owner may have written since the backup. Cancel this trial
+      // without restoring it; an explicit restart must never replay that
+      // stale snapshot over the intervening owner's accepted writes.
+      const next: ServiceState = {
+        ...this.#state,
+        update: terminalUpdate({ pending, status: "failed", reason: "state-dir-owned" }),
+      };
+      await writeServiceState(this.#statePath, next);
+      this.#state = next;
+    }
+    if (this.#stopRequested || this.#stopping) return;
+    // A Promise and signal listeners do not keep standalone Node alive.
+    // Keep one referenced idle handle; stop/fatal both clear it.
+    this.#timer = setInterval(() => {}, 2_147_483_647);
+    process.stderr.write(
+      "[service-launcher] Another server owns this T3 home; waiting for a service restart. Stop that server, then restart this service.\n",
+    );
   }
 
   async #fatal(error: Error): Promise<void> {
@@ -369,6 +406,7 @@ export class Launcher {
       // before this queued stop tears it down. That replacement owns the
       // pre-activation tunnel cleanup path and observes the marker above.
       this.#stopping = true;
+      this.#clearTimer();
       const child = this.#child?.process;
       this.#child = null;
       if (child !== undefined) await terminateChild(child, signal);
@@ -598,12 +636,9 @@ export class Launcher {
     if (this.#child !== child || this.#stopping) return;
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE && signal === null) {
-      this.#clearTimer();
       // Stay idle until explicitly restarted or stopped. Returning a failure
       // would make systemd/launchd repeatedly launch another refused server.
-      process.stderr.write(
-        "[service-launcher] Another server owns this T3 home; waiting for a service restart. Stop that server, then restart this service.\n",
-      );
+      await this.#suspendForOwnership();
       return;
     }
     if (child.role === "trial") {
