@@ -6,6 +6,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildDocJson,
+  buildTiptapContent,
   ComposerBlockExtensions,
   ComposerCodeBlockExtension,
   ComposerListExtensions,
@@ -611,6 +612,19 @@ describe("composer rich text document model", () => {
     },
   );
 
+  it("reads blocks written with CRLF line endings", () => {
+    const value = "# Title\r\n> quote\r\n---\r\n```ts\r\nconst a = 1;\r\n```\r\nafter";
+    const doc = buildDocJson(value, () => ({ label: "", description: null }));
+    expect(doc.content.map((block) => block.type)).toEqual([
+      "heading",
+      "blockquote",
+      "horizontalRule",
+      "codeBlock",
+      "paragraph",
+    ]);
+    expect(roundTrip(value).value).toBe(value);
+  });
+
   it("keeps the end of the code inside the fence rather than after it", () => {
     const value = "```ts\nfunc();\n```";
     const map = roundTrip(value);
@@ -797,5 +811,20 @@ describe("serializeSelection", () => {
 
   it("copies across blocks as they are written", () => {
     expect(copy("intro\n- one", "intro", "one")).toBe("intro\n- one");
+  });
+});
+
+describe("pasting into a list item or quote", () => {
+  it("keeps inline marks but builds no blocks", () => {
+    const content = buildTiptapContent(
+      "**bold** text\n- item\n> quote",
+      () => ({ label: "", description: null }),
+      { styling: true, blocks: false },
+    );
+    expect(content.map((block) => block.type)).toEqual(["paragraph", "paragraph", "paragraph"]);
+    const first = content[0] as { content: { text: string; marks?: { type: string }[] }[] };
+    expect(first.content[0]).toMatchObject({ text: "bold", marks: [{ type: "bold" }] });
+    expect(JSON.stringify(content[1])).toContain("- item");
+    expect(JSON.stringify(content[2])).toContain("> quote");
   });
 });

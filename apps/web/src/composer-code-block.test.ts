@@ -257,6 +257,8 @@ describe("convertCodeFenceOnEnter", () => {
     ["```ts", "```", "ts"],
     ["~~~py", "~~~", "py"],
     ["````", "````", ""],
+    ["```ts title=example", "```", "ts title=example"],
+    ["``` js", "```", " js"],
   ])("turns %s into a code block", (text, fence, language) => {
     const editor = paragraphEditor(text);
     expect(convertCodeFenceOnEnter(editor.state, (tr) => editor.view.dispatch(tr))).toBe(true);
@@ -268,7 +270,7 @@ describe("convertCodeFenceOnEnter", () => {
     expect(editor.state.selection.from).toBe(1);
   });
 
-  it.each(["``", "```ts extra", "text ```", "```ts trailing"])("leaves %s alone", (text) => {
+  it.each(["``", "text ```", "```a`b"])("leaves %s alone", (text) => {
     const editor = paragraphEditor(text);
     expect(convertCodeFenceOnEnter(editor.state, (tr) => editor.view.dispatch(tr))).toBe(false);
   });

@@ -1371,7 +1371,8 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           const editorInstance = editorHolder.current;
           if (editorInstance) {
             // Inside a list item or quote, pasted block markup has nowhere to
-            // go: it stays literal lines the next rebuild reads back.
+            // go: it stays literal lines the next rebuild reads back. Inline
+            // marks still apply.
             const $paste = view.state.selection.$from;
             const nested = ["listItem", "taskItem", "blockquote"].some((name) =>
               hasAncestor($paste, name),
@@ -1379,7 +1380,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
             insertMarkdownParagraphs(
               text,
               skillLabelFor,
-              { styling: richText && !nested },
+              { styling: richText, blocks: !nested },
               (content) => {
                 // Tagged on the same transaction insertContent builds, so the
                 // paste is one undo step of its own.
@@ -1738,7 +1739,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
 function insertMarkdownParagraphs(
   value: string,
   skillLabelFor: (name: string) => SkillMeta,
-  options: { styling: boolean },
+  options: { styling: boolean; blocks?: boolean },
   insertContent: (content: JSONContent[] | JSONContent) => void,
 ): void {
   const blocks = buildTiptapContent(value, skillLabelFor, options);

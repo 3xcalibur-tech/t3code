@@ -272,8 +272,10 @@ function parseTaskPrefix(head: string): { prefix: TaskLinePrefix; markerLength: 
  * CommonMark renderer, and honoring indentation would cost another attribute
  * for no case anyone writes.
  */
-function parseOpeningFence(line: string): { fence: string; language: string } | null {
-  const match = /^(`{3,}|~{3,})(.*)$/.exec(line);
+export function parseOpeningFence(line: string): { fence: string; language: string } | null {
+  // `[^\n]` rather than `.`, here and in the block rules: a CRLF draft's lines
+  // end in `\r`, which `.` refuses, and the `\r` stays in the stored text.
+  const match = /^(`{3,}|~{3,})([^\n]*)$/.exec(line);
   if (!match) return null;
   const fence = match[1]!;
   const language = match[2]!;
@@ -283,7 +285,7 @@ function parseOpeningFence(line: string): { fence: string; language: string } | 
 
 /** A closing fence matches the opening run's character and is at least as long. */
 function isClosingFence(line: string, fence: string): boolean {
-  const match = /^(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const match = /^(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
   if (!match) return false;
   const run = match[1]!;
   return run[0] === fence[0] && run.length >= fence.length;
@@ -431,9 +433,12 @@ function textJsonForSpan(text: string, marks: RichTextMark[]): Record<string, un
 export function buildTiptapContent(
   value: string,
   skillLabelFor: (name: string) => SkillMeta,
-  options?: { styling?: boolean },
+  options?: { styling?: boolean; blocks?: boolean },
 ): Record<string, unknown>[] {
   const styling = options?.styling ?? true;
+  // Inline marks without block structure: text pasted into a list item or
+  // quote, which has no line to write a nested block into.
+  const blockSyntax = styling && (options?.blocks ?? true);
   // Hide token source from the markdown parser, then restore the atoms with
   // the marks of their surrounding text. Choose a sentinel absent from input.
   let sentinel = "\uFFFC";
@@ -468,7 +473,7 @@ export function buildTiptapContent(
     return inline;
   };
   const buildDocLine = (line: string): DocLine => {
-    const parsed = styling ? parseListPrefix(line) : null;
+    const parsed = blockSyntax ? parseListPrefix(line) : null;
     const content = parsed ? line.slice(parsed.markerLength) : line;
     return { list: parsed?.prefix ?? null, inline: buildInline(content) };
   };
@@ -492,15 +497,15 @@ export function buildTiptapContent(
 
   for (let index = 0; index < sourceLines.length; index += 1) {
     const line = sourceLines[index]!;
-    const opening = styling ? parseOpeningFence(line) : null;
+    const opening = blockSyntax ? parseOpeningFence(line) : null;
     if (!opening) {
       // A thematic break outranks a list: `- - -` and `* * *` are rules, and
       // `***` on its own line is a rule rather than an empty bold span.
-      if (styling && /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) {
+      if (blockSyntax && /^([-*_])(?:[ \t]*\1){2,}[ \t]*\r?$/.test(line)) {
         entries.push({ rule: line });
         continue;
       }
-      const heading = styling ? /^(#{1,6})([ \t]+)(.*)$/.exec(line) : null;
+      const heading = blockSyntax ? /^(#{1,6})([ \t]+)([^\n]*)$/.exec(line) : null;
       if (heading) {
         entries.push({
           heading: {
@@ -511,7 +516,7 @@ export function buildTiptapContent(
         });
         continue;
       }
-      const quote = styling ? /^(>[ \t]*)(.*)$/.exec(line) : null;
+      const quote = blockSyntax ? /^(>[ \t]*)([^\n]*)$/.exec(line) : null;
       if (quote) entries.push({ quote: { prefix: quote[1]!, inline: buildInline(quote[2]!) } });
       else entries.push({ line: buildDocLine(line) });
       continue;

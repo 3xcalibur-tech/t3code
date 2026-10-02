@@ -3,6 +3,8 @@ import type { EditorState, Transaction } from "@tiptap/pm/state";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 
+import { parseOpeningFence } from "~/composer-rich-text-doc";
+
 /**
  * Spaces rather than a tab: the fence round-trips through Markdown on its way
  * to the agent, and a literal tab there renders at whatever width the reader
@@ -181,17 +183,19 @@ export function convertCodeFenceOnEnter(
   // to write a fence into, so one created inside them would vanish.
   if (!empty || $from.parent.type.name !== "paragraph" || $from.depth !== 1) return false;
   if ($from.parentOffset !== $from.parent.content.size) return false;
-  const match = /^(`{3,}|~{3,})([A-Za-z0-9_+#.-]*)$/.exec($from.parent.textContent);
+  // The parser's own grammar, so a line Enter turns into a fence is exactly
+  // one the stored draft reads back as a fence, info string and all.
+  const opening = parseOpeningFence($from.parent.textContent);
   const codeBlock = state.schema.nodes.codeBlock;
-  if (!match || !codeBlock) return false;
+  if (!opening || !codeBlock) return false;
 
   if (dispatch) {
     const blockStart = $from.before();
-    const fence = match[1]!;
+    const { fence, language } = opening;
     const transaction = state.tr.replaceWith(
       blockStart,
       blockStart + $from.parent.nodeSize,
-      codeBlock.create({ language: match[2] ?? "", fence, close: `\n${fence}` }),
+      codeBlock.create({ language, fence, close: `\n${fence}` }),
     );
     transaction.setSelection(TextSelection.create(transaction.doc, blockStart + 1));
     dispatch(transaction.scrollIntoView());
