@@ -28,6 +28,13 @@ import * as AttachmentHandlers from "./attachment/handlers.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 import { DeviceToolkit } from "./device/tools.ts";
+
+// Effect returns a declared tool failure as `isError` with its encoded payload
+// as JSON text, never as `structuredContent`.
+const declaredFailure = (result: McpSchema.CallToolResult) => {
+  const text = result.content[0];
+  return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
+};
 import { PullRequestsToolkit } from "./pullRequests/tools.ts";
 import {
   resolveT3McpToolDefinition,
@@ -110,7 +117,7 @@ it.effect("checks capability before accessing services through the production re
         }),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    expect(result.structuredContent).toMatchObject({ code: "capability_denied" });
+    expect(declaredFailure(result)).toMatchObject({ code: "capability_denied" });
   }).pipe(
     Effect.provide(
       McpHttpServer.ThreadToolkitRegistrationLive.pipe(
@@ -131,7 +138,7 @@ it.effect("returns a bounded public failure without serializing storage causes",
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    expect(result.structuredContent).toEqual({
+    expect(declaredFailure(result)).toEqual({
       _tag: "OrchestratorMcpFailure",
       code: "orchestration_error",
       message: "The operation could not be completed.",
