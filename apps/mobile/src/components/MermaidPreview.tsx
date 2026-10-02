@@ -2,10 +2,10 @@ import { canPreviewMermaid, renderMermaidPreview } from "@t3tools/client-runtime
 import { useEffect, useState, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
-import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
+import { useMobileThemeAppearance } from "../lib/useUniwindTheme";
 
 export function MermaidPreview({ source, children }: { source: string; children: ReactNode }) {
-  const { themeAppearance: theme } = useAppearancePreferences();
+  const theme = useMobileThemeAppearance();
   const [requestedSource, setRequestedSource] = useState<string | null>(null);
   const open = requestedSource === source;
   const [image, setImage] = useState<{ key: string; html: string; height: number } | null>(null);
