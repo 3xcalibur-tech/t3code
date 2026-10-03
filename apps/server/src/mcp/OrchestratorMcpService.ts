@@ -1505,6 +1505,7 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+        // Task cancellation owns the original delegation, not separate later child turns.
         const childControls = yield* threadManagement
           .getThreadRecords(current.childThreadId, ["runs", "contextTransfers"])
           .pipe(Effect.mapError(threadManagementFailure));
