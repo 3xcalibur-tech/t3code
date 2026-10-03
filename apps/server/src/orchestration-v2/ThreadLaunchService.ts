@@ -39,7 +39,7 @@ import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import { randomUuidV4 } from "./RandomUuid.ts";
-import { makeTemporaryBranchRename } from "./TemporaryBranchRename.ts";
+import * as TemporaryBranchRename from "./TemporaryBranchRename.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
@@ -153,7 +153,7 @@ const make = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
-  const renameTemporaryBranch = yield* makeTemporaryBranchRename;
+  const branchRename = yield* TemporaryBranchRename.TemporaryBranchRename;
   const preparationScope = yield* Scope.make("sequential");
   const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
@@ -227,8 +227,6 @@ const make = Effect.gen(function* () {
       });
     }
     yield* Effect.gen(function* () {
-      const initialMessage = input.initialMessage;
-
       // The server owns worktree naming: without an explicit branch, provision
       // under a temporary `t3code/<hash>` name so the worktree never waits on
       // name generation, then rename in the background below.
@@ -344,17 +342,19 @@ const make = Effect.gen(function* () {
 
       // Rename temporary branches (server-invented above, or sent by clients
       // that name worktrees themselves) in the background so generation latency
-      // never delays provisioning or the provider turn. A message that seeds the
-      // title gets the same rename from its title effect, so skip it here.
-      if (initialMessage !== undefined && input.generateTitle !== true) {
-        yield* renameTemporaryBranch({
-          threadId,
-          projectId: input.projectId,
-          commandId: input.commandId,
-          branch,
-          worktreePath,
-          message: initialMessage,
-        }).pipe(Effect.forkIn(preparationScope));
+      // never delays provisioning or the provider turn. Without a first message
+      // here, the thread's first run start renames it instead.
+      if (input.initialMessage !== undefined) {
+        yield* branchRename
+          .rename({
+            threadId,
+            projectId: input.projectId,
+            commandId: input.commandId,
+            branch,
+            worktreePath,
+            message: input.initialMessage,
+          })
+          .pipe(Effect.forkIn(preparationScope));
       }
 
       const cwd = worktreePath ?? project.workspaceRoot;

@@ -21,7 +21,6 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -65,10 +64,7 @@ function makeHarness(
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
-  const renameBranch = vi.fn(
-    (input: { readonly cwd: string; readonly oldBranch: string; readonly newBranch: string }) =>
-      Effect.succeed({ branch: input.newBranch }),
-  );
+
   const projectedProjects = Layer.mock(ProjectStore.ProjectStoreV2)({
     get: (requestedProjectId) =>
       Effect.succeed(
@@ -95,11 +91,7 @@ function makeHarness(
       Layer.mergeAll(
         threadManagement,
         projectedProjects,
-        Layer.mock(TextGeneration.TextGeneration)({
-          generateThreadTitle,
-          generateBranchName: () => Effect.succeed({ branch: "fix-title" }),
-        }),
-        Layer.mock(GitWorkflow.GitWorkflowService)({ renameBranch }),
+        Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
         ServerSettings.layerTest({}),
       ),
     ),
@@ -107,7 +99,6 @@ function makeHarness(
   return {
     layer: Layer.mergeAll(orchestrator, threadManagement, titleRegeneration, outbox, database),
     generateThreadTitle,
-    renameBranch,
   };
 }
 
@@ -127,12 +118,7 @@ function awaitThreadUpdate(
   });
 }
 
-function createThread(input: {
-  readonly command: string;
-  readonly thread: string;
-  readonly branch?: string;
-  readonly worktreePath?: string;
-}) {
+function createThread(input: { readonly command: string; readonly thread: string }) {
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const threadId = ThreadId.make(input.thread);
@@ -145,8 +131,8 @@ function createThread(input: {
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
-      branch: input.branch ?? null,
-      worktreePath: input.worktreePath ?? null,
+      branch: null,
+      worktreePath: null,
       createdBy: "user",
       creationSource: "web",
     });
@@ -474,40 +460,27 @@ describe("ThreadTitleRegenerationService", () => {
   );
 });
 
-describe("ThreadTitleRegenerationService first message", () => {
-  it.effect("names a temporary worktree branch from the first message", () =>
+describe("ThreadTitleRegenerationService refinement", () => {
+  it.effect("does not arm a refinement after the title changed", () =>
     Effect.gen(function* () {
       const harness = makeHarness();
       yield* Effect.gen(function* () {
-        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
         const threadId = yield* createThread({
-          command: "create:branch",
-          thread: "thread:branch",
-          branch: "t3code/1a2b3c4d",
-          worktreePath: "/repo/.t3/worktrees/branch",
+          command: "create:renamed",
+          thread: "thread:renamed",
         });
-        yield* dispatchUserMessage({ command: "message:branch", threadId, text: "Fix the title" });
-        const requestId = yield* armRegeneration({ command: "title:branch", threadId });
-        yield* service.execute({
-          threadId,
-          requestId,
-          kind: { type: "initial", messageId: MessageId.make("message:branch:message") },
-        });
-
-        const renamed = yield* awaitThreadUpdate(
-          threadId,
-          (thread) => thread.branch === "fix-title",
-        );
-        assert.isTrue(Option.isSome(renamed));
-        assert.deepStrictEqual(harness.renameBranch.mock.calls, [
-          [
-            {
-              cwd: "/repo/.t3/worktrees/branch",
-              oldBranch: "t3code/1a2b3c4d",
-              newBranch: "fix-title",
-            },
-          ],
-        ]);
+        const error = yield* threads
+          .dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make("refine:renamed"),
+            threadId,
+            expectedTitle: "Fix this",
+            regenerateTitle: true,
+          })
+          .pipe(Effect.flip);
+        assert.include(String(error.cause), "title changed");
+        assert.isNotOk((yield* threads.getThreadProjection(threadId)).thread.titleRegeneration);
       }).pipe(Effect.provide(harness.layer));
     }),
   );

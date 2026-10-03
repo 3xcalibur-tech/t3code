@@ -7,7 +7,9 @@ import {
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -31,22 +33,38 @@ export interface TemporaryBranchRenameInput {
 
 /**
  * Names a worktree thread's temporary `t3code/<hash>` branch from its first
- * message. Thread launch calls it when it has that message, and the first
- * message's title effect calls it for threads launched without one. A renamed
- * branch is no longer temporary, so a thread is never renamed twice. Failures
- * are logged and the temporary name stays.
+ * message. Thread launch calls it when it has that message, and the thread's
+ * first run start calls it too, which covers launches without one. Each thread
+ * is attempted once per server, so the two callers never rename twice. A
+ * failure is logged and the temporary name stays.
  */
-export const makeTemporaryBranchRename = Effect.gen(function* () {
+export class TemporaryBranchRename extends Context.Service<
+  TemporaryBranchRename,
+  {
+    readonly rename: (input: TemporaryBranchRenameInput) => Effect.Effect<void>;
+  }
+>()("t3/orchestration-v2/TemporaryBranchRename") {}
+
+const make = Effect.gen(function* () {
   const git = yield* GitWorkflow.GitWorkflowService;
   // Optional: without it the writer model is used without an availability check.
   const providerRegistry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const attempted = new Set<ThreadId>();
 
-  return Effect.fn("renameTemporaryWorktreeBranch")(function* (input: TemporaryBranchRenameInput) {
+  const rename = Effect.fn("TemporaryBranchRename.rename")(function* (
+    input: TemporaryBranchRenameInput,
+  ) {
     const { branch: oldBranch, worktreePath: cwd } = input;
     if (cwd === null || oldBranch === null || !isTemporaryWorktreeBranch(oldBranch)) return;
+    const first = yield* Effect.sync(() => {
+      if (attempted.has(input.threadId)) return false;
+      attempted.add(input.threadId);
+      return true;
+    });
+    if (!first) return;
     yield* Effect.gen(function* () {
       const settings = resolveProjectSettings(
         yield* serverSettings.getSettings,
@@ -97,4 +115,8 @@ export const makeTemporaryBranchRename = Effect.gen(function* () {
       ),
     );
   });
+
+  return TemporaryBranchRename.of({ rename });
 });
+
+export const layer = Layer.effect(TemporaryBranchRename, make);

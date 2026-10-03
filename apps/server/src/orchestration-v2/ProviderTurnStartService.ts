@@ -16,9 +16,11 @@ import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -49,6 +51,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as TemporaryBranchRename from "./TemporaryBranchRename.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -98,6 +101,7 @@ export const layer: Layer.Layer<
   | RunExecutionService.RunExecutionServiceV2
   | RuntimePolicy.RuntimePolicyV2
   | ServerSettings.ServerSettingsService
+  | TemporaryBranchRename.TemporaryBranchRename
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -113,6 +117,9 @@ export const layer: Layer.Layer<
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const branchRename = yield* TemporaryBranchRename.TemporaryBranchRename;
+    const backgroundScope = yield* Scope.make("sequential");
+    yield* Effect.addFinalizer(() => Scope.close(backgroundScope, Exit.void));
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -503,6 +510,21 @@ export const layer: Layer.Layer<
             );
           }
         }
+      }
+      // The first run names a temporary worktree branch from its message, for
+      // threads launched without one. It runs in the background so name
+      // generation never delays the turn.
+      if (run.ordinal === 1) {
+        yield* branchRename
+          .rename({
+            threadId: projection.thread.id,
+            projectId: projection.thread.projectId,
+            commandId: CommandId.make(run.id),
+            branch,
+            worktreePath,
+            message,
+          })
+          .pipe(Effect.forkIn(backgroundScope));
       }
       const selectInheritedBackgroundItems = (
         current: ProjectionStore.ProjectionRuntimeRecoveryState,

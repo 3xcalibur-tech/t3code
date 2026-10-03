@@ -20,7 +20,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import { makeTemporaryBranchRename } from "./TemporaryBranchRename.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 import { formatThreadTitleContext } from "../textGeneration/ThreadTitleContext.ts";
@@ -47,38 +46,8 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
-  const renameTemporaryBranch = yield* makeTemporaryBranchRename;
   const backgroundScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(backgroundScope, Exit.void));
-
-  // A thread launched without a first message still has its temporary
-  // worktree branch; its first message names it.
-  const renameBranchForFirstMessage = (input: {
-    readonly threadId: ThreadId;
-    readonly requestId: CommandId;
-    readonly messageId: MessageId;
-  }) =>
-    threads.getThreadRecords(input.threadId, ["messages"], { messageIds: [input.messageId] }).pipe(
-      Effect.flatMap((projection) => {
-        const message = projection.messages.find((candidate) => candidate.id === input.messageId);
-        return message === undefined
-          ? Effect.void
-          : renameTemporaryBranch({
-              threadId: input.threadId,
-              projectId: projection.thread.projectId,
-              commandId: input.requestId,
-              branch: projection.thread.branch,
-              worktreePath: projection.thread.worktreePath,
-              message,
-            });
-      }),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("Thread worktree branch rename failed", {
-          threadId: input.threadId,
-          cause,
-        }),
-      ),
-    );
 
   // A generic first title ("Fix this") is refined once, after the first run
   // completes, from the whole conversation. Replaying the thread's events from
@@ -110,6 +79,8 @@ const make = Effect.gen(function* () {
                       type: "thread.metadata.update",
                       commandId: CommandId.make(`${input.requestId}:title-refine`),
                       threadId: input.threadId,
+                      // A rename that lands after the read above still wins.
+                      expectedTitle: input.title,
                       regenerateTitle: true,
                     }),
               ),
@@ -141,13 +112,6 @@ const make = Effect.gen(function* () {
   const execute: ThreadTitleRegenerationService["Service"]["execute"] = Effect.fn(
     "ThreadTitleRegenerationService.execute",
   )(function* (input) {
-    if (input.kind.type === "initial") {
-      yield* renameBranchForFirstMessage({
-        threadId: input.threadId,
-        requestId: input.requestId,
-        messageId: input.kind.messageId,
-      }).pipe(Effect.forkIn(backgroundScope));
-    }
     const outcome:
       | { readonly type: "stale" }
       | {
