@@ -1,11 +1,14 @@
 import {
+  type DesktopPreviewForwardedShortcut,
   type KeybindingCommand,
   type KeybindingShortcut,
   type KeybindingWhenNode,
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   type ResolvedKeybindingsConfig,
+  RIGHT_PANEL_JUMP_KEYBINDING_COMMANDS,
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ModelPickerJumpKeybindingCommand,
+  type RightPanelJumpKeybindingCommand,
   type ThreadJumpKeybindingCommand,
 } from "@t3tools/contracts";
 import { isElectron } from "./env";
@@ -358,6 +361,86 @@ export function modelPickerJumpIndexFromCommand(command: string): number | null 
     command as ModelPickerJumpKeybindingCommand,
   );
   return index === -1 ? null : index;
+}
+
+export function rightPanelJumpIndexFromCommand(command: string): number | null {
+  const index = RIGHT_PANEL_JUMP_KEYBINDING_COMMANDS.indexOf(
+    command as RightPanelJumpKeybindingCommand,
+  );
+  return index === -1 ? null : index;
+}
+
+/** Commands that move between right-panel tabs. */
+export function isRightPanelTabCommand(command: KeybindingCommand | null): boolean {
+  return (
+    command === "rightPanel.nextTab" ||
+    command === "rightPanel.previousTab" ||
+    rightPanelJumpIndexFromCommand(command ?? "") !== null
+  );
+}
+
+/**
+ * The right-panel tab a tab command selects. Next and previous wrap around,
+ * and the ninth jump is always the last tab, as in a browser.
+ */
+export function rightPanelTabTarget<Surface extends { readonly id: string }>(
+  surfaces: readonly Surface[],
+  activeSurfaceId: string | null,
+  command: KeybindingCommand,
+): Surface | null {
+  if (surfaces.length === 0) return null;
+  const jumpIndex = rightPanelJumpIndexFromCommand(command);
+  if (jumpIndex !== null) {
+    return (
+      (jumpIndex === RIGHT_PANEL_JUMP_KEYBINDING_COMMANDS.length - 1
+        ? surfaces.at(-1)
+        : surfaces[jumpIndex]) ?? null
+    );
+  }
+  const offset =
+    command === "rightPanel.nextTab" ? 1 : command === "rightPanel.previousTab" ? -1 : null;
+  if (offset === null) return null;
+  const activeIndex = surfaces.findIndex((surface) => surface.id === activeSurfaceId);
+  if (activeIndex === -1) return (offset === 1 ? surfaces[0] : surfaces.at(-1)) ?? null;
+  return surfaces[(activeIndex + offset + surfaces.length) % surfaces.length] ?? null;
+}
+
+/**
+ * Chords the desktop shell should take from a focused preview page: every
+ * browser and right-panel shortcut that would win while the page has focus.
+ * Editing chords and other app shortcuts stay with the page, as in a browser.
+ */
+export function previewForwardedShortcuts(
+  keybindings: ResolvedKeybindingsConfig,
+  platform = navigator.platform,
+): DesktopPreviewForwardedShortcut[] {
+  const context = resolveContext({
+    context: { previewFocus: true, previewOpen: true, isWeb: false, isDesktop: true },
+  });
+  const useMetaForMod = isMacPlatform(platform);
+  const claimedShortcuts = new Set<string>();
+  const forwarded: DesktopPreviewForwardedShortcut[] = [];
+
+  for (let index = keybindings.length - 1; index >= 0; index -= 1) {
+    const binding = keybindings[index];
+    if (!binding || !matchesWhenClause(binding.whenAst, context)) continue;
+    const conflictKey = shortcutConflictKey(binding.shortcut, platform);
+    if (claimedShortcuts.has(conflictKey)) continue;
+    claimedShortcuts.add(conflictKey);
+    if (!binding.command.startsWith("preview.") && !binding.command.startsWith("rightPanel.")) {
+      continue;
+    }
+    const { shortcut } = binding;
+    forwarded.push({
+      key: shortcut.key,
+      metaKey: shortcut.metaKey || (shortcut.modKey && useMetaForMod),
+      ctrlKey: shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod),
+      shiftKey: shortcut.shiftKey,
+      altKey: shortcut.altKey,
+    });
+  }
+
+  return forwarded;
 }
 
 export function isTerminalToggleShortcut(

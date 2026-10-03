@@ -21,6 +21,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/in
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 
+import { consumePreviewUrlFocus } from "./previewActionBus";
+
 interface Props {
   url: string;
   loading: boolean;
@@ -30,6 +32,8 @@ interface Props {
   inputDisabled?: boolean | undefined;
   /** Bumping this value re-focuses and selects the URL input. */
   focusUrlNonce?: number | undefined;
+  /** Showing tab, whose pending address-bar focus request this row honors. */
+  pendingFocusTabId?: string | null | undefined;
   onBack: () => void;
   onForward: () => void;
   onRefresh: () => void;
@@ -74,6 +78,7 @@ export function PreviewChromeRow({
   refreshDisabled,
   inputDisabled,
   focusUrlNonce,
+  pendingFocusTabId,
   onBack,
   onForward,
   onRefresh,
@@ -102,6 +107,10 @@ export function PreviewChromeRow({
     if (!node) return;
     node.focus();
   }, [focusUrlNonce]);
+
+  useEffect(() => {
+    if (pendingFocusTabId && consumePreviewUrlFocus(pendingFocusTabId)) inputRef.current?.focus();
+  }, [pendingFocusTabId]);
 
   const submit = (event?: FormEvent | KeyboardEvent) => {
     event?.preventDefault();

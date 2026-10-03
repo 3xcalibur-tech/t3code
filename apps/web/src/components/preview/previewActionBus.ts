@@ -8,10 +8,16 @@
 export type PreviewAction =
   | "toggle-panel"
   | "refresh"
+  | "hard-refresh"
+  | "back"
+  | "forward"
   | "focus-url"
   | "zoom-in"
   | "zoom-out"
-  | "reset-zoom";
+  | "reset-zoom"
+  | "pick-element"
+  | "dev-tools"
+  | "toggle-device-toolbar";
 
 const EVENT_NAME = "t3code:preview-action";
 
@@ -28,4 +34,20 @@ export function subscribePreviewAction(listener: (action: PreviewAction) => void
   };
   window.addEventListener(EVENT_NAME, handler);
   return () => window.removeEventListener(EVENT_NAME, handler);
+}
+
+let pendingUrlFocusTabId: string | null = null;
+
+/**
+ * Asks the browser view to focus its address bar once `tabId` is showing.
+ * A new tab is not mounted yet when it is created, so the request waits.
+ */
+export function requestPreviewUrlFocus(tabId: string): void {
+  pendingUrlFocusTabId = tabId;
+}
+
+export function consumePreviewUrlFocus(tabId: string): boolean {
+  if (pendingUrlFocusTabId !== tabId) return false;
+  pendingUrlFocusTabId = null;
+  return true;
 }

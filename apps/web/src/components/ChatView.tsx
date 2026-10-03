@@ -276,7 +276,12 @@ import { DeviceSetup } from "./device/DeviceSetup";
 import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  isRightPanelTabCommand,
+  resolveShortcutCommand,
+  rightPanelTabTarget,
+  shortcutLabelForCommand,
+} from "../keybindings";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -7344,6 +7349,13 @@ export default function ChatView(props: ChatViewProps) {
   );
 
   useEffect(() => {
+    const rightPanelSurfaceOpeners = new Map<KeybindingCommand, () => void>([
+      ["rightPanel.newTerminal", addTerminalSurface],
+      ["rightPanel.openFiles", addFilesSurface],
+      ["rightPanel.openPullRequest", addPullRequestSurface],
+      ["rightPanel.openPullRequests", addPullRequestsSurface],
+      ["rightPanel.openDevice", addDeviceSurface],
+    ]);
     const handler = (event: globalThis.KeyboardEvent) => {
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
         event.stopPropagation();
@@ -7458,6 +7470,44 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) closeRightPanelSurface(activeRightPanelSurface);
+        return;
+      }
+
+      if (isRightPanelTabCommand(command)) {
+        const target = rightPanelTabTarget(
+          rightPanelState.surfaces,
+          activeRightPanelSurface?.id ?? null,
+          command,
+        );
+        if (!target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (target.id !== activeRightPanelSurface?.id) activateRightPanelSurface(target);
+        // The outgoing surface may unmount with focus inside it; keep focus in
+        // the panel so the next tab shortcut still applies. Terminals take
+        // focus themselves.
+        if (target.kind !== "terminal") {
+          window.requestAnimationFrame(() => {
+            document
+              .querySelector<HTMLElement>(`[data-right-panel-tab="${CSS.escape(target.id)}"]`)
+              ?.focus();
+          });
+        }
+        return;
+      }
+
+      if (command === "preview.newTab") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat && isPreviewSupportedInRuntime()) createBrowserSurface();
+        return;
+      }
+
+      const openRightPanelSurface = rightPanelSurfaceOpeners.get(command);
+      if (openRightPanelSurface) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) openRightPanelSurface();
         return;
       }
 
@@ -7598,7 +7648,14 @@ export default function ChatView(props: ChatViewProps) {
     activeProject,
     activeRightPanelSurface,
     activeProjectScripts,
+    activateRightPanelSurface,
+    addDeviceSurface,
+    addFilesSurface,
+    addPullRequestSurface,
+    addPullRequestsSurface,
     addTerminalSurface,
+    createBrowserSurface,
+    rightPanelState.surfaces,
     activeThreadRef,
     activeThreadPinned,
     activeThreadSettled,

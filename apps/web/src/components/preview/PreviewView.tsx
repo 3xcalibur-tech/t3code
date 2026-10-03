@@ -42,7 +42,7 @@ import {
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
-import { subscribePreviewAction } from "./previewActionBus";
+import { type PreviewAction, subscribePreviewAction } from "./previewActionBus";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
@@ -678,32 +678,40 @@ export function PreviewView({
     };
   }, [runtimeTabId]);
 
-  // Subscribe only while visible; `toggle-panel` is owned by ChatView's
-  // URL-aware handler regardless of whether the panel is currently mounted.
+  // `toggle-panel` is owned by ChatView's URL-aware handler regardless of
+  // whether the panel is currently mounted.
+  const previewActionHandlers: Record<Exclude<PreviewAction, "toggle-panel">, () => void> = {
+    refresh: handleRefresh,
+    "hard-refresh": () => {
+      if (previewBridge && runtimeTabId) void previewBridge.hardReload(runtimeTabId);
+    },
+    back: handleBack,
+    forward: handleForward,
+    "focus-url": () => setFocusUrlNonce((value) => (value ?? 0) + 1),
+    "zoom-in": handleZoomIn,
+    "zoom-out": handleZoomOut,
+    "reset-zoom": handleResetZoom,
+    "pick-element": () => {
+      if (tabId && !isUnreachable) handlePickElement();
+    },
+    "dev-tools": () => {
+      if (previewBridge && runtimeTabId && desktopOverlay?.hasWebContents) {
+        void previewBridge.openDevTools(runtimeTabId).catch(() => undefined);
+      }
+    },
+    "toggle-device-toolbar": handleToggleDeviceToolbar,
+  };
+  const previewActionHandlersRef = useRef(previewActionHandlers);
+  useEffect(() => {
+    previewActionHandlersRef.current = previewActionHandlers;
+  });
+  // Subscribe only while visible, so hidden tabs never act on a shortcut.
   useEffect(() => {
     if (!visible) return;
     return subscribePreviewAction((action) => {
-      switch (action) {
-        case "refresh":
-          handleRefresh();
-          return;
-        case "focus-url":
-          setFocusUrlNonce((value) => (value ?? 0) + 1);
-          return;
-        case "zoom-in":
-          handleZoomIn();
-          return;
-        case "zoom-out":
-          handleZoomOut();
-          return;
-        case "reset-zoom":
-          handleResetZoom();
-          return;
-        case "toggle-panel":
-          return;
-      }
+      if (action !== "toggle-panel") previewActionHandlersRef.current[action]();
     });
-  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, visible]);
+  }, [visible]);
 
   return (
     <div
@@ -717,6 +725,7 @@ export function PreviewView({
         canGoForward={canGoForward}
         refreshDisabled={refreshDisabled}
         focusUrlNonce={focusUrlNonce}
+        pendingFocusTabId={visible ? tabId : null}
         onBack={handleBack}
         onForward={handleForward}
         onRefresh={handleRefresh}

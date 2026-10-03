@@ -18,6 +18,7 @@ import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
   isOpenFavoriteEditorShortcut,
+  previewForwardedShortcuts,
   isTerminalClearShortcut,
   isTerminalCloseShortcut,
   isTerminalNewShortcut,
@@ -25,6 +26,7 @@ import {
   isTerminalSplitVerticalShortcut,
   isTerminalToggleShortcut,
   resolveShortcutCommand,
+  rightPanelTabTarget,
   shouldShowThreadJumpHintsForModifiers,
   shortcutLabelForCommand,
   terminalDeleteShortcutData,
@@ -1512,5 +1514,73 @@ describe("Usage shortcuts", () => {
         platform: "Linux",
       }),
     );
+  });
+});
+
+describe("right panel shortcuts", () => {
+  const panelContext = { previewFocus: true, previewOpen: true, isDesktop: true, isWeb: false };
+
+  it("acts like a browser while a browser tab has focus", () => {
+    const resolve = (overrides: Partial<ShortcutEventLike>, context = panelContext) =>
+      resolveShortcutCommand(event({ metaKey: true, ...overrides }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context,
+      });
+    assert.strictEqual(resolve({ key: "t" }), "preview.newTab");
+    assert.strictEqual(resolve({ key: "l" }), "preview.focusUrl");
+    assert.strictEqual(resolve({ key: "[", code: "BracketLeft" }), "preview.back");
+    assert.strictEqual(
+      resolve({ key: "{", code: "BracketLeft", shiftKey: true }),
+      "rightPanel.previousTab",
+    );
+    assert.strictEqual(resolve({ key: "1", code: "Digit1" }), "rightPanel.jump.1");
+    // Outside the panel the same chords keep their app meanings.
+    const appContext = { ...panelContext, previewFocus: false, previewOpen: false };
+    assert.strictEqual(resolve({ key: "[", code: "BracketLeft" }, appContext), "navigation.back");
+    assert.strictEqual(resolve({ key: "1", code: "Digit1" }, appContext), "thread.jump.1");
+    assert.isNull(resolve({ key: "t" }, appContext));
+  });
+
+  it("keeps page navigation off panel tabs that are not browsers", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "[", code: "BracketLeft", metaKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel", context: { ...panelContext, previewOpen: false } },
+      ),
+      "navigation.back",
+    );
+  });
+
+  it("wraps tab traversal and jumps to the last tab with 9", () => {
+    const tabs = [{ id: "a" }, { id: "b" }, { id: "c" }];
+    assert.strictEqual(rightPanelTabTarget(tabs, "c", "rightPanel.nextTab")?.id, "a");
+    assert.strictEqual(rightPanelTabTarget(tabs, "a", "rightPanel.previousTab")?.id, "c");
+    assert.strictEqual(rightPanelTabTarget(tabs, null, "rightPanel.previousTab")?.id, "c");
+    assert.strictEqual(rightPanelTabTarget(tabs, "a", "rightPanel.jump.2")?.id, "b");
+    assert.strictEqual(rightPanelTabTarget(tabs, "a", "rightPanel.jump.9")?.id, "c");
+    assert.isNull(rightPanelTabTarget(tabs, "a", "rightPanel.jump.5"));
+    assert.isNull(rightPanelTabTarget([], null, "rightPanel.nextTab"));
+  });
+
+  it("forwards only browser and panel chords out of a focused page", () => {
+    const forwarded = previewForwardedShortcuts(DEFAULT_RESOLVED_KEYBINDINGS, "MacIntel");
+    const has = (key: string, modifiers: { shiftKey?: boolean; ctrlKey?: boolean } = {}) =>
+      forwarded.some(
+        (shortcut) =>
+          shortcut.key === key &&
+          shortcut.metaKey === !modifiers.ctrlKey &&
+          shortcut.ctrlKey === (modifiers.ctrlKey ?? false) &&
+          shortcut.shiftKey === (modifiers.shiftKey ?? false) &&
+          !shortcut.altKey,
+      );
+    assert.isTrue(has("l"));
+    assert.isTrue(has("t"));
+    assert.isTrue(has("w"));
+    assert.isTrue(has("["));
+    assert.isTrue(has("tab", { ctrlKey: true }));
+    // App shortcuts the page may want for itself stay with the page.
+    assert.isFalse(has("k"));
+    assert.isFalse(has("b"));
   });
 });

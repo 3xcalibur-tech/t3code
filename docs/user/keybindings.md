@@ -44,6 +44,19 @@ to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
+## Right panel and browser
+
+While the right panel has focus, it works like a browser window:
+
+- `mod+t` opens a browser tab with the address bar focused, and `mod+l` returns to the address bar.
+- `mod+w` closes the tab. `ctrl+tab` and `ctrl+shift+tab`, or `mod+shift+]` and `mod+shift+[`, move between tabs. In the desktop app, `mod+1` through `mod+8` pick a tab and `mod+9` picks the last.
+- In a browser tab, `mod+[` and `mod+]` go back and forward, `mod+r` reloads, `mod+shift+r` reloads without the cache, `mod+shift+c` picks an element, `mod+shift+m` shows the device toolbar, and `mod+alt+i` opens DevTools.
+
+These work from inside the page too. Other shortcuts stay with the page, as they would in a browser.
+
+Open a surface from anywhere: `` ctrl+shift+` `` for a terminal, `mod+alt+f` for files,
+`mod+alt+p` for the pull request, `mod+alt+shift+p` for linked pull requests, and `mod+alt+m` for a device. `mod+shift+j` toggles the browser and `mod+d` the diff.
+
 ## iPad
 
 With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
@@ -94,7 +107,8 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
 `turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
-the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
+the keyboard. `previewFocus` is true while the right panel or a page in it has the
+keyboard, and `previewOpen` while its active tab is a browser. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the

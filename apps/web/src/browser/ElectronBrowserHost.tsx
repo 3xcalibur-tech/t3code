@@ -1,12 +1,15 @@
 "use client";
 
+import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useEffect, useMemo } from "react";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
+import { previewForwardedShortcuts } from "~/keybindings";
 import { useActivePreviewSessions } from "~/previewStateStore";
+import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
@@ -76,6 +79,28 @@ export function ElectronBrowserHost() {
     if (!preview) return;
     return preview.onPointerEvent((event) => {
       useBrowserPointerStore.getState().apply(event);
+    });
+  }, []);
+
+  // A focused page receives keys in its own process, out of reach of the
+  // app's window listeners. Main takes the browser and panel chords from it;
+  // replaying them on the focused webview runs the normal shortcut handlers
+  // with preview focus.
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    void preview
+      .setForwardedShortcuts(previewForwardedShortcuts(keybindings))
+      .catch(() => undefined);
+  }, [keybindings]);
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    return preview.onShortcut((shortcut) => {
+      (document.activeElement ?? document.body).dispatchEvent(
+        new KeyboardEvent("keydown", { ...shortcut, bubbles: true, cancelable: true }),
+      );
     });
   }, []);
 

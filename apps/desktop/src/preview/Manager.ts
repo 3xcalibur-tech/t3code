@@ -15,6 +15,7 @@ import type {
   DesktopPreviewAutomationStatus,
   DesktopPreviewColorScheme,
   DesktopPreviewFavicon,
+  DesktopPreviewForwardedShortcut,
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
   PreviewAnnotationRect,
@@ -66,8 +67,12 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL } from "../ipc/channels.ts";
+import {
+  PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL,
+  PREVIEW_SHORTCUT_CHANNEL,
+} from "../ipc/channels.ts";
 import * as BrowserSession from "./BrowserSession.ts";
+import { forwardedShortcutEvent } from "./ForwardedShortcuts.ts";
 import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_THEME_CHANNEL,
@@ -694,6 +699,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const agentDrivenWebContents = new WeakSet<Electron.WebContents>();
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
+  // Read synchronously from before-input-event, so it lives outside a Ref.
+  let forwardedShortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut> = [];
   let mainWindowCleanupFiber: Fiber.Fiber<void, never> | undefined;
   const tabLifecycleLocks = new Map<
     string,
@@ -2045,6 +2052,24 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         );
         return;
       }
+      // Browser and panel shortcuts belong to the app while a person has the
+      // page focused. Agent keystrokes and native editing stay with the page.
+      if (
+        agentDrivenWebContents.has(wc) ||
+        webContents.getFocusedWebContents() !== wc ||
+        isPreviewEditingShortcut(input, hostPlatform)
+      ) {
+        return;
+      }
+      const shortcut = forwardedShortcutEvent(input, forwardedShortcuts);
+      if (!shortcut) return;
+      event.preventDefault();
+      runFork(
+        attempt({ operation: "shortcut.forward", tabId, webContentsId: wc.id }, () => {
+          const host = currentMainWindow?.webContents;
+          if (host && !host.isDestroyed()) host.send(PREVIEW_SHORTCUT_CHANNEL, shortcut);
+        }).pipe(Effect.ignore),
+      );
     };
     yield* Scope.addFinalizer(
       scope,
@@ -4722,6 +4747,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAudioMuted,
     setColorScheme,
+    setForwardedShortcuts: (shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>) =>
+      Effect.sync(() => {
+        forwardedShortcuts = shortcuts;
+      }),
     setMainWindow,
     startRecording,
     closePictureInPicture,
@@ -5135,6 +5164,9 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       input: PreviewAutomationWaitForInput,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setForwardedShortcuts: (
+      shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>,
+    ) => Effect.Effect<void>;
     readonly subscribeStateChanges: (listener: Listener) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribePointerEvents: (
       listener: PointerEventListener,
@@ -5235,6 +5267,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     automationScroll: operations.automationScroll,
     automationEvaluate: operations.automationEvaluate,
     automationWaitFor: operations.automationWaitFor,
+    setForwardedShortcuts: operations.setForwardedShortcuts,
     subscribeStateChanges: operations.subscribeStateChanges,
     subscribePointerEvents: operations.subscribePointerEvents,
     subscribeRecordingFrames: operations.subscribeRecordingFrames,
