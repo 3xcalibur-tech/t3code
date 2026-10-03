@@ -228,11 +228,9 @@ export function summarizeT3ToolCalls(
       label = phrase("Organized", "organize", `threads ${times}`);
       break;
     case "background-wait":
-      label = phrase(
-        "Set the thread to wait for",
-        "set the thread to wait for",
-        "background commands",
-      );
+      label = selected.every((call) => call.input?.wait === false)
+        ? phrase("Stopped waiting for", "stop waiting for", "background commands")
+        : phrase("Set the thread to wait for", "set the thread to wait for", "background commands");
       break;
     case "thread-update":
       label = phrase("Updated", "update", quantity(countEntities(threadIds), "thread"));

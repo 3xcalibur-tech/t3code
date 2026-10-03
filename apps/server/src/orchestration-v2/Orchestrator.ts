@@ -7851,8 +7851,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         activeProviderThreadId: thread.activeProviderThreadId,
         runs: projection.runs,
       }).flatMap((task) => (task.kind === "command" ? [task.taskId] : []));
+      // Its own tag, so the MCP tool can tell this apart from an outage.
       if (command.held && commandTaskIds.length === 0) {
-        return yield* new OrchestratorDispatchError({
+        return yield* new OrchestratorCommandRejectedError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Thread ${command.threadId} has no background commands running.`,

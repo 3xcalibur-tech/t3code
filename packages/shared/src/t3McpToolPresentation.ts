@@ -257,8 +257,9 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_search: tool(["Search", "Searching", "Searched", "thread content"], "thread-search"),
   t3_thread_transfers: tool(["Read", "Reading", "Read", "thread transfers"], "thread-transfers"),
   t3_thread_organize: tool(["Organize", "Organizing", "Organized", "a thread"], "thread-organize"),
+  // One tool both waits and stops waiting (wait: false), so the labels stay neutral.
   wait_for_background_commands: tool(
-    ["Wait for", "Waiting for", "Waiting for", "background commands"],
+    ["Update", "Updating", "Updated", "background command waiting"],
     "background-wait",
   ),
   t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),

@@ -272,25 +272,31 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       queuedRunId: input.queuedRunId,
       targetRunId: input.targetRunId,
     })),
-  wait_for_background_commands: (input) => {
-    const held = input.wait ?? true;
-    return dispatch(undefined, (common) => ({
-      ...common,
-      type: "thread.background-work.hold",
-      held,
-    })).pipe(
-      // The orchestrator rejects a hold when no background command runs.
-      Effect.mapError((error) =>
-        held && error.code === "orchestration_error"
-          ? new OrchestratorMcpFailure({
-              code: "invalid_request",
-              message:
-                "Could not wait: this thread has no background command running. Start the command in the background first.",
-            })
-          : error,
-      ),
-    );
-  },
+  wait_for_background_commands: (input) =>
+    Effect.gen(function* () {
+      const { threads, projection } = yield* readWritableThread();
+      const result = yield* threads
+        .dispatch({
+          type: "thread.background-work.hold",
+          commandId: yield* newCommandId(),
+          threadId: projection.thread.id,
+          held: input.wait ?? true,
+        })
+        .pipe(
+          // The orchestrator rejects a hold before commit only when no
+          // background command runs. Anything else stays retryable.
+          Effect.mapError((error) =>
+            error._tag === "OrchestratorCommandRejectedError"
+              ? new OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message:
+                    "Could not wait: this thread has no background command running. Start the command in the background first.",
+                })
+              : unavailable(),
+          ),
+        );
+      return { sequence: result.sequence };
+    }),
   t3_thread_organize: (input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readWritableThread(input.threadId);

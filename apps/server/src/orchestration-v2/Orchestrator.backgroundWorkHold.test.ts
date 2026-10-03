@@ -74,8 +74,10 @@ it.layer(testLayer)("thread.background-work.hold", (it) => {
         creationSource: "web",
       });
 
-      // Nothing runs yet, so there is nothing to wait for.
-      assert.equal((yield* Effect.exit(hold("hold-nothing", true)))._tag, "Failure");
+      // Nothing runs yet, so there is nothing to wait for. The MCP tool relies
+      // on this tag to tell the rejection apart from an outage.
+      const nothing = yield* Effect.flip(hold("hold-nothing", true));
+      assert.equal(nothing._tag, "OrchestratorCommandRejectedError");
 
       // The turn ended and left its benchmark running in the background.
       yield* projections.apply({
@@ -130,7 +132,11 @@ it.layer(testLayer)("thread.background-work.hold", (it) => {
           output: "",
         },
       });
-      const running = { taskId: "item:bench", description: "Run benchmarks", kind: "command" };
+      const running = {
+        taskId: "item:bench",
+        description: "Run benchmarks",
+        kind: "command" as const,
+      };
       assert.deepEqual((yield* projections.getThreadShell(threadId))?.pendingBackgroundTasks, [
         running,
       ]);
