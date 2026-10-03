@@ -9579,7 +9579,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             yield* threadDispatch.withLock(
               parentThreadId,
               Effect.gen(function* () {
-                const child = yield* projectionStore.getThreadRecords(threadId, ["runs"]);
+                const child = yield* projectionStore.getThreadRecords(
+                  threadId,
+                  ["runs", "messages"],
+                  { messageRoles: ["user"] },
+                );
+                const monitorRunIds = new Set(
+                  child.messages
+                    .filter((message) => message.notification?.source.kind === "monitor")
+                    .map((message) => message.runId),
+                );
                 const parent = yield* projectionStore.getThreadRecords(parentThreadId, [
                   "contextTransfers",
                 ]);
@@ -9598,6 +9607,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 )) {
                   if (
                     ["completed", "interrupted", "failed", "cancelled"].includes(run.status) &&
+                    (run.startedAt !== null || run.ordinal === 1) &&
+                    !monitorRunIds.has(run.id) &&
                     !deliveredRunIds.has(run.id) &&
                     !(run.ordinal === 1 && deliveredRunIds.has(undefined))
                   ) {

@@ -498,6 +498,11 @@ function needsRecovery(
       return projection.runs.some((run) => run.delegatedCompletion?.delivery != null);
     case "subagent-results": {
       const parentThreadId = projection.thread.lineage.parentThreadId;
+      const monitorRunIds = new Set(
+        projection.messages
+          .filter((message) => message.notification?.source.kind === "monitor")
+          .map((message) => message.runId),
+      );
       const deliveredRunIds = new Set(
         projection.contextTransfers
           .filter(
@@ -514,9 +519,9 @@ function needsRecovery(
         projection.thread.forkedFrom?.type === "node" &&
         projection.runs.some(
           (run) =>
-            ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-              run.status,
-            ) &&
+            ["completed", "interrupted", "failed", "cancelled"].includes(run.status) &&
+            (run.startedAt !== null || run.ordinal === 1) &&
+            !monitorRunIds.has(run.id) &&
             !deliveredRunIds.has(run.id) &&
             !(run.ordinal === 1 && deliveredRunIds.has(undefined)),
         )
@@ -3412,7 +3417,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                   AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
-                  AND terminal.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+                  AND terminal.status IN ('completed', 'interrupted', 'failed', 'cancelled')
+                  AND (json_extract(terminal.payload_json, '$.startedAt') IS NOT NULL OR terminal.ordinal = 1)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM orchestration_v2_projection_messages AS message
+                    WHERE message.thread_id = child.thread_id AND message.run_id = terminal.run_id
+                      AND CASE WHEN json_valid(message.payload_json) THEN
+                        json_extract(message.payload_json, '$.notification.source.kind') = 'monitor'
+                        ELSE 0 END
+                  )
                   AND NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_context_transfers
                     WHERE source_thread_id = child.thread_id

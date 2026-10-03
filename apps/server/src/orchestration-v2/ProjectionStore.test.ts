@@ -334,7 +334,7 @@ const followUpResultRecovery = Effect.gen(function* () {
   const childId = yield* addRolledBackRecoveryCandidate("follow-up-result");
   const projection = yield* store.getThreadProjection(childId);
   const parentId = ThreadId.make("parent:follow-up-result");
-  const original = { ...projection.runs[0]!, status: "completed" as const };
+  const original = { ...projection.runs[0]!, status: "completed" as const, startedAt: null };
   const now = yield* DateTime.now;
   yield* store.apply({
     id: EventId.make("follow-up-result:lineage"),
@@ -362,6 +362,7 @@ const followUpResultRecovery = Effect.gen(function* () {
     occurredAt: now,
     payload: original,
   });
+  assert.include(yield* store.getRecoveryThreadIds("subagent-results"), childId);
   const transfer = {
     id: ContextTransferId.make("transfer:original"),
     type: "subagent_result" as const,
@@ -393,6 +394,7 @@ const followUpResultRecovery = Effect.gen(function* () {
     id: RunId.make("run:follow-up-result"),
     ordinal: 2,
     status: "running" as const,
+    startedAt: now,
   };
   yield* store.apply({
     id: EventId.make("follow-up-result:running"),
@@ -453,6 +455,68 @@ const followUpResultRecovery = Effect.gen(function* () {
       id: ContextTransferId.make("transfer:follow-up"),
       sourcePoint: { threadId: childId, runId: followup.id },
     },
+  });
+  assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  for (const skipped of [
+    {
+      ...followup,
+      id: RunId.make("run:cancelled-queued-follow-up"),
+      ordinal: 4,
+      status: "cancelled" as const,
+      startedAt: null,
+    },
+    {
+      ...followup,
+      id: RunId.make("run:rolled-back-follow-up"),
+      ordinal: 5,
+      status: "rolled_back" as const,
+    },
+  ]) {
+    yield* store.apply({
+      id: EventId.make(`follow-up-result:skipped:${skipped.id}`),
+      type: "run.updated",
+      threadId: childId,
+      runId: skipped.id,
+      occurredAt: now,
+      payload: skipped,
+    });
+    assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  }
+  const monitor = {
+    ...followup,
+    id: RunId.make("run:monitor-follow-up"),
+    ordinal: 6,
+    status: "completed" as const,
+  };
+  yield* store.apply({
+    id: EventId.make("follow-up-result:monitor-message"),
+    type: "message.updated",
+    threadId: childId,
+    runId: monitor.id,
+    occurredAt: now,
+    payload: {
+      id: MessageId.make("message:monitor-follow-up"),
+      threadId: childId,
+      runId: monitor.id,
+      nodeId: monitor.rootNodeId,
+      role: "user",
+      text: "Monitor updated",
+      notification: { source: { kind: "monitor" }, outcome: "updated", summary: "Monitor updated" },
+      attachments: [],
+      streaming: false,
+      createdBy: "agent",
+      creationSource: "server",
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  yield* store.apply({
+    id: EventId.make("follow-up-result:monitor-run"),
+    type: "run.updated",
+    threadId: childId,
+    runId: monitor.id,
+    occurredAt: now,
+    payload: monitor,
   });
   assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
 });
