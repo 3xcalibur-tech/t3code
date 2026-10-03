@@ -91,8 +91,9 @@ export function ComputerAccessSetupDialog({
     };
   }, [requesting]);
 
-  // Set as soon as Start is pressed, since the status that reports the
-  // request can arrive after the dialog closes.
+  // Whether this dialog started a permission request. Set as soon as Start is
+  // pressed, since the status that reports the request can arrive after the
+  // dialog closes.
   const requestStarted = useRef(false);
   const runAction = async (action: ServerComputerAccessAction) => {
     if (action === "request-cua-permissions") requestStarted.current = true;
@@ -104,10 +105,11 @@ export function ComputerAccessSetupDialog({
     onRefresh();
     return result._tag !== "Failure";
   };
-  // A request left running would keep waiting on the user for minutes, so
-  // the dialog cancels it when it closes for any reason.
+  // A request left running would keep waiting on the user for minutes, so the
+  // dialog cancels its own request when it closes for any reason. Another
+  // client's request is left alone.
   const cancelRequest = useEffectEvent(() => {
-    if (requesting || requestStarted.current) {
+    if (requestStarted.current) {
       void run({ environmentId, input: { action: "cancel-cua-permissions" } });
     }
   });

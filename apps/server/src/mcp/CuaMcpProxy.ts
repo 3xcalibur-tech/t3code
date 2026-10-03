@@ -78,11 +78,19 @@ function start() {
       if (!line.trim()) continue;
       const message = parse(line);
       if (replay !== null && message?.id === replay) {
+        replay = null;
+        // A driver that refuses the replayed handshake cannot serve the
+        // queued calls; they fail, and the next call starts a new driver.
+        if (message.error !== undefined) {
+          child = null;
+          current.kill();
+          failPending();
+          return;
+        }
         if (initialized) {
           current.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\\n");
         }
         // Only the first match is the replayed handshake; later ones are the client's.
-        replay = null;
         ready = true;
         flush();
         continue;
@@ -137,11 +145,12 @@ function shutdown() {
 
 // A newer proxy for the thread takes the path over from an older one.
 if (!process.platform.startsWith("win")) rmSync(controlPath, { force: true });
-// A connection is the whole message: end the session. Without the socket the
+// A connection is the whole message: end the session, then close the
+// connection, which tells T3 the session has ended. Without the socket the
 // session still ends when this proxy exits, so a failed listen is not fatal.
 createServer((socket) => {
-  socket.destroy();
   end();
+  socket.destroy();
 })
   .on("error", (error) => console.error("cua-mcp-proxy: control socket failed:", error.message))
   .listen(controlPath);
@@ -195,15 +204,16 @@ export const cuaControlPath = Effect.fn("CuaMcpProxy.controlPath")(function* (
   return platform === "win32" ? `\\\\.\\pipe\\${name}` : path.join(NodeOS.tmpdir(), `${name}.sock`);
 });
 
-/** Asks a proxy to end its Cua session. A proxy that is not running means there is nothing to end. */
+/**
+ * Asks a proxy to end its Cua session and waits until it has: the proxy closes
+ * the connection after ending it. A proxy that is not running means there is
+ * nothing to end, and a stuck one is not waited on for long.
+ */
 export const endCuaSession = (controlPath: string) =>
   Effect.callback<void>((resume) => {
     const socket = NodeNet.connect(controlPath);
-    const done = () => {
-      socket.destroy();
-      resume(Effect.void);
-    };
-    socket.once("connect", done);
-    socket.once("error", done);
+    socket.once("close", () => resume(Effect.void));
+    // An error is followed by `close`.
+    socket.once("error", () => {});
     return Effect.sync(() => socket.destroy());
-  });
+  }).pipe(Effect.timeout("2 seconds"), Effect.ignore);

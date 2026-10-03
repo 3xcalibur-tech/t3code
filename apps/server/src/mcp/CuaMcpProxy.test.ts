@@ -12,6 +12,7 @@ import { endCuaSession, ensureCuaMcpProxy } from "./CuaMcpProxy.ts";
 
 // Stands in for `cua-driver mcp`: answers `initialize`, reports its pid and
 // whether the handshake finished, and answers "hang" only as it is stopped.
+// With REFUSE_REPLAY set, it refuses the handshake the proxy replays.
 const FAKE_DRIVER = `
 let initialized = false;
 let hanging = null;
@@ -23,7 +24,11 @@ process.stdin.on("data", (chunk) => {
   input = lines.pop();
   for (const line of lines) {
     const message = JSON.parse(line);
-    if (message.method === "initialize") reply({ id: message.id, result: { protocolVersion: "2025-06-18" } });
+    if (message.method === "initialize" && process.env.REFUSE_REPLAY && String(message.id).startsWith("t3-replay")) {
+      reply({ id: message.id, error: { code: -32603, message: "refused" } });
+    } else if (message.method === "initialize") {
+      reply({ id: message.id, result: { protocolVersion: "2025-06-18" } });
+    }
     if (message.method === "notifications/initialized") initialized = true;
     if (message.method === "tools/call" && message.params.name === "hang") hanging = message.id;
     if (message.method === "tools/call" && message.params.name === "whoami") {
@@ -42,7 +47,7 @@ afterEach(() => {
   for (const dir of temporaryDirs.splice(0)) NodeFS.rmSync(dir, { recursive: true, force: true });
 });
 
-const startProxy = Effect.fn(function* () {
+const startProxy = Effect.fn(function* (driverEnv: Record<string, string> = {}) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cua-proxy-"));
   temporaryDirs.push(dir);
   const driverScript = NodePath.join(dir, "fake-driver.mjs");
@@ -58,6 +63,7 @@ const startProxy = Effect.fn(function* () {
       T3_CUA_DRIVER: driver,
       T3_CUA_CONTROL: control,
       T3_SERVER_PID: String(process.pid),
+      ...driverEnv,
     },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -123,6 +129,22 @@ describe("Cua MCP proxy", () => {
       );
       expect(sameId.result?.pid).toBe(second.result?.pid);
       expect(received.map((message) => message.id)).toEqual([1, 2, 3, 4, "t3-replay-1"]);
+
+      const exited = new Promise((resolve) => proxy.once("exit", resolve));
+      proxy.stdin.end();
+      yield* Effect.promise(() => exited);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fails queued calls when a new driver refuses the replayed handshake", () =>
+    Effect.gen(function* () {
+      const { proxy, control, request } = yield* startProxy({ REFUSE_REPLAY: "1" });
+
+      yield* endCuaSession(control);
+      const refused = yield* Effect.promise(() =>
+        request(2, "tools/call", { name: "whoami", arguments: {} }),
+      );
+      expect(refused.error?.message).toContain("Computer use stopped");
 
       const exited = new Promise((resolve) => proxy.once("exit", resolve));
       proxy.stdin.end();
