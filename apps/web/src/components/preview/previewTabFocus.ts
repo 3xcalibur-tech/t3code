@@ -27,6 +27,41 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
     if (currentGuard?.release === release) currentGuard = undefined;
   };
   const relinquish = (event: Event) => {
+    if (
+      event instanceof KeyboardEvent &&
+      event.target instanceof Node &&
+      previous.contains(event.target) &&
+      (previous.isContentEditable ||
+        previous instanceof HTMLTextAreaElement ||
+        (previous instanceof HTMLInputElement &&
+          ["text", "search", "email", "tel", "url", "password", "number"].includes(
+            previous.type,
+          ))) &&
+      (event.isComposing ||
+        (!["Tab", "Escape", "Enter"].includes(event.key) &&
+          !event.altKey &&
+          (!(event.metaKey || event.ctrlKey) ||
+            [
+              "a",
+              "c",
+              "x",
+              "v",
+              "z",
+              "y",
+              "Backspace",
+              "Delete",
+              "ArrowLeft",
+              "ArrowRight",
+              "ArrowUp",
+              "ArrowDown",
+              "Home",
+              "End",
+            ].includes(event.key.length === 1 ? event.key.toLowerCase() : event.key))))
+    ) {
+      // Typing and editing leave focus here. Keep protecting the user's next
+      // characters from a delayed agent traversal; navigation still yields.
+      return;
+    }
     // HostedBrowserWebview replays guest focus to dismiss popups. The real
     // guest pointer signal follows through IPC, so this is not human input.
     if (

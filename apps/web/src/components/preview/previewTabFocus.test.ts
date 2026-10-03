@@ -248,4 +248,37 @@ describe("runPreviewTabKeepingHostFocus", () => {
     composer.remove();
     await unsubscribed;
   });
+
+  it.each([
+    { key: "x" },
+    { key: "Backspace" },
+    { key: "v", metaKey: true },
+    { key: "V", metaKey: true, shiftKey: true },
+    { key: "Enter", isComposing: true },
+  ])("preserves typing focus across a late traversal after $key", async (input) => {
+    const composer = mount("textarea");
+    const preview = mount("webview");
+    composer.focus();
+
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+    composer.dispatchEvent(new KeyboardEvent("keydown", { ...input, bubbles: true }));
+    preview.focus();
+
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it.each([{ key: "Tab" }, { key: "k", metaKey: true }])(
+    "yields to keyboard navigation with $key",
+    async (input) => {
+      const composer = mount("textarea");
+      const other = mount("button");
+      composer.focus();
+
+      await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+      composer.dispatchEvent(new KeyboardEvent("keydown", { ...input, bubbles: true }));
+      other.focus();
+
+      expect(document.activeElement).toBe(other);
+    },
+  );
 });
