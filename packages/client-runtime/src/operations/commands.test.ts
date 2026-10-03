@@ -580,9 +580,15 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect.each(["running", "queued", "completed"] as const)(
-    "stops a %s inferred delegated follow-up when the parent has no projected background work",
-    (status) =>
+  it.effect.each([
+    { status: "running", parentStatus: "completed" },
+    { status: "queued", parentStatus: "completed" },
+    { status: "completed", parentStatus: "completed" },
+    { status: "running", parentStatus: "running" },
+    { status: "running", parentStatus: "rolled_back" },
+  ] as const)(
+    "discovers a $status delegated follow-up from a $parentStatus parent projection",
+    ({ status, parentStatus }) =>
       Effect.gen(function* () {
         const childThreadId = ThreadId.make("resumed-child");
         const childRunId = RunId.make("follow-up");
@@ -596,7 +602,7 @@ describe("V2 environment commands", () => {
           userMessageId: MessageId.make("original-message"),
           rootNodeId: null,
           activeAttemptId: null,
-          status: "completed" as const,
+          status: parentStatus,
           requestedAt: v2Now,
           startedAt: v2Now,
           completedAt: v2Now,
@@ -650,12 +656,44 @@ describe("V2 environment commands", () => {
         };
         const nativeId = ThreadId.make("native-child");
         const unrelatedId = ThreadId.make("unrelated-child");
+        const archivedId = ThreadId.make("archived-child");
+        const deletedId = ThreadId.make("deleted-child");
+        const task = parent.subagents[0]!;
         const commands: OrchestrationV2Command[] = [];
+        const projectionRequests: ThreadId[] = [];
         const supervisor = yield* makeSupervisor({
           commands,
           projects: [],
+          projectionRequests,
           projections: new Map([
-            [v2ThreadId, parent],
+            [
+              v2ThreadId,
+              {
+                ...parent,
+                subagents: [
+                  task,
+                  { ...task, id: NodeId.make("duplicate-link") },
+                  ...[nativeId, unrelatedId, archivedId, deletedId].map((id) => ({
+                    ...task,
+                    id: NodeId.make(`task-${id}`),
+                    childThreadId: id,
+                  })),
+                  { ...task, id: NodeId.make("unlinked"), childThreadId: null },
+                  {
+                    ...task,
+                    id: NodeId.make("native-task"),
+                    childThreadId: ThreadId.make("excluded-native-task-child"),
+                    origin: "provider_native",
+                  },
+                  {
+                    ...task,
+                    id: NodeId.make("original-active"),
+                    childThreadId: ThreadId.make("excluded-active-task-child"),
+                    status: "running",
+                  },
+                ],
+              },
+            ],
             [childThreadId, child],
             [
               nativeId,
@@ -672,19 +710,43 @@ describe("V2 environment commands", () => {
                 },
               },
             ],
+            [
+              archivedId,
+              { ...child, thread: { ...child.thread, id: archivedId, archivedAt: v2Now } },
+            ],
+            [deletedId, { ...child, thread: { ...child.thread, id: deletedId, deletedAt: v2Now } }],
           ]),
         });
         const result = yield* interruptThreadTurn({
           threadId: v2ThreadId,
           commandId: CommandId.make("stop-background"),
-          backgroundChildThreadIds: [
-            childThreadId,
-            childThreadId,
-            nativeId,
-            unrelatedId,
-            v2ThreadId,
-          ],
         }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        if (parentStatus !== "completed") {
+          expect(projectionRequests).toEqual([v2ThreadId]);
+          expect(result.sequence).toBe(parentStatus === "running" ? 1 : 0);
+          expect(commands).toEqual(
+            parentStatus === "running"
+              ? [
+                  {
+                    type: "run.interrupt",
+                    commandId: "stop-background",
+                    threadId: v2ThreadId,
+                    runId: run.id,
+                    holdQueue: true,
+                  },
+                ]
+              : [],
+          );
+          return;
+        }
+        expect(projectionRequests).toEqual([
+          v2ThreadId,
+          childThreadId,
+          nativeId,
+          unrelatedId,
+          archivedId,
+          deletedId,
+        ]);
         expect(result.sequence).toBe(status === "completed" ? 0 : 1);
         expect(commands).toEqual(
           status === "completed"

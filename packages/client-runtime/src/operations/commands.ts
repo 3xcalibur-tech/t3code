@@ -183,8 +183,6 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
-  /** App-owned children named by the settled parent's waiting roster. */
-  readonly backgroundChildThreadIds?: ReadonlyArray<ThreadId>;
   readonly runId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
@@ -802,21 +800,26 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     }
   }
   let childSequence = 0;
-  if ((input.backgroundChildThreadIds?.length ?? 0) > 0 && parentProjection === undefined) {
-    parentProjection = yield* getProjection(input.threadId);
-  }
-  for (const childThreadId of new Set(input.backgroundChildThreadIds ?? [])) {
-    // Active original delegations remain owned by the parent's existing Stop
-    // path. Only resumed terminal tasks need a separate child interrupt.
-    if (
-      !parentProjection?.subagents.some(
-        (task) =>
-          task.origin === "app_owned" &&
-          task.childThreadId === childThreadId &&
-          ["completed", "failed", "interrupted", "cancelled"].includes(task.status),
-      )
+  // The original task stays terminal after a follow-up. Its child link is
+  // still authoritative; read the child's current run when stopping a settled
+  // parent's background work, without asking callers to supply the roster.
+  const resumedChildThreadIds =
+    parentProjection !== undefined &&
+    !parentProjection.runs.some((run) =>
+      ["preparing", "starting", "running"].includes(run.status),
+    ) &&
+    ["completed", "waiting", "failed", "interrupted", "cancelled"].includes(
+      parentProjection.runs.at(-1)?.status ?? "",
     )
-      continue;
+      ? parentProjection.subagents.flatMap((task) =>
+          task.origin === "app_owned" &&
+          task.childThreadId !== null &&
+          ["completed", "failed", "interrupted", "cancelled"].includes(task.status)
+            ? [task.childThreadId]
+            : [],
+        )
+      : [];
+  for (const childThreadId of new Set(resumedChildThreadIds)) {
     const child = yield* getProjection(childThreadId);
     if (
       child.thread.lineage.parentThreadId !== input.threadId ||

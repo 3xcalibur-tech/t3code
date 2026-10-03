@@ -684,15 +684,7 @@ function ThreadRouteContent(
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        ...(composer.interruptibleRunId === null
-          ? {
-              backgroundChildThreadIds: selectedThread.pendingBackgroundTasks.flatMap((task) =>
-                task.kind === "subagent" && task.childThreadId !== undefined
-                  ? [task.childThreadId]
-                  : [],
-              ),
-            }
-          : { runId: composer.interruptibleRunId }),
+        ...(composer.interruptibleRunId === null ? {} : { runId: composer.interruptibleRunId }),
       },
     });
   }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
