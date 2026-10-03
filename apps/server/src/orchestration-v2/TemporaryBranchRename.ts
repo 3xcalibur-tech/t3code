@@ -97,13 +97,30 @@ const make = Effect.gen(function* () {
         newBranch: generated.branch,
         ...(settings.branchNamingMode === "custom" ? { exactName: true } : {}),
       });
-      yield* threads.dispatch({
-        type: "thread.metadata.update",
-        commandId: CommandId.make(`${input.commandId}:branch-rename`),
-        threadId: input.threadId,
-        branch: renamed.branch,
-        worktreePath: cwd,
-      });
+      // The update is rejected if the thread moved to another worktree during
+      // generation. Any failed update puts the old name back, so the thread
+      // never points at a branch that no longer exists.
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`${input.commandId}:branch-rename`),
+          threadId: input.threadId,
+          branch: renamed.branch,
+          worktreePath: cwd,
+          expectedWorktreePath: cwd,
+        })
+        .pipe(
+          Effect.tapError(() =>
+            git
+              .renameBranch({
+                cwd,
+                oldBranch: renamed.branch,
+                newBranch: oldBranch,
+                exactName: true,
+              })
+              .pipe(Effect.ignore),
+          ),
+        );
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Thread worktree branch rename failed", {
