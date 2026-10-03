@@ -674,14 +674,25 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
-    if (!selectedThread || composer.interruptibleRunId === null) {
+    if (
+      !selectedThread ||
+      (composer.interruptibleRunId === null && selectedThread.pendingBackgroundTasks.length === 0)
+    ) {
       return;
     }
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        runId: composer.interruptibleRunId,
+        ...(composer.interruptibleRunId === null
+          ? {
+              backgroundChildThreadIds: selectedThread.pendingBackgroundTasks.flatMap((task) =>
+                task.kind === "subagent" && task.childThreadId !== undefined
+                  ? [task.childThreadId]
+                  : [],
+              ),
+            }
+          : { runId: composer.interruptibleRunId }),
       },
     });
   }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);

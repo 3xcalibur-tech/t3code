@@ -6848,7 +6848,12 @@ export default function ChatView(props: ChatViewProps) {
     setStoppingBackgroundWorkKey(requestKey);
     const result = await interruptThreadTurn({
       environmentId,
-      input: { threadId: activeThread.id },
+      input: {
+        threadId: activeThread.id,
+        backgroundChildThreadIds: activeBackgroundTasks.flatMap((task) =>
+          task.kind === "subagent" && task.childThreadId !== undefined ? [task.childThreadId] : [],
+        ),
+      },
     });
     // Acceptance does not confirm termination. Allow retry while the provider
     // finishes stopping the tasks or reports a failure.
@@ -6862,7 +6867,7 @@ export default function ChatView(props: ChatViewProps) {
         );
       }
     }
-  }, [activeThread, environmentId, interruptThreadTurn, setThreadError]);
+  }, [activeThread, activeBackgroundTasks, environmentId, interruptThreadTurn, setThreadError]);
   const onOpenRelatedThread = useCallback(
     (threadId: ThreadId) => {
       void navigate({

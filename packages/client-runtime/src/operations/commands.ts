@@ -5,12 +5,14 @@ import {
   CheckpointId,
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
+  isProviderNativeSubagentThread,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
   type MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2CreationSource,
   type PlanId,
   type ProjectId,
@@ -181,6 +183,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
+  /** App-owned children named by the settled parent's waiting roster. */
+  readonly backgroundChildThreadIds?: ReadonlyArray<ThreadId>;
   readonly runId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
@@ -771,8 +775,10 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   input: InterruptThreadTurnInput,
 ) {
   let runId = input.runId ?? (input.turnId as RunId | undefined);
+  let parentProjection: OrchestrationV2ThreadProjection | undefined;
   if (runId === undefined) {
     const projection = yield* getProjection(input.threadId);
+    parentProjection = projection;
     runId = projection.runs.findLast(
       (run) =>
         run.status === "preparing" ||
@@ -795,7 +801,72 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
       }
     }
   }
-  if (runId === undefined) return { sequence: 0 };
+  let childSequence = 0;
+  if ((input.backgroundChildThreadIds?.length ?? 0) > 0 && parentProjection === undefined) {
+    parentProjection = yield* getProjection(input.threadId);
+  }
+  for (const childThreadId of new Set(input.backgroundChildThreadIds ?? [])) {
+    // Active original delegations remain owned by the parent's existing Stop
+    // path. Only resumed terminal tasks need a separate child interrupt.
+    if (
+      !parentProjection?.subagents.some(
+        (task) =>
+          task.origin === "app_owned" &&
+          task.childThreadId === childThreadId &&
+          ["completed", "failed", "interrupted", "cancelled"].includes(task.status),
+      )
+    )
+      continue;
+    const child = yield* getProjection(childThreadId);
+    if (
+      child.thread.lineage.parentThreadId !== input.threadId ||
+      child.thread.lineage.relationshipToParent !== "subagent" ||
+      isProviderNativeSubagentThread(child.thread) ||
+      child.thread.deletedAt !== null ||
+      child.thread.archivedAt !== null
+    )
+      continue;
+    let childRun = child.runs.findLast((run) =>
+      ["preparing", "starting", "running", "waiting"].includes(run.status),
+    );
+    const latestChildRun = child.runs.at(-1);
+    if (
+      childRun === undefined &&
+      derivePendingBackgroundWork({
+        latestRun: latestChildRun,
+        providerThreads: child.providerThreads,
+        turnItems: child.turnItems,
+        activeProviderThreadId: child.thread.activeProviderThreadId,
+        runs: child.runs,
+      }).length > 0
+    )
+      childRun = latestChildRun;
+    const childCommandId = CommandId.make(
+      `${yield* allocateCommandId(input)}:child:${childThreadId}`,
+    );
+    if (childRun !== undefined) {
+      const result = yield* dispatch({
+        type: "run.interrupt",
+        commandId: childCommandId,
+        threadId: childThreadId,
+        runId: childRun.id,
+        holdQueue: true,
+      });
+      childSequence = result.sequence;
+    } else {
+      // A queued follow-up has no provider turn to interrupt yet.
+      for (const queued of child.runs.filter((run) => run.status === "queued")) {
+        const result = yield* dispatch({
+          type: "queued-run.cancel",
+          commandId: CommandId.make(`${childCommandId}:${queued.id}`),
+          threadId: childThreadId,
+          runId: queued.id,
+        });
+        childSequence = result.sequence;
+      }
+    }
+  }
+  if (runId === undefined) return { sequence: childSequence };
   return yield* dispatch({
     type: "run.interrupt",
     commandId: yield* allocateCommandId(input),

@@ -18,6 +18,7 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
+  ProviderDriverKind,
   type ProjectMutation,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -76,6 +77,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
+  readonly projections?: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection>;
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
 }) {
@@ -90,7 +92,7 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
     }) =>
       Effect.sync(() => {
         input.projectionRequests?.push(requestInput.threadId);
-        return input.projection ?? v2Projection;
+        return input.projections?.get(requestInput.threadId) ?? input.projection ?? v2Projection;
       }),
     [ORCHESTRATION_V2_WS_METHODS.launchThread]: (launchInput: OrchestrationV2ThreadLaunchInput) =>
       Effect.sync(() => {
@@ -576,6 +578,135 @@ describe("V2 environment commands", () => {
             ],
       );
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect.each(["running", "queued", "completed"] as const)(
+    "stops a %s inferred delegated follow-up when the parent has no projected background work",
+    (status) =>
+      Effect.gen(function* () {
+        const childThreadId = ThreadId.make("resumed-child");
+        const childRunId = RunId.make("follow-up");
+        const run = {
+          id: RunId.make("original-parent-run"),
+          threadId: v2ThreadId,
+          ordinal: 1,
+          providerInstanceId: v2Projection.thread.providerInstanceId,
+          modelSelection: v2Projection.thread.modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("original-message"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "completed" as const,
+          requestedAt: v2Now,
+          startedAt: v2Now,
+          completedAt: v2Now,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        const parent: OrchestrationV2ThreadProjection = {
+          ...v2Projection,
+          runs: [run],
+          turnItems: [],
+          providerThreads: [],
+          subagents: [
+            {
+              id: NodeId.make("delegation"),
+              threadId: v2ThreadId,
+              runId: run.id,
+              parentNodeId: NodeId.make("parent-node"),
+              origin: "app_owned",
+              createdBy: "agent",
+              driver: ProviderDriverKind.make("codex"),
+              providerInstanceId: run.providerInstanceId,
+              providerThreadId: null,
+              childThreadId,
+              nativeTaskRef: null,
+              prompt: "Original task",
+              title: "Worker",
+              model: "gpt-5.4",
+              status: "completed",
+              result: "Original result",
+              startedAt: v2Now,
+              completedAt: v2Now,
+              updatedAt: v2Now,
+            },
+          ],
+        };
+        const child: OrchestrationV2ThreadProjection = {
+          ...v2Projection,
+          thread: {
+            ...v2Projection.thread,
+            id: childThreadId,
+            creationSource: "mcp",
+            lineage: {
+              parentThreadId: v2ThreadId,
+              rootThreadId: v2ThreadId,
+              relationshipToParent: "subagent",
+            },
+          },
+          runs: [{ ...run, id: childRunId, threadId: childThreadId, status }],
+          turnItems: [],
+          providerThreads: [],
+        };
+        const nativeId = ThreadId.make("native-child");
+        const unrelatedId = ThreadId.make("unrelated-child");
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          projections: new Map([
+            [v2ThreadId, parent],
+            [childThreadId, child],
+            [
+              nativeId,
+              { ...child, thread: { ...child.thread, id: nativeId, creationSource: "provider" } },
+            ],
+            [
+              unrelatedId,
+              {
+                ...child,
+                thread: {
+                  ...child.thread,
+                  id: unrelatedId,
+                  lineage: { ...child.thread.lineage, parentThreadId: unrelatedId },
+                },
+              },
+            ],
+          ]),
+        });
+        const result = yield* interruptThreadTurn({
+          threadId: v2ThreadId,
+          commandId: CommandId.make("stop-background"),
+          backgroundChildThreadIds: [
+            childThreadId,
+            childThreadId,
+            nativeId,
+            unrelatedId,
+            v2ThreadId,
+          ],
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        expect(result.sequence).toBe(status === "completed" ? 0 : 1);
+        expect(commands).toEqual(
+          status === "completed"
+            ? []
+            : [
+                status === "queued"
+                  ? {
+                      type: "queued-run.cancel",
+                      commandId: "stop-background:child:resumed-child:follow-up",
+                      threadId: childThreadId,
+                      runId: childRunId,
+                    }
+                  : {
+                      type: "run.interrupt",
+                      commandId: "stop-background:child:resumed-child",
+                      threadId: childThreadId,
+                      runId: childRunId,
+                      holdQueue: true,
+                    },
+              ],
+        );
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
   it.effect(
