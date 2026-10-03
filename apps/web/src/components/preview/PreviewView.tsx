@@ -12,8 +12,8 @@ import {
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { resolveAddressBarInput } from "~/browser/addressBar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { normalizePreviewUrl } from "@t3tools/shared/preview";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
@@ -212,7 +212,7 @@ export function PreviewView({
   const handleSubmitUrl = useCallback(
     async (next: string) => {
       try {
-        const normalized = resolveAddressBarInput(next);
+        const normalized = normalizePreviewUrl(next);
         if (await navigateToResolvedUrl(normalized)) {
           recordVisitForThread(threadRef, normalized);
         }
@@ -239,18 +239,6 @@ export function PreviewView({
 
   const handleRefresh = useCallback(() => {
     if (previewBridge && runtimeTabId) void previewBridge.refresh(runtimeTabId);
-  }, [runtimeTabId]);
-
-  const handleZoomIn = useCallback(() => {
-    if (previewBridge && runtimeTabId) void previewBridge.zoomIn(runtimeTabId);
-  }, [runtimeTabId]);
-
-  const handleZoomOut = useCallback(() => {
-    if (previewBridge && runtimeTabId) void previewBridge.zoomOut(runtimeTabId);
-  }, [runtimeTabId]);
-
-  const handleResetZoom = useCallback(() => {
-    if (previewBridge && runtimeTabId) void previewBridge.resetZoom(runtimeTabId);
   }, [runtimeTabId]);
 
   const handleViewportChange = useCallback(
@@ -678,39 +666,47 @@ export function PreviewView({
     };
   }, [runtimeTabId]);
 
-  // `toggle-panel` is owned by ChatView's URL-aware handler regardless of
-  // whether the panel is currently mounted.
-  const previewActionHandlers: Record<Exclude<PreviewAction, "toggle-panel">, () => void> = {
-    refresh: handleRefresh,
-    "hard-refresh": () => {
-      if (previewBridge && runtimeTabId) void previewBridge.hardReload(runtimeTabId);
-    },
-    back: handleBack,
-    forward: handleForward,
-    "focus-url": () => setFocusUrlNonce((value) => (value ?? 0) + 1),
-    "zoom-in": handleZoomIn,
-    "zoom-out": handleZoomOut,
-    "reset-zoom": handleResetZoom,
-    "pick-element": () => {
-      if (tabId && !isUnreachable) handlePickElement();
-    },
-    "dev-tools": () => {
-      if (previewBridge && runtimeTabId && desktopOverlay?.hasWebContents) {
-        void previewBridge.openDevTools(runtimeTabId).catch(() => undefined);
-      }
-    },
-    "toggle-device-toolbar": handleToggleDeviceToolbar,
-  };
-  const previewActionHandlersRef = useRef(previewActionHandlers);
-  useEffect(() => {
-    previewActionHandlersRef.current = previewActionHandlers;
+  const onPreviewAction = useEffectEvent((action: PreviewAction) => {
+    // Shortcuts can arrive before a new tab's page exists; skip them then.
+    const callTab = (
+      operation: (bridge: NonNullable<typeof previewBridge>, tabId: string) => Promise<void>,
+    ) => {
+      if (!previewBridge || !runtimeTabId || !desktopOverlay?.hasWebContents) return;
+      void operation(previewBridge, runtimeTabId).catch(() => undefined);
+    };
+    switch (action) {
+      case "preview.refresh":
+        return callTab((bridge, id) => bridge.refresh(id));
+      case "preview.hardRefresh":
+        return callTab((bridge, id) => bridge.hardReload(id));
+      case "preview.back":
+        return callTab((bridge, id) => bridge.goBack(id));
+      case "preview.forward":
+        return callTab((bridge, id) => bridge.goForward(id));
+      case "preview.zoomIn":
+        return callTab((bridge, id) => bridge.zoomIn(id));
+      case "preview.zoomOut":
+        return callTab((bridge, id) => bridge.zoomOut(id));
+      case "preview.resetZoom":
+        return callTab((bridge, id) => bridge.resetZoom(id));
+      case "preview.devTools":
+        return callTab((bridge, id) => bridge.openDevTools(id));
+      case "preview.focusUrl":
+        return setFocusUrlNonce((value) => (value ?? 0) + 1);
+      case "preview.pickElement":
+        if (tabId && !isUnreachable) handlePickElement();
+        return;
+      case "preview.toggleDeviceToolbar":
+        return handleToggleDeviceToolbar();
+      // ChatView owns the panel, so it handles toggling even while no tab is mounted.
+      case "preview.toggle":
+        return;
+    }
   });
   // Subscribe only while visible, so hidden tabs never act on a shortcut.
   useEffect(() => {
     if (!visible) return;
-    return subscribePreviewAction((action) => {
-      if (action !== "toggle-panel") previewActionHandlersRef.current[action]();
-    });
+    return subscribePreviewAction((action) => onPreviewAction(action));
   }, [visible]);
 
   return (

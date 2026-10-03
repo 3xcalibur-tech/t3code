@@ -1546,57 +1546,27 @@ describe("right panel shortcuts", () => {
     assert.isNull(threadTraversalDirectionFromCommand(resolved));
   });
 
-  it("acts like a browser while a browser tab has focus", () => {
+  it("acts like a browser only while the panel has focus", () => {
     const resolve = (overrides: Partial<ShortcutEventLike>, context = panelContext) =>
       resolveShortcutCommand(event({ metaKey: true, ...overrides }), DEFAULT_RESOLVED_KEYBINDINGS, {
         platform: "MacIntel",
         context,
       });
-    assert.strictEqual(resolve({ key: "t" }), "preview.newTab");
     assert.strictEqual(resolve({ key: "l" }), "preview.focusUrl");
     assert.strictEqual(resolve({ key: "[", code: "BracketLeft" }), "preview.back");
+    // Typing in the composer leaves the browser and chat shortcuts alone.
+    const composerContext = {
+      ...panelContext,
+      previewFocus: false,
+      composerFocus: true,
+      editableFocus: true,
+    };
+    assert.isNull(resolve({ key: "l" }, composerContext));
     assert.strictEqual(
-      resolve({ key: "{", code: "BracketLeft", shiftKey: true }),
-      "rightPanel.previousTab",
+      resolve({ key: "[", code: "BracketLeft" }, composerContext),
+      "navigation.back",
     );
-    assert.strictEqual(resolve({ key: "1", code: "Digit1" }), "rightPanel.jump.1");
-    // Outside the panel the same chords keep their app meanings.
-    const appContext = { ...panelContext, previewFocus: false, previewOpen: false };
-    assert.strictEqual(resolve({ key: "[", code: "BracketLeft" }, appContext), "navigation.back");
-    assert.strictEqual(resolve({ key: "1", code: "Digit1" }, appContext), "thread.jump.1");
-    assert.strictEqual(resolve({ key: "t" }, appContext), "preview.newTab");
-  });
-
-  it.each([
-    { composerFocus: true, editableFocus: true },
-    { terminalFocus: true, terminalOpen: true },
-    { previewFocus: false, previewOpen: false },
-  ])("opens a browser tab from thread focus %j", (context) => {
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "MacIntel",
-        context,
-      }),
-      "preview.newTab",
-    );
-  });
-
-  it("focuses the address bar from the composer only while a browser is visible", () => {
-    const shortcut = event({ key: "l", metaKey: true });
-    const context = { composerFocus: true, editableFocus: true, previewFocus: false };
-    assert.strictEqual(
-      resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "MacIntel",
-        context: { ...context, previewOpen: true },
-      }),
-      "preview.focusUrl",
-    );
-    assert.isNull(
-      resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
-        platform: "MacIntel",
-        context: { ...context, previewOpen: false },
-      }),
-    );
+    assert.strictEqual(resolve({ key: "1", code: "Digit1" }, composerContext), "thread.jump.1");
   });
 
   it("keeps page navigation off panel tabs that are not browsers", () => {
@@ -1621,24 +1591,24 @@ describe("right panel shortcuts", () => {
     assert.isNull(rightPanelTabTarget([], null, "rightPanel.nextTab"));
   });
 
-  it("forwards only browser and panel chords out of a focused page", () => {
+  it("takes only browser-window chords from a focused page", () => {
     const forwarded = previewForwardedShortcuts(DEFAULT_RESOLVED_KEYBINDINGS, "MacIntel");
-    const has = (key: string, modifiers: { shiftKey?: boolean; ctrlKey?: boolean } = {}) =>
+    const has = (key: string, modifiers: { shiftKey?: boolean; altKey?: boolean } = {}) =>
       forwarded.some(
         (shortcut) =>
           shortcut.key === key &&
-          shortcut.metaKey === !modifiers.ctrlKey &&
-          shortcut.ctrlKey === (modifiers.ctrlKey ?? false) &&
+          shortcut.metaKey &&
           shortcut.shiftKey === (modifiers.shiftKey ?? false) &&
-          !shortcut.altKey,
+          shortcut.altKey === (modifiers.altKey ?? false),
       );
     assert.isTrue(has("l"));
     assert.isTrue(has("t"));
     assert.isTrue(has("w"));
     assert.isTrue(has("["));
-    assert.isTrue(has("tab", { ctrlKey: true }));
-    // App shortcuts the page may want for itself stay with the page.
+    assert.isTrue(forwarded.some((shortcut) => shortcut.key === "tab" && shortcut.ctrlKey));
+    // Panel toggles, surface openers, and other app shortcuts stay with the page.
     assert.isFalse(has("k"));
-    assert.isFalse(has("b"));
+    assert.isFalse(has("j", { shiftKey: true }));
+    assert.isFalse(has("f", { shiftKey: true, altKey: true }));
   });
 });

@@ -277,7 +277,6 @@ import { Dialog } from "./ui/dialog";
 import { WizardPopup } from "./ui/wizard";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import {
-  isRightPanelTabCommand,
   resolveShortcutCommand,
   rightPanelTabTarget,
   shortcutLabelForCommand,
@@ -2298,7 +2297,6 @@ export default function ChatView(props: ChatViewProps) {
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
     activePreviewMiniPlayer?.source ?? null,
     renderedRightPanelSurface,
-    rightPanelPresent,
   );
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const rightPanelMaximized =
@@ -5413,30 +5411,18 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef) {
       // Closing the panel on a live browser or device floats it instead of dropping it.
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
-        const snapshot = activePreviewState.sessions[activeRightPanelSurface.resourceId];
-        if (snapshot && snapshot.navStatus._tag !== "Idle") {
-          usePreviewMiniPlayerStore
-            .getState()
-            .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
-        } else {
-          usePreviewMiniPlayerStore.getState().close(activeThreadRef);
-        }
+        usePreviewMiniPlayerStore
+          .getState()
+          .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
       } else if (activeRightPanelSurface?.kind === "device" && activeRightPanelSurface.target) {
         usePreviewMiniPlayerStore
           .getState()
           .open(activeThreadRef, { kind: "device", ...activeRightPanelSurface.target });
-      } else if (activePreviewMiniPlayer?.source.kind === "browser") {
-        usePreviewMiniPlayerStore.getState().close(activeThreadRef);
       }
       setMaximizedRightPanelThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
-  }, [
-    activeRightPanelSurface,
-    activeThreadRef,
-    activePreviewState.sessions,
-    activePreviewMiniPlayer,
-  ]);
+  }, [activeRightPanelSurface, activeThreadRef]);
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {
@@ -5785,7 +5771,7 @@ export default function ChatView(props: ChatViewProps) {
   useEffect(
     () =>
       subscribePreviewAction((action) => {
-        if (action === "toggle-panel") togglePreviewPanel();
+        if (action === "preview.toggle") togglePreviewPanel();
       }),
     [togglePreviewPanel],
   );
@@ -7486,33 +7472,36 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
-      if (isRightPanelTabCommand(command)) {
-        const target = rightPanelTabTarget(
-          rightPanelState.surfaces,
-          activeRightPanelSurface?.id ?? null,
-          command,
-        );
-        if (!target) return;
+      const panelTab = rightPanelTabTarget(
+        rightPanelState.surfaces,
+        activeRightPanelSurface?.id ?? null,
+        command,
+      );
+      if (panelTab) {
         event.preventDefault();
         event.stopPropagation();
-        if (target.id !== activeRightPanelSurface?.id) activateRightPanelSurface(target);
+        if (panelTab.id !== activeRightPanelSurface?.id) activateRightPanelSurface(panelTab);
         // The outgoing surface may unmount with focus inside it; keep focus in
         // the panel so the next tab shortcut still applies. Terminals take
         // focus themselves.
-        if (target.kind !== "terminal") {
+        if (panelTab.kind !== "terminal") {
           window.requestAnimationFrame(() => {
             document
-              .querySelector<HTMLElement>(`[data-right-panel-tab="${CSS.escape(target.id)}"]`)
+              .querySelector<HTMLElement>(`[data-right-panel-tab="${CSS.escape(panelTab.id)}"]`)
               ?.focus();
           });
         }
         return;
       }
 
-      if (command === "preview.newTab") {
+      // Like a terminal app inside a terminal, like a browser everywhere else.
+      if (command === "rightPanel.newTab") {
         event.preventDefault();
         event.stopPropagation();
-        if (!event.repeat && isPreviewSupportedInRuntime()) createBrowserSurface();
+        if (event.repeat) return;
+        if (terminalFocusOwner === "right-panel") addTerminalSurface();
+        else if (terminalFocusOwner !== null) createNewTerminal();
+        else if (isPreviewSupportedInRuntime()) createBrowserSurface();
         return;
       }
 

@@ -407,8 +407,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       return () =>
         ipcRenderer.removeListener(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, wrappedListener);
     },
-    setForwardedShortcuts: (shortcuts) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL, { shortcuts }),
+    setForwardedShortcuts: (shortcuts, tabIds) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL, {
+        shortcuts,
+        tabIds,
+      }),
     onShortcut: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, shortcutEvent: unknown) => {
         if (typeof shortcutEvent !== "object" || shortcutEvent === null) return;

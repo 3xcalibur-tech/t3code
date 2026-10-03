@@ -4,11 +4,13 @@ import { useAtomValue } from "@effect/atom-react";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { FILL_PREVIEW_VIEWPORT } from "@t3tools/contracts";
 import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
 import { previewForwardedShortcuts } from "~/keybindings";
 import { useActivePreviewSessions } from "~/previewStateStore";
+import { selectActiveRightPanelSurface, useRightPanelStore } from "~/rightPanelStore";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { readPreviewAnnotationTheme } from "./annotationTheme";
@@ -83,17 +85,28 @@ export function ElectronBrowserHost() {
   }, []);
 
   // A focused page receives keys in its own process, out of reach of the
-  // app's window listeners. Main takes the browser and panel chords from it;
-  // replaying them on the focused webview runs the normal shortcut handlers
-  // with preview focus.
+  // app's window listeners. Main takes the browser-window chords from pages
+  // shown as a panel tab; replaying them on the focused webview runs the
+  // normal shortcut handlers with preview focus. The floating player is not a
+  // panel tab, so its page keeps every key.
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const panelTabIds = useRightPanelStore(
+    useShallow((state) =>
+      sessions.flatMap(({ threadRef, snapshot, runtimeTabId }) => {
+        const surface = selectActiveRightPanelSurface(state.byThreadKey, threadRef);
+        return surface?.kind === "preview" && surface.resourceId === snapshot.tabId
+          ? [runtimeTabId]
+          : [];
+      }),
+    ),
+  );
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview) return;
     void preview
-      .setForwardedShortcuts(previewForwardedShortcuts(keybindings))
+      .setForwardedShortcuts(previewForwardedShortcuts(keybindings), panelTabIds)
       .catch(() => undefined);
-  }, [keybindings]);
+  }, [keybindings, panelTabIds]);
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview) return;

@@ -2,31 +2,7 @@ import type {
   DesktopPreviewForwardedShortcut,
   DesktopPreviewShortcutEvent,
 } from "@t3tools/contracts";
-
-/** Physical punctuation and digit keys, matching the app's shortcut matcher. */
-const CODE_KEYS: Readonly<Record<string, string>> = {
-  Backquote: "`",
-  Backslash: "\\",
-  BracketLeft: "[",
-  BracketRight: "]",
-  Comma: ",",
-  Digit0: "0",
-  Digit1: "1",
-  Digit2: "2",
-  Digit3: "3",
-  Digit4: "4",
-  Digit5: "5",
-  Digit6: "6",
-  Digit7: "7",
-  Digit8: "8",
-  Digit9: "9",
-  Equal: "=",
-  Minus: "-",
-  Period: ".",
-  Quote: "'",
-  Semicolon: ";",
-  Slash: "/",
-};
+import { shortcutKeysFromEvent } from "@t3tools/shared/keybindings";
 
 type ShortcutInput = Pick<
   Electron.Input,
@@ -34,33 +10,23 @@ type ShortcutInput = Pick<
 >;
 
 /**
- * Keys a press can match: the layout key, plus the physical key when the
- * layout does not produce a Latin letter (non-Latin layouts, Option symbols).
- */
-const inputKeys = (input: ShortcutInput): ReadonlySet<string> => {
-  const layoutKey = input.key.toLowerCase();
-  if (/^[a-z]$/.test(layoutKey)) return new Set([layoutKey]);
-  const keys = new Set([layoutKey === "esc" ? "escape" : layoutKey]);
-  const letter = /^Key([A-Z])$/.exec(input.code)?.[1];
-  if (letter) keys.add(letter.toLowerCase());
-  const physicalKey = CODE_KEYS[input.code];
-  if (physicalKey) keys.add(physicalKey);
-  return keys;
-};
-
-/**
  * The event to hand back to the app when a press in a focused preview page is
  * one of the app's forwarded shortcuts, or null when the page keeps the key.
  * Presses without Command or Control are typing, so they always stay with the
- * page unless they are function keys.
+ * page.
  */
 export const forwardedShortcutEvent = (
   input: ShortcutInput,
   shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>,
+  platform: NodeJS.Platform,
 ): DesktopPreviewShortcutEvent | null => {
-  if (input.type !== "keyDown") return null;
-  if (!input.meta && !input.control && !/^F\d{1,2}$/.test(input.key)) return null;
-  const keys = inputKeys(input);
+  if (input.type !== "keyDown" || (!input.meta && !input.control)) return null;
+  // Windows reports AltGr as Control+Alt. A symbol typed with it is text, not
+  // a chord, matching the renderer's AltGraph rule.
+  if (platform !== "darwin" && input.control && input.alt && !/^[a-z0-9]$/i.test(input.key)) {
+    return null;
+  }
+  const keys = shortcutKeysFromEvent(input);
   const claimed = shortcuts.some(
     (shortcut) =>
       shortcut.metaKey === input.meta &&

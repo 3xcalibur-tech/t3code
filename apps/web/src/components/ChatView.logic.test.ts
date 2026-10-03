@@ -883,14 +883,8 @@ describe("agent browser close confirmation", () => {
 });
 
 describe("floating browser preview", () => {
-  it("hides floating browsers while any panel tab is visible", () => {
+  it("only hides the duplicate while the same browser is rendered in the panel", () => {
     expect(shouldRenderPreviewMiniPlayer(null, null)).toBe(false);
-    expect(shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "tab-1" }, null, false)).toBe(
-      true,
-    );
-    expect(shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "tab-1" }, null, true)).toBe(
-      false,
-    );
     expect(
       shouldRenderPreviewMiniPlayer(
         { kind: "browser", tabId: "tab-1" },
@@ -910,13 +904,13 @@ describe("floating browser preview", () => {
           resourceId: "tab-2",
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRenderPreviewMiniPlayer(
         { kind: "browser", tabId: "tab-1" },
         { id: "diff", kind: "diff" },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

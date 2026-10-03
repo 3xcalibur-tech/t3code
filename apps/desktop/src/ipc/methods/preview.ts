@@ -180,9 +180,12 @@ export const setForwardedShortcuts = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_SET_FORWARDED_SHORTCUTS_CHANNEL,
   payload: DesktopPreviewSetForwardedShortcutsInputSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.preview.setForwardedShortcuts")(function* ({ shortcuts }) {
+  handler: Effect.fn("desktop.ipc.preview.setForwardedShortcuts")(function* ({
+    shortcuts,
+    tabIds,
+  }) {
     const manager = yield* PreviewManager.PreviewManager;
-    yield* manager.setForwardedShortcuts(shortcuts);
+    yield* manager.setForwardedShortcuts(shortcuts, tabIds);
   }),
 });
 export const openDevTools = tabMethod(

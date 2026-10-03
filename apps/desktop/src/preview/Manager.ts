@@ -700,7 +700,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   let frameCaptureWindowOpen = true;
   let currentMainWindow: BrowserWindow | undefined;
   // Read synchronously from before-input-event, so it lives outside a Ref.
-  let forwardedShortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut> = [];
+  let forwarding: {
+    readonly shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>;
+    readonly tabIds: ReadonlySet<string>;
+  } = { shortcuts: [], tabIds: new Set() };
   let mainWindowCleanupFiber: Fiber.Fiber<void, never> | undefined;
   const tabLifecycleLocks = new Map<
     string,
@@ -2043,6 +2046,27 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     };
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
+      // The app's browser-window shortcuts belong to the app while a person
+      // has a panel tab's page focused; the floating player and native editing
+      // keep their keys. Agent input never has real focus. getFocusedWebContents()
+      // can return a hidden guest after switching tabs, so ask this guest.
+      const shortcut =
+        forwarding.tabIds.has(tabId) &&
+        wc.isFocused() &&
+        !isPreviewEditingShortcut(input, hostPlatform)
+          ? forwardedShortcutEvent(input, forwarding.shortcuts, hostPlatform)
+          : null;
+      if (shortcut) {
+        event.preventDefault();
+        runFork(
+          attempt({ operation: "shortcut.forward", tabId, webContentsId: wc.id }, () => {
+            const host = currentMainWindow?.webContents;
+            if (host && !host.isDestroyed()) host.send(PREVIEW_SHORTCUT_CHANNEL, shortcut);
+          }).pipe(Effect.ignore),
+        );
+        return;
+      }
+      // Reload stays native so it also works in the floating player.
       if (isPreviewRefreshShortcut(input)) {
         event.preventDefault();
         runFork(
@@ -2050,28 +2074,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             wc.reload(),
           ).pipe(Effect.ignore),
         );
-        return;
       }
-      // Browser and panel shortcuts belong to the app while a person has the
-      // page focused. Agent keystrokes and native editing stay with the page.
-      // getFocusedWebContents() can return a hidden guest after switching tabs;
-      // check the guest receiving this event instead.
-      if (
-        agentDrivenWebContents.has(wc) ||
-        !wc.isFocused() ||
-        isPreviewEditingShortcut(input, hostPlatform)
-      ) {
-        return;
-      }
-      const shortcut = forwardedShortcutEvent(input, forwardedShortcuts);
-      if (!shortcut) return;
-      event.preventDefault();
-      runFork(
-        attempt({ operation: "shortcut.forward", tabId, webContentsId: wc.id }, () => {
-          const host = currentMainWindow?.webContents;
-          if (host && !host.isDestroyed()) host.send(PREVIEW_SHORTCUT_CHANNEL, shortcut);
-        }).pipe(Effect.ignore),
-      );
     };
     yield* Scope.addFinalizer(
       scope,
@@ -4749,9 +4752,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAudioMuted,
     setColorScheme,
-    setForwardedShortcuts: (shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>) =>
+    setForwardedShortcuts: (
+      shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>,
+      tabIds: ReadonlyArray<string>,
+    ) =>
       Effect.sync(() => {
-        forwardedShortcuts = shortcuts;
+        forwarding = { shortcuts, tabIds: new Set(tabIds) };
       }),
     setMainWindow,
     startRecording,
@@ -5166,8 +5172,10 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       input: PreviewAutomationWaitForInput,
     ) => Effect.Effect<void, PreviewManagerError>;
+    /** Chords to take from focused pages, and the tabs whose pages give them up. */
     readonly setForwardedShortcuts: (
       shortcuts: ReadonlyArray<DesktopPreviewForwardedShortcut>,
+      tabIds: ReadonlyArray<string>,
     ) => Effect.Effect<void>;
     readonly subscribeStateChanges: (listener: Listener) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribePointerEvents: (

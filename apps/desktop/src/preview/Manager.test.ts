@@ -640,9 +640,10 @@ describe("PreviewManager", () => {
           } as never);
           yield* manager.createTab("tab_forwarded_keys");
           yield* manager.registerWebview("tab_forwarded_keys", 42);
-          yield* manager.setForwardedShortcuts([
-            { key: "l", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false },
-          ]);
+          yield* manager.setForwardedShortcuts(
+            [{ key: "l", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false }],
+            ["tab_forwarded_keys"],
+          );
           const beforeInput = preview.listeners.get("before-input-event")!;
           const preventDefault = vi.fn();
           const input = {

@@ -124,11 +124,15 @@ export function PreviewChromeRow({
 
   return (
     <div className="relative">
+      {/*
+        Focusable so Enter and Escape can leave the address bar without
+        leaving the panel, where its shortcuts still apply.
+      */}
       <form
         ref={toolbarRef}
         tabIndex={-1}
         onSubmit={submit}
-        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
+        className="flex h-10 min-h-10 outline-none shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
       >
         <div className="flex items-center gap-0.5" role="group" aria-label="Navigation">

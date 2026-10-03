@@ -95,15 +95,17 @@ export function agentControlledBrowserCloseConfirmation(
   ].join("\n");
 }
 
-/** Browser previews float only with the panel closed; devices hide their duplicate. */
+/** The floating player hides only while the same source is rendered in the panel. */
 export function shouldRenderPreviewMiniPlayer(
   source: PreviewMiniPlayerSource | null,
   renderedRightPanelSurface: RightPanelSurface | null,
-  rightPanelPresent = renderedRightPanelSurface !== null,
 ): boolean {
   if (source === null) return false;
   if (source.kind === "browser") {
-    return !rightPanelPresent;
+    return !(
+      renderedRightPanelSurface?.kind === "preview" &&
+      renderedRightPanelSurface.resourceId === source.tabId
+    );
   }
   return !(
     renderedRightPanelSurface?.kind === "device" &&

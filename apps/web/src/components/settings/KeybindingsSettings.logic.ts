@@ -9,9 +9,9 @@ import {
 import {
   DEFAULT_RESOLVED_KEYBINDINGS,
   parseKeybindingWhenExpression,
+  shortcutKeyFromEvent,
 } from "@t3tools/shared/keybindings";
 
-import { shortcutKeyFromEvent } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
 import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
 
@@ -323,11 +323,6 @@ const COMMAND_LABELS: Partial<Record<KeybindingCommand, string>> = {
   "rightPanel.openPullRequests": "Right Panel: Open Linked Pull Requests",
 };
 
-/** Command IDs keep their original group names; labels use the product's. */
-const COMMAND_GROUP_LABELS: Readonly<Record<string, string>> = {
-  preview: "Browser",
-};
-
 export function commandLabel(command: KeybindingCommand): string {
   const label = COMMAND_LABELS[command];
   if (label) return label;
@@ -339,9 +334,10 @@ export function commandLabel(command: KeybindingCommand): string {
   if (raw.startsWith("script.") && raw.endsWith(".run")) {
     return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;
   }
+  // `preview.*` IDs predate the product calling it the browser.
   const [group = "", ...rest] = raw.split(".");
   return [
-    COMMAND_GROUP_LABELS[group] ?? titleCaseCommandSegment(group),
+    group === "preview" ? "Browser" : titleCaseCommandSegment(group),
     ...rest.map(titleCaseCommandSegment),
   ].join(": ");
 }

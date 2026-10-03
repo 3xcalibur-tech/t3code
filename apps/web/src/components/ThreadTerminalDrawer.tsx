@@ -755,7 +755,7 @@ export function TerminalViewport({
           isTerminalSplitVerticalShortcut(event, currentKeybindings, options) ||
           isTerminalNewShortcut(event, currentKeybindings, options) ||
           isDiffToggleShortcut(event, currentKeybindings, options) ||
-          resolveShortcutCommand(event, currentKeybindings, options) === "preview.newTab"
+          resolveShortcutCommand(event, currentKeybindings, options) === "rightPanel.newTab"
         ) {
           return false;
         }

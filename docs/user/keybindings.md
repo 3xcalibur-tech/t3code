@@ -46,17 +46,28 @@ or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
 ## Right panel and browser
 
-From anywhere in a thread, `mod+t` opens a browser tab for that thread with the address bar focused. It does not open a browser from Settings. With a browser tab visible, `mod+l` focuses and selects its address from anywhere in the thread.
+`mod+t` opens a new tab: a terminal tab while a terminal has focus, and a browser
+tab with its address bar focused anywhere else in a thread.
 
-While the right panel has focus, it works like a browser window:
+While the right panel or a page in it has focus, it works like a browser window:
 
-- `mod+w` closes the tab. `ctrl+tab` and `ctrl+shift+tab`, or `mod+shift+]` and `mod+shift+[`, move between tabs. In the desktop app, `mod+1` through `mod+8` pick a tab and `mod+9` picks the last.
-- In a browser tab, `mod+[` and `mod+]` go back and forward, `mod+r` reloads, `mod+shift+r` reloads without the cache, `mod+shift+c` picks an element, `mod+shift+m` shows the device toolbar, and `mod+alt+i` opens DevTools.
+- `mod+l` focuses the address bar and `mod+w` closes the tab.
+- `ctrl+tab` and `ctrl+shift+tab`, or `mod+shift+]` and `mod+shift+[`, move
+  between tabs. In the desktop app, `mod+1` through `mod+8` pick a tab and
+  `mod+9` picks the last.
+- In a browser tab, `mod+[` and `mod+]` go back and forward, `mod+r` reloads,
+  `mod+shift+r` reloads without the cache, `mod+shift+c` picks an element,
+  `mod+shift+m` shows the device toolbar, and `mod+alt+i` opens DevTools.
 
-These work from inside the page too. Other shortcuts stay with the page, as they would in a browser.
+Other shortcuts stay with the page, as they would in a browser.
 
-Open a surface from anywhere: `` ctrl+shift+` `` for a terminal, `mod+alt+f` for files,
-`mod+alt+p` for the pull request, `mod+alt+shift+p` for linked pull requests, and `mod+alt+m` for a device. `mod+shift+j` toggles the browser and `mod+d` the diff.
+Outside a terminal, open a surface in the right panel with `` mod+alt+shift+` ``
+for a terminal, `mod+alt+shift+f` for files, `mod+alt+shift+p` for the pull
+request, `mod+alt+shift+l` for linked pull requests, and `mod+alt+shift+m` for a
+device. `mod+shift+j` toggles the browser and `mod+d` the diff.
+
+If a new default uses a shortcut you already assigned yourself, your binding
+stays and the new default is not added.
 
 ## iPad
 
@@ -108,9 +119,10 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
 `turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
-the keyboard. `previewFocus` is true while the right panel or a page in it has the
-keyboard, and `previewOpen` while its active tab is a browser. `isWeb` is true in a browser tab. `isDesktop` is true in the
-desktop app. Unknown keys evaluate to `false`.
+the keyboard. `previewFocus` is true while the right panel or a page in it has
+the keyboard, and `previewOpen` while its active tab is a browser. `isWeb` is
+true in a browser tab. `isDesktop` is true in the desktop app. Unknown keys
+evaluate to `false`.
 
 `mod+1` through `mod+9` jump to the first nine threads, and to models while the
 model picker is open. Those defaults use `isDesktop` so they do not steal the
@@ -153,7 +165,8 @@ through the pages you have visited, like a browser's back and forward buttons.
 In the desktop app, `mod+w` closes the focused terminal or the active right-panel
 tab. When nothing remains to close, it closes the window. In a browser, `mod+w`
 closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
-shortcut such as `alt+w`.
+shortcut such as `alt+w`. Browsers also keep `mod+t` and `ctrl+tab`, and the
+right-panel browser is only in the desktop app.
 
 Many defaults include `!terminalFocus` so they do not intercept terminal input.
 Keep that condition when remapping them if you want the same behavior.

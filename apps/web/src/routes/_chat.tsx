@@ -1,6 +1,5 @@
 import { Outlet, createFileRoute, redirect, useParams } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import type { KeybindingCommand } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useEffect, useMemo } from "react";
 
@@ -13,7 +12,7 @@ import { useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
-import { dispatchPreviewAction, type PreviewAction } from "../components/preview/previewActionBus";
+import { dispatchPreviewAction, isPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -29,20 +28,6 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
-
-const PREVIEW_COMMAND_ACTIONS = new Map<KeybindingCommand, PreviewAction>([
-  ["preview.refresh", "refresh"],
-  ["preview.hardRefresh", "hard-refresh"],
-  ["preview.back", "back"],
-  ["preview.forward", "forward"],
-  ["preview.focusUrl", "focus-url"],
-  ["preview.zoomIn", "zoom-in"],
-  ["preview.zoomOut", "zoom-out"],
-  ["preview.resetZoom", "reset-zoom"],
-  ["preview.pickElement", "pick-element"],
-  ["preview.devTools", "dev-tools"],
-  ["preview.toggleDeviceToolbar", "toggle-device-toolbar"],
-]);
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -164,7 +149,7 @@ function ChatRouteGlobalShortcuts() {
       if (command === "preview.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        if (!routeThreadRef) return;
+        if (!panelThreadRef) return;
         if (!isPreviewSupportedInRuntime()) {
           toastManager.add(
             stackedThreadToast({
@@ -175,17 +160,16 @@ function ChatRouteGlobalShortcuts() {
           );
           return;
         }
-        dispatchPreviewAction("toggle-panel");
+        dispatchPreviewAction("preview.toggle");
         return;
       }
 
       // The remaining preview commands act on the visible browser tab, which
       // only listens while it is showing.
-      const previewAction = command ? PREVIEW_COMMAND_ACTIONS.get(command) : undefined;
-      if (previewAction) {
+      if (command && isPreviewAction(command)) {
         event.preventDefault();
         event.stopPropagation();
-        dispatchPreviewAction(previewAction);
+        dispatchPreviewAction(command);
       }
     };
 
@@ -202,8 +186,8 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     previewOpen,
     primaryEnvironmentId,
+    panelThreadRef,
     projectGroupCount,
-    routeThreadRef,
     scratchEnvironmentId,
     selectedThreadKeysSize,
     startScratchThread,
