@@ -28,7 +28,6 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
   };
   const relinquish = (event: Event) => {
     if (
-      event instanceof KeyboardEvent &&
       event.target instanceof Node &&
       previous.contains(event.target) &&
       (previous.isContentEditable ||
@@ -37,29 +36,33 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
           ["text", "search", "email", "tel", "url", "password", "number"].includes(
             previous.type,
           ))) &&
-      (event.isComposing ||
-        ["Shift", "Control", "Alt", "Meta", "AltGraph", "Dead", "Process"].includes(event.key) ||
-        (!["Tab", "Escape"].includes(event.key) &&
-          (event.key !== "Enter" || event.shiftKey) &&
-          (!(event.metaKey || event.ctrlKey) ||
-            [
-              "a",
-              "c",
-              "x",
-              "v",
-              "z",
-              "y",
-              "Backspace",
-              "Delete",
-              "ArrowLeft",
-              "ArrowRight",
-              "ArrowUp",
-              "ArrowDown",
-              "Home",
-              "End",
-            ].includes(event.key.length === 1 ? event.key.toLowerCase() : event.key))))
+      (event.type === "pointerdown" ||
+        (event instanceof KeyboardEvent &&
+          (event.isComposing ||
+            ["Shift", "Control", "Alt", "Meta", "AltGraph", "Dead", "Process"].includes(
+              event.key,
+            ) ||
+            (!["Tab", "Escape"].includes(event.key) &&
+              (event.key !== "Enter" || event.shiftKey) &&
+              (!(event.metaKey || event.ctrlKey) ||
+                [
+                  "a",
+                  "c",
+                  "x",
+                  "v",
+                  "z",
+                  "y",
+                  "Backspace",
+                  "Delete",
+                  "ArrowLeft",
+                  "ArrowRight",
+                  "ArrowUp",
+                  "ArrowDown",
+                  "Home",
+                  "End",
+                ].includes(event.key.length === 1 ? event.key.toLowerCase() : event.key))))))
     ) {
-      // Typing and editing leave focus here. Keep protecting the user's next
+      // Typing and caret editing leave focus here. Keep protecting the user's next
       // characters from a delayed agent traversal; navigation still yields.
       return;
     }
@@ -88,10 +91,7 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
   const settle = () => {
     if (released || presses > 0) return;
     if (!previous.isConnected) release();
-    else if (!pendingTraversal) {
-      if (restoredGuest) stopKeepingFocus();
-      else release();
-    }
+    else if (!pendingTraversal) release();
   };
   const keepHostFocus = (event: Event) => {
     if (released) return;
@@ -109,7 +109,10 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
     if (target instanceof HTMLElement && target === document.activeElement && target !== previous) {
       restoredGuest = target.localName === "webview" ? target : null;
       previous.focus({ preventScroll: true });
-      pendingTraversal = false;
+      // Destination events cannot be paired with key receipts. Several queued
+      // traversals can arrive separately, so retain this one guard until human
+      // navigation or lifecycle cleanup, rather than ending it at the first.
+      pendingTraversal = true;
       settle();
     }
   };

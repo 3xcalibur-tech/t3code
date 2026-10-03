@@ -33,6 +33,7 @@ describe("runPreviewTabKeepingHostFocus", () => {
 
     expect(result).toBe("pressed");
     expect(document.activeElement).toBe(composer);
+    toolbar.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     toolbar.focus();
     expect(document.activeElement).toBe(toolbar);
   });
@@ -116,7 +117,8 @@ describe("runPreviewTabKeepingHostFocus", () => {
     });
     otherGuest.focus();
     expect(document.activeElement).toBe(composer);
-    // The pending transition is consumed; the guard no longer owns focus.
+    // Intentional human navigation, rather than a key receipt, ends protection.
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     otherGuest.focus();
     expect(document.activeElement).toBe(otherGuest);
   });
@@ -275,7 +277,33 @@ describe("runPreviewTabKeepingHostFocus", () => {
     expect(document.activeElement).toBe(composer);
   });
 
-  it.each([{ key: "Tab" }, { key: "k", metaKey: true }])(
+  it("preserves successive delayed destinations after multiple key receipts", async () => {
+    const composer = mount("textarea");
+    const firstGuest = mount("webview");
+    const secondGuest = mount("webview");
+    composer.focus();
+
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+    firstGuest.focus();
+    expect(document.activeElement).toBe(composer);
+    secondGuest.focus();
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it("preserves pending traversal protection when moving the composer caret", async () => {
+    const composer = mount("textarea");
+    const preview = mount("webview");
+    composer.focus();
+
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+    composer.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    preview.focus();
+
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it.each([{ key: "Tab" }, { key: "k", metaKey: true }, { key: "Escape" }, { key: "Enter" }])(
     "yields to keyboard navigation with $key",
     async (input) => {
       const composer = mount("textarea");
