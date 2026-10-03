@@ -363,7 +363,7 @@ export function modelPickerJumpIndexFromCommand(command: string): number | null 
   return index === -1 ? null : index;
 }
 
-export function rightPanelJumpIndexFromCommand(command: string): number | null {
+function rightPanelJumpIndexFromCommand(command: string): number | null {
   const index = RIGHT_PANEL_JUMP_KEYBINDING_COMMANDS.indexOf(
     command as RightPanelJumpKeybindingCommand,
   );
