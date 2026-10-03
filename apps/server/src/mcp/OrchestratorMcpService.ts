@@ -1184,6 +1184,24 @@ const make = Effect.gen(function* () {
       return task;
     });
 
+  // Agents may edit or delete only tasks that run with no more access than
+  // their own live thread. Otherwise a restricted agent could rewrite a task
+  // that the scheduler runs with full access.
+  const requireScheduledTaskAuthority = (
+    caller: OrchestrationV2ThreadProjection["thread"],
+    task: ScheduledTask,
+  ) =>
+    caller.archivedAt === null &&
+    runtimeModeRank(caller.runtimeMode) >= runtimeModeRank(task.runtimeMode) &&
+    interactionModeRank(caller.interactionMode) >= interactionModeRank(task.interactionMode)
+      ? Effect.void
+      : Effect.fail(
+          failure(
+            "capability_denied",
+            `Scheduled task ${task.id} needs a live calling thread with at least its runtime and interaction modes.`,
+          ),
+        );
+
   return OrchestratorMcpService.of({
     scheduleTask: (scope, input) =>
       Effect.gen(function* () {
@@ -1253,6 +1271,7 @@ const make = Effect.gen(function* () {
           parent.thread.projectId,
           input.scheduledTaskId,
         );
+        yield* requireScheduledTaskAuthority(parent.thread, existing);
         const threadId =
           input.bindToCurrentThread === undefined
             ? existing.threadId
@@ -1298,6 +1317,7 @@ const make = Effect.gen(function* () {
           parent.thread.projectId,
           input.scheduledTaskId,
         );
+        yield* requireScheduledTaskAuthority(parent.thread, existing);
         yield* scheduledTasks
           .delete({ id: existing.id })
           .pipe(

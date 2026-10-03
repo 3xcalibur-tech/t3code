@@ -1118,6 +1118,7 @@ it.effect("renames a temporary t3code/<hash> branch off the provisioning critica
           Effect.andThen(Deferred.await(allowBranchName)),
           Effect.as({ branch: "generated-branch" }),
         ),
+      serverSettings: { worktreeSubmodules: "top-level" },
     });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
@@ -1132,6 +1133,7 @@ it.effect("renames a temporary t3code/<hash> branch off the provisioning critica
       );
       yield* Deferred.await(branchNameStarted);
       assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.newRefName, "t3code/abcd1234");
+      assert.equal(harness.createWorktree.mock.calls[0]?.[1]?.submodules, "top-level");
       yield* waitUntil(() =>
         threads
           .getThreadProjection(launched.threadId)

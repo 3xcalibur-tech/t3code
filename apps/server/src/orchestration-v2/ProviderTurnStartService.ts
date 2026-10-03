@@ -1,5 +1,6 @@
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
   type OrchestrationV2DomainEvent,
@@ -23,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import {
@@ -95,6 +97,7 @@ export const layer: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunExecutionService.RunExecutionServiceV2
   | RuntimePolicy.RuntimePolicyV2
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -109,6 +112,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
 
     // These callbacks outlive startup while a run drains background work. Build
     // them outside start's scope so they cannot retain its full thread history.
@@ -470,13 +474,22 @@ export const layer: Layer.Layer<
               worktreePath,
               branch,
             });
+            // Best effort like the rest of this recovery: a settings read
+            // failure falls back to the checkout's t3.json.
+            const submodules = yield* serverSettings.getSettings.pipe(
+              Effect.map(
+                (settings) =>
+                  resolveProjectSettings(settings, projection.thread.projectId).settings
+                    .worktreeSubmodules,
+              ),
+              Effect.orElseSucceed(() => null),
+            );
             yield* gitWorkflow.pruneWorktrees({ cwd: project.workspaceRoot }).pipe(
               Effect.andThen(
-                gitWorkflow.createWorktree({
-                  cwd: project.workspaceRoot,
-                  refName: branch,
-                  path: worktreePath,
-                }),
+                gitWorkflow.createWorktree(
+                  { cwd: project.workspaceRoot, refName: branch, path: worktreePath },
+                  { submodules },
+                ),
               ),
               Effect.catchCause((cause) =>
                 Cause.hasInterruptsOnly(cause)

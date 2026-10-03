@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/Services/ProviderAuthService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
@@ -130,6 +131,7 @@ it("does not commit running state when inherited background routing cannot be re
         }),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
+        ServerSettings.ServerSettingsService.layerTest({ worktreeSubmodules: "none" }),
       ),
     ),
   );
@@ -142,11 +144,14 @@ it("does not commit running state when inherited background routing cannot be re
     expect(error._tag).toBe("ProviderTurnStartError");
     expect(projectionReadCount).toBe(2);
     expect(pruneWorktrees).toHaveBeenCalledWith({ cwd: "/tmp/provider-turn-start-project" });
-    expect(createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/provider-turn-start-project",
-      refName: "feature/restore",
-      path: "/tmp/missing-provider-turn-start-worktree",
-    });
+    expect(createWorktree).toHaveBeenCalledWith(
+      {
+        cwd: "/tmp/provider-turn-start-project",
+        refName: "feature/restore",
+        path: "/tmp/missing-provider-turn-start-worktree",
+      },
+      { submodules: "none" },
+    );
     expect(writeIfRunCurrent).not.toHaveBeenCalled();
     expect(startRootRun).not.toHaveBeenCalled();
   }).pipe(Effect.provide(layer), Effect.runPromise);
@@ -493,6 +498,7 @@ function makeLocalCommandHarness(input: {
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({
           resolve: () => Effect.succeed({} as never),
         }),
+        ServerSettings.ServerSettingsService.layerTest(),
       ),
     ),
   );

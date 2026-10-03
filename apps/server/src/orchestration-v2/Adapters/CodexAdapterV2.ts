@@ -2420,6 +2420,30 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             });
           });
 
+        // Settled subagents stay registered because Codex can resume them
+        // later, and each keeps its parent turn input alive. Once the parent
+        // thread unloads, no resume reaches this runtime, so forget them.
+        const forgetSettledSubagents = Effect.fnUntraced(function* (
+          providerThreadId: OrchestrationV2ProviderThread["id"],
+        ) {
+          const settled = Array.from(yield* Ref.get(subagentThreads))
+            .filter(
+              ([, subagent]) =>
+                subagent.task.status !== "pending" &&
+                subagent.task.status !== "running" &&
+                approvalOwnerCodexTurn(subagent.parentContext).owner.providerThread.id ===
+                  providerThreadId,
+            )
+            .map(([nativeThreadId]) => nativeThreadId);
+          if (settled.length === 0) return;
+          yield* Ref.update(subagentThreads, (current) => {
+            const updated = new Map(current);
+            for (const nativeThreadId of settled) updated.delete(nativeThreadId);
+            return updated;
+          });
+          for (const nativeThreadId of settled) subagentModels.delete(nativeThreadId);
+        });
+
         const updateSubagentModel = Effect.fnUntraced(function* (
           nativeThreadId: string,
           value: string | null,
@@ -5630,6 +5654,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             Effect.gen(function* () {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              yield* forgetSettledSubagents(unloadInput.providerThread.id);
             }).pipe(
               Effect.mapError((cause) =>
                 cause._tag === "ProviderAdapterProtocolError"

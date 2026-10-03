@@ -2,22 +2,28 @@ import { assert, describe, it, vi } from "@effect/vitest";
 import {
   type ChatAttachment,
   CommandId,
+  EventId,
   MessageId,
+  type OrchestrationV2AppThread,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TextGenerationError,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -59,6 +65,10 @@ function makeHarness(
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
+  const renameBranch = vi.fn(
+    (input: { readonly cwd: string; readonly oldBranch: string; readonly newBranch: string }) =>
+      Effect.succeed({ branch: input.newBranch }),
+  );
   const projectedProjects = Layer.mock(ProjectStore.ProjectStoreV2)({
     get: (requestedProjectId) =>
       Effect.succeed(
@@ -85,18 +95,44 @@ function makeHarness(
       Layer.mergeAll(
         threadManagement,
         projectedProjects,
-        Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
+        Layer.mock(TextGeneration.TextGeneration)({
+          generateThreadTitle,
+          generateBranchName: () => Effect.succeed({ branch: "fix-title" }),
+        }),
+        Layer.mock(GitWorkflow.GitWorkflowService)({ renameBranch }),
         ServerSettings.layerTest({}),
       ),
     ),
   );
   return {
-    layer: Layer.mergeAll(threadManagement, titleRegeneration, outbox, database),
+    layer: Layer.mergeAll(orchestrator, threadManagement, titleRegeneration, outbox, database),
     generateThreadTitle,
+    renameBranch,
   };
 }
 
-function createThread(input: { readonly command: string; readonly thread: string }) {
+// Waits on the stored event stream, so a change that already landed counts.
+function awaitThreadUpdate(
+  threadId: ThreadId,
+  predicate: (thread: OrchestrationV2AppThread) => boolean,
+) {
+  return Effect.gen(function* () {
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    return yield* threads.streamStoredEventsFrom({ threadId, afterSequence: 0 }).pipe(
+      Stream.filter(
+        ({ event }) => event.type === "thread.metadata-updated" && predicate(event.payload),
+      ),
+      Stream.runHead,
+    );
+  });
+}
+
+function createThread(input: {
+  readonly command: string;
+  readonly thread: string;
+  readonly branch?: string;
+  readonly worktreePath?: string;
+}) {
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const threadId = ThreadId.make(input.thread);
@@ -109,8 +145,8 @@ function createThread(input: { readonly command: string; readonly thread: string
       modelSelection,
       runtimeMode: "full-access",
       interactionMode: "default",
-      branch: null,
-      worktreePath: null,
+      branch: input.branch ?? null,
+      worktreePath: input.worktreePath ?? null,
       createdBy: "user",
       creationSource: "web",
     });
@@ -433,6 +469,87 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Seed title");
         assert.isNotOk(projection.thread.titleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+});
+
+describe("ThreadTitleRegenerationService first message", () => {
+  it.effect("names a temporary worktree branch from the first message", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({
+          command: "create:branch",
+          thread: "thread:branch",
+          branch: "t3code/1a2b3c4d",
+          worktreePath: "/repo/.t3/worktrees/branch",
+        });
+        yield* dispatchUserMessage({ command: "message:branch", threadId, text: "Fix the title" });
+        const requestId = yield* armRegeneration({ command: "title:branch", threadId });
+        yield* service.execute({
+          threadId,
+          requestId,
+          kind: { type: "initial", messageId: MessageId.make("message:branch:message") },
+        });
+
+        const renamed = yield* awaitThreadUpdate(
+          threadId,
+          (thread) => thread.branch === "fix-title",
+        );
+        assert.isTrue(Option.isSome(renamed));
+        assert.deepStrictEqual(harness.renameBranch.mock.calls, [
+          [
+            {
+              cwd: "/repo/.t3/worktrees/branch",
+              oldBranch: "t3code/1a2b3c4d",
+              newBranch: "fix-title",
+            },
+          ],
+        ]);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("refines a generic first title once the first run completes", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        generateTitle: () => Effect.succeed({ title: "Fix this", needsRefinement: true }),
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({ command: "create:refine", thread: "thread:refine" });
+        yield* dispatchUserMessage({ command: "message:refine", threadId, text: "fix this" });
+        const requestId = yield* armRegeneration({ command: "title:refine", threadId });
+        yield* service.execute({
+          threadId,
+          requestId,
+          kind: { type: "initial", messageId: MessageId.make("message:refine:message") },
+        });
+        assert.equal((yield* threads.getThreadProjection(threadId)).thread.title, "Fix this");
+
+        const { runs } = yield* threads.getThreadProjection(threadId);
+        const run = runs[0]!;
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make("event:refine:run-completed"),
+              type: "run.updated",
+              threadId,
+              occurredAt: yield* DateTime.now,
+              payload: { ...run, status: "completed" },
+            },
+          ],
+        });
+
+        const refinement = yield* awaitThreadUpdate(
+          threadId,
+          (thread) => thread.titleRegeneration?.requestId === `${requestId}:title-refine`,
+        );
+        assert.isTrue(Option.isSome(refinement));
       }).pipe(Effect.provide(harness.layer));
     }),
   );

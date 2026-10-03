@@ -9,14 +9,18 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
 import * as ProjectStore from "./ProjectStore.ts";
+import { makeTemporaryBranchRename } from "./TemporaryBranchRename.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
 import { formatThreadTitleContext } from "../textGeneration/ThreadTitleContext.ts";
@@ -43,6 +47,81 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
+  const renameTemporaryBranch = yield* makeTemporaryBranchRename;
+  const backgroundScope = yield* Scope.make("sequential");
+  yield* Effect.addFinalizer(() => Scope.close(backgroundScope, Exit.void));
+
+  // A thread launched without a first message still has its temporary
+  // worktree branch; its first message names it.
+  const renameBranchForFirstMessage = (input: {
+    readonly threadId: ThreadId;
+    readonly requestId: CommandId;
+    readonly messageId: MessageId;
+  }) =>
+    threads.getThreadRecords(input.threadId, ["messages"], { messageIds: [input.messageId] }).pipe(
+      Effect.flatMap((projection) => {
+        const message = projection.messages.find((candidate) => candidate.id === input.messageId);
+        return message === undefined
+          ? Effect.void
+          : renameTemporaryBranch({
+              threadId: input.threadId,
+              projectId: projection.thread.projectId,
+              commandId: input.requestId,
+              branch: projection.thread.branch,
+              worktreePath: projection.thread.worktreePath,
+              message,
+            });
+      }),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Thread worktree branch rename failed", {
+          threadId: input.threadId,
+          cause,
+        }),
+      ),
+    );
+
+  // A generic first title ("Fix this") is refined once, after the first run
+  // completes, from the whole conversation. Replaying the thread's events from
+  // the start also sees a run that already ended. Any title change in the
+  // meantime, such as a user rename, cancels the refinement.
+  const refineAfterFirstRun = (input: {
+    readonly threadId: ThreadId;
+    readonly requestId: CommandId;
+    readonly title: string;
+  }) =>
+    threads.streamStoredEventsFrom({ threadId: input.threadId, afterSequence: 0 }).pipe(
+      Stream.filter(
+        ({ event }) =>
+          event.type === "run.updated" &&
+          event.payload.ordinal === 1 &&
+          ThreadManagementService.isTerminalRunStatus(event.payload.status),
+      ),
+      Stream.runHead,
+      Effect.flatMap((ended) =>
+        Option.isNone(ended) ||
+        ended.value.event.type !== "run.updated" ||
+        ended.value.event.payload.status !== "completed"
+          ? Effect.void
+          : threads.getThreadShell(input.threadId).pipe(
+              Effect.flatMap((thread) =>
+                thread === null || thread.title !== input.title || thread.titleRegeneration
+                  ? Effect.void
+                  : threads.dispatch({
+                      type: "thread.metadata.update",
+                      commandId: CommandId.make(`${input.requestId}:title-refine`),
+                      threadId: input.threadId,
+                      regenerateTitle: true,
+                    }),
+              ),
+            ),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Thread title refinement failed", {
+          threadId: input.threadId,
+          cause,
+        }),
+      ),
+    );
 
   const complete = (input: {
     readonly threadId: ThreadId;
@@ -62,9 +141,21 @@ const make = Effect.gen(function* () {
   const execute: ThreadTitleRegenerationService["Service"]["execute"] = Effect.fn(
     "ThreadTitleRegenerationService.execute",
   )(function* (input) {
+    if (input.kind.type === "initial") {
+      yield* renameBranchForFirstMessage({
+        threadId: input.threadId,
+        requestId: input.requestId,
+        messageId: input.kind.messageId,
+      }).pipe(Effect.forkIn(backgroundScope));
+    }
     const outcome:
       | { readonly type: "stale" }
-      | { readonly type: "complete"; readonly title?: string } = yield* Effect.gen(function* () {
+      | {
+          readonly type: "complete";
+          readonly title?: string;
+          /** Set when a generic initial title should be refined after the first run. */
+          readonly refineTitle?: string;
+        } = yield* Effect.gen(function* () {
       const projection = yield* threads.getThreadRecords(
         input.threadId,
         ["messages"],
@@ -115,10 +206,19 @@ const make = Effect.gen(function* () {
         modelSelection: settings.textGenerationModelSelection,
       });
       const generatedTitle = result.title.trim();
-      return generatedTitle === "New thread" ||
+      const title =
+        generatedTitle === "New thread" ||
         (input.kind.type === "regenerate" && generatedTitle === projection.thread.title.trim())
-        ? { type: "complete" as const }
-        : { type: "complete" as const, title: result.title };
+          ? undefined
+          : result.title;
+      const refine =
+        input.kind.type === "initial" &&
+        (result.needsRefinement === true || generatedTitle === "New thread");
+      return {
+        type: "complete" as const,
+        ...(title === undefined ? {} : { title }),
+        ...(refine ? { refineTitle: title ?? projection.thread.title } : {}),
+      };
     }).pipe(
       Effect.retry({
         times: input.kind.type === "initial" ? 2 : 0,
@@ -142,6 +242,13 @@ const make = Effect.gen(function* () {
       ...input,
       ...(outcome.title === undefined ? {} : { title: outcome.title }),
     });
+    if (outcome.refineTitle !== undefined) {
+      yield* refineAfterFirstRun({
+        threadId: input.threadId,
+        requestId: input.requestId,
+        title: outcome.refineTitle,
+      }).pipe(Effect.forkIn(backgroundScope));
+    }
   });
 
   return ThreadTitleRegenerationService.of({ execute });

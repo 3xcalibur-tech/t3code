@@ -374,6 +374,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
         }),
         runExecutionServiceProvided,
         runtimeLayer,
+        serverSettingsLayer,
       ),
     ),
   );
