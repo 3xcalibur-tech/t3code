@@ -41,12 +41,17 @@ export interface ThreadManagementProvenance {
   readonly creationSource: OrchestrationV2CreationSource;
 }
 
+/** Re-stamps who created a client-dispatched command; client values are not trusted. */
 export function withCreationProvenance(
   command: OrchestrationV2Command,
   provenance: ThreadManagementProvenance,
 ): OrchestrationV2Command {
   switch (command.type) {
-    case "thread.create":
+    case "thread.create": {
+      // Only the server's agent launch paths name a launcher thread.
+      const { launchedByThreadId: _launchedByThreadId, ...create } = command;
+      return { ...create, ...provenance };
+    }
     case "message.dispatch":
     case "thread.fork":
     case "thread.merge_back":
