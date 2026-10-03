@@ -7495,13 +7495,17 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       // Like a terminal app inside a terminal, like a browser everywhere else.
-      if (command === "rightPanel.newTab") {
+      // Without either, the chord keeps its native meaning.
+      if (
+        command === "rightPanel.newTab" &&
+        (terminalFocusOwner !== null || isPreviewSupportedInRuntime())
+      ) {
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
         if (terminalFocusOwner === "right-panel") addTerminalSurface();
         else if (terminalFocusOwner !== null) createNewTerminal();
-        else if (isPreviewSupportedInRuntime()) createBrowserSurface();
+        else createBrowserSurface();
         return;
       }
 

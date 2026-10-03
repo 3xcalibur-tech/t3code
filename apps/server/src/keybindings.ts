@@ -120,6 +120,20 @@ function hasSameShortcutContext(left: KeybindingRule, right: KeybindingRule): bo
 }
 
 /**
+ * A binding recorded on a non-Latin layout stores that layout's letter, but
+ * presses also match the physical Latin letter. Without the layout, any
+ * non-Latin letter may share a key with any Latin one.
+ */
+function canShareKey(left: string, right: string): boolean {
+  if (left === right) return true;
+  const isLatinLetter = (key: string) => /^[a-z]$/.test(key);
+  const isOtherLetter = (key: string) => /^\p{L}$/u.test(key) && !isLatinLetter(key);
+  return (
+    (isLatinLetter(left) && isOtherLetter(right)) || (isOtherLetter(left) && isLatinLetter(right))
+  );
+}
+
+/**
  * Whether two rules can fire on the same key press on some platform, whatever
  * their `when`. `mod` is Command on macOS and Control elsewhere.
  */
@@ -128,7 +142,7 @@ function canShareChord(left: KeybindingRule, right: KeybindingRule): boolean {
   const rightShortcut = parseKeybindingShortcut(right.key);
   if (!leftShortcut || !rightShortcut) return false;
   if (
-    leftShortcut.key !== rightShortcut.key ||
+    !canShareKey(leftShortcut.key, rightShortcut.key) ||
     leftShortcut.shiftKey !== rightShortcut.shiftKey ||
     leftShortcut.altKey !== rightShortcut.altKey
   ) {

@@ -347,6 +347,24 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("treats a chord recorded on a non-Latin layout as the user's", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      // Cyrillic е sits on the physical T key.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+е", command: "script.custom-action.run" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(persisted.some((entry) => entry.command === "rightPanel.newTab"));
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("upserts custom keybindings to configured path", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
