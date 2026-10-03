@@ -129,6 +129,31 @@ describe("thread relationships", () => {
     ]);
   });
 
+  it("links a launched top-level thread to the agent thread that started it", () => {
+    const launcher = ThreadId.make("launcher");
+    const launched = ThreadId.make("launched");
+    const graph = deriveThreadRelationshipGraph({
+      threads: [
+        { id: launcher, status: "completed", lineage: { parentThreadId: null } },
+        {
+          id: launched,
+          status: "running",
+          lineage: { parentThreadId: null, launchedByThreadId: launcher },
+        },
+      ] as never,
+      projection: null,
+    });
+    expect(immediateThreadRelationships(graph, launcher)).toEqual([
+      expect.objectContaining({
+        threadId: launched,
+        edge: expect.objectContaining({ kind: "launch", status: "running" }),
+      }),
+    ]);
+    const [fromLaunched] = immediateThreadRelationships(graph, launched);
+    expect(fromLaunched?.threadId).toBe(launcher);
+    expect(threadRelationshipRowStatus(graph, fromLaunched!)).toBe("completed");
+  });
+
   it("combines subagent and transfer edges with archived shell state", () => {
     const parent = ThreadId.make("thread-parent");
     const child = ThreadId.make("thread-child");

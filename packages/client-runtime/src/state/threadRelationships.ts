@@ -5,7 +5,8 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer";
+/** `launch` links an agent thread to a top-level thread it started. */
+export type ThreadRelationshipKind = "parent" | "fork" | "subagent" | "transfer" | "launch";
 
 export interface ThreadRelationshipNode {
   readonly threadId: ThreadId;
@@ -75,6 +76,15 @@ export function deriveThreadRelationshipGraph(input: {
   };
 
   for (const thread of threads) {
+    const status = thread.activityRunStatus ?? thread.status;
+    if (thread.lineage.launchedByThreadId !== undefined) {
+      addEdge({
+        sourceThreadId: thread.lineage.launchedByThreadId,
+        targetThreadId: thread.id,
+        kind: "launch",
+        status,
+      });
+    }
     const parentThreadId =
       thread.forkedFrom?.type === "run"
         ? thread.forkedFrom.threadId
@@ -84,7 +94,7 @@ export function deriveThreadRelationshipGraph(input: {
       sourceThreadId: parentThreadId,
       targetThreadId: thread.id,
       kind: thread.lineage.relationshipToParent === "subagent" ? "subagent" : "fork",
-      status: thread.activityRunStatus ?? thread.status,
+      status,
     });
   }
 

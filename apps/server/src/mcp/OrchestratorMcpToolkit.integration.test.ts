@@ -1874,6 +1874,7 @@ describe("orchestrator MCP toolkit", () => {
               parentThreadId: null,
               relationshipToParent: null,
               rootThreadId: emptyThread.threadId,
+              launchedByThreadId: parentThreadId,
             });
             expect(emptyProjection.thread).toMatchObject({
               createdBy: "agent",

@@ -171,6 +171,7 @@ type AppThreadLineage = {
   parentThreadId: ThreadId | null;
   relationshipToParent: "fork" | "subagent" | null;
   rootThreadId: ThreadId;
+  launchedByThreadId?: ThreadId;
 };
 ```
 

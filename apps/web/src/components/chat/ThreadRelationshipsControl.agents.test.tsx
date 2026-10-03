@@ -495,3 +495,51 @@ it.each(["source", "target"])(
     }
   },
 );
+
+it("counts running launched threads and files finished ones under previous agents", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const environmentId = EnvironmentId.make("test");
+  const launcher = {
+    id: "launcher",
+    title: "Tech debt plan",
+    status: "completed",
+    lineage: { parentThreadId: null, relationshipToParent: null },
+  };
+  const launched = {
+    id: "launched",
+    title: "Wave 1A",
+    status: "running",
+    lineage: { parentThreadId: null, relationshipToParent: null, launchedByThreadId: "launcher" },
+  };
+  state.projection = {
+    thread: { ...launcher, activeProviderThreadId: null },
+    runs: [],
+    providerThreads: [],
+    providerSessions: [],
+    contextTransfers: [],
+    subagents: [],
+  };
+  state.shells = [launcher, launched].map((source) => ({ environmentId, source }));
+  const panel = (
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={ThreadId.make("launcher")} />
+  );
+  await act(async () => {
+    renderer = create(panel);
+  });
+  const visibleText = () =>
+    renderer.root
+      .findAll((node) => typeof node.type === "string")
+      .flatMap((node) => node.children.filter((child) => typeof child === "string"))
+      .join(" ");
+  expect(visibleText()).toContain("Lineage · 1 running");
+  expect(visibleText()).toContain("Wave 1A");
+
+  state.shells = [launcher, { ...launched, status: "completed" }].map((source) => ({
+    environmentId,
+    source,
+  }));
+  await act(async () => renderer.update(cloneElement(panel)));
+  expect(visibleText()).not.toContain("running");
+  expect(visibleText()).toContain("Previous agents");
+  expect(visibleText()).not.toContain("Wave 1A");
+});

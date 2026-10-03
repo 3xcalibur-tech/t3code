@@ -231,8 +231,11 @@ type AppThreadLineage = {
   parentThreadId: ThreadId | null;
   relationshipToParent: "fork" | "subagent" | null;
   rootThreadId: ThreadId;
+  launchedByThreadId?: ThreadId;
 };
 ```
+
+`launchedByThreadId` names the agent thread that started a top-level thread with `t3_thread_launch` or `create_threads`. It is not a parent: the thread keeps its own root, stays in thread lists, and has no merge-back. The launcher's Lineage still shows it with live status.
 
 Operational transfer details should live in `ContextTransfer`, not directly on `AppThread`, because a thread can participate in many transfers:
 

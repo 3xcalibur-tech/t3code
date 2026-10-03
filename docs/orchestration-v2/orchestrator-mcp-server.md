@@ -298,7 +298,8 @@ type CreateThreadsInput = {
 
 Each entry independently resolves provider, model, and modes. The new threads
 inherit the parent's project, branch, and worktree path, but they have no
-sub-agent lineage. Entries with a prompt immediately dispatch a run; entries
+sub-agent lineage. Like `t3_thread_launch`, they record the caller as
+`lineage.launchedByThreadId`. Entries with a prompt immediately dispatch a run; entries
 without a prompt remain idle.
 
 ### `t3_thread_launch`

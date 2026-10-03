@@ -151,7 +151,16 @@ function relationshipLabel(edge: ThreadRelationshipEdge, currentThreadId: Thread
   if (edge.kind === "subagent") {
     return edge.sourceThreadId === currentThreadId ? "Subagent" : "Parent agent";
   }
-  return edge.sourceThreadId === currentThreadId ? "Fork" : "Parent thread";
+  if (edge.sourceThreadId !== currentThreadId) return "Parent thread";
+  return edge.kind === "launch" ? "Launched thread" : "Fork";
+}
+
+/** Subagents and launched threads are agent work this thread started. */
+function isStartedAgentRelationship(edge: ThreadRelationshipEdge, currentThreadId: ThreadId) {
+  return (
+    (edge.kind === "subagent" || edge.kind === "launch") &&
+    !isParentThreadRelationship(edge, currentThreadId)
+  );
 }
 
 function relationshipThreadTitle(input: {
@@ -226,11 +235,16 @@ export function ThreadRelationshipsPanel(props: {
     active = [],
     previous = [],
   } = groupBy(relationshipRows, ({ edge }) => {
-    if (edge.kind !== "subagent" || isParentThreadRelationship(edge, props.threadId))
-      return "related";
-    return ["completed", "failed", "error", "cancelled", "interrupted", "idle"].includes(
-      edge.status ?? "",
-    )
+    if (!isStartedAgentRelationship(edge, props.threadId)) return "related";
+    return [
+      "completed",
+      "failed",
+      "error",
+      "cancelled",
+      "interrupted",
+      "rolled_back",
+      "idle",
+    ].includes(edge.status ?? "")
       ? "previous"
       : "active";
   });
@@ -240,8 +254,9 @@ export function ThreadRelationshipsPanel(props: {
     { id: "previous", label: "Previous agents", rows: previous, expanded: false },
   ];
   const runningCount =
-    projection?.subagents.filter((agent) => agent.status === "running").length ??
-    active.filter(({ edge }) => edge.status === "running").length;
+    (projection?.subagents.filter((agent) => agent.status === "running").length ??
+      active.filter(({ edge }) => edge.kind === "subagent" && edge.status === "running").length) +
+    active.filter(({ edge }) => edge.kind === "launch" && edge.status === "running").length;
 
   if (relationshipRows.length === 0 && runningCount === 0) {
     return null;
@@ -323,10 +338,11 @@ export function ThreadRelationshipsPanel(props: {
               const isSubagent = edge.kind === "subagent";
               const isMergeTarget = threadId === mergeTargetThreadId;
               const isParent = isParentThreadRelationship(edge, props.threadId);
+              const isStartedAgent = isStartedAgentRelationship(edge, props.threadId);
               const status = threadRelationshipRowStatus(graph, { threadId, edge });
               const RelationshipIcon = isParent
                 ? CornerLeftUpIcon
-                : isSubagent
+                : isStartedAgent
                   ? BotIcon
                   : GitForkIcon;
               const relationship = relationshipLabel(edge, props.threadId);
@@ -367,7 +383,7 @@ export function ThreadRelationshipsPanel(props: {
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
-                    driver={isSubagent && !isParent ? providerDriver : undefined}
+                    driver={isStartedAgent ? providerDriver : undefined}
                     provider={provider}
                     fallbackIcon={RelationshipIcon}
                     status={status}

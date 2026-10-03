@@ -88,6 +88,8 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Agent thread that asked for this launch; shown in its Lineage. */
+  readonly launchedByThreadId?: ThreadId;
 }
 
 export interface ThreadLaunchResult {
@@ -716,6 +718,9 @@ const make = Effect.gen(function* () {
                 ...(input.importedNativeThread === undefined
                   ? {}
                   : { importedNativeThread: input.importedNativeThread }),
+                ...(input.launchedByThreadId === undefined
+                  ? {}
+                  : { launchedByThreadId: input.launchedByThreadId }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
               });
