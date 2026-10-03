@@ -41,6 +41,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -253,6 +254,7 @@ function makeDeterministicAdapter(input: {
                 },
               ]);
               const eventTime = yield* DateTime.now;
+              // This fixture assigns one native turn per app run.
               const providerTurnId = ProviderTurnId.make(
                 `provider-turn:${input.instanceId}:${turnInput.threadId}:${turnInput.runOrdinal}`,
               );
@@ -272,7 +274,7 @@ function makeDeterministicAdapter(input: {
                       nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
                       strength: "strong",
                     },
-                    ordinal: turnInput.providerTurnOrdinal,
+                    ordinal: turnInput.runOrdinal,
                     status: "running",
                     startedAt: eventTime,
                     completedAt: null,
@@ -300,7 +302,7 @@ function makeDeterministicAdapter(input: {
                       nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
                       strength: "strong",
                     },
-                    ordinal: turnInput.providerTurnOrdinal,
+                    ordinal: turnInput.runOrdinal,
                     status: "completed",
                     startedAt: eventTime,
                     completedAt: eventTime,
@@ -366,7 +368,7 @@ function makeDeterministicAdapter(input: {
                         nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
                         strength: "strong",
                       },
-                      ordinal: turnInput.providerTurnOrdinal,
+                      ordinal: turnInput.runOrdinal,
                       status: "interrupted",
                       startedAt: completedAt,
                       completedAt,
@@ -3898,9 +3900,13 @@ describe("orchestrator MCP toolkit", () => {
       }),
     ),
   );
-  it.live.each(["always", "settled_only"] as const)(
-    "wakes the parent for completed child follow-ups after an original %s delegation",
-    (completionWake) =>
+  it.live.each([
+    { completionWake: "always", delayedDelivery: false },
+    { completionWake: "settled_only", delayedDelivery: false },
+    { completionWake: "always", delayedDelivery: true },
+  ] as const)(
+    "wakes the parent after an original $completionWake delegation with delayed delivery $delayedDelivery",
+    ({ completionWake, delayedDelivery }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* checkpointWorkspace("parent-wake-followup-comparison");
@@ -3909,35 +3915,53 @@ describe("orchestrator MCP toolkit", () => {
           const initialGate = yield* Deferred.make<void>();
           const controlGate = yield* Deferred.make<void>();
           const foregroundGate = yield* Deferred.make<void>();
+          const selectionEntered = yield* Deferred.make<void>();
+          const selectionGate = yield* Deferred.make<void>();
           const foregroundPrompt = "Hold the parent while its child follow-up completes.";
           const initialPrompt = "Original delegated task for follow-up comparison.";
           const controlPrompt = "Control delegated task without follow-ups.";
           const followupPrompt = "Follow-up after the original delegated task completed.";
           const registryLayer = ProviderAdapterRegistry.makeLayer([
-            makeDeterministicAdapter({
-              instanceId: codexInstanceId,
-              driver: ProviderDriverKind.make("codex"),
-              capabilities: {
-                ...CodexProviderCapabilitiesV2,
-                turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: false },
-              },
-              capturedTurns,
-              shouldComplete: () => true,
-              terminalGate: (turn) =>
-                turn.message.text === parentPrompt
-                  ? parentGate
-                  : turn.message.text === initialPrompt
-                    ? initialGate
-                    : turn.message.text === controlPrompt
-                      ? controlGate
-                      : turn.message.text === foregroundPrompt
-                        ? foregroundGate
-                        : undefined,
-              response: (turn) => `Result: ${turn.message.text}`,
-            }),
+            {
+              ...makeDeterministicAdapter({
+                instanceId: codexInstanceId,
+                driver: ProviderDriverKind.make("codex"),
+                capabilities: {
+                  ...CodexProviderCapabilitiesV2,
+                  turns: {
+                    ...CodexProviderCapabilitiesV2.turns,
+                    supportsActiveSteering: false,
+                  },
+                },
+                capturedTurns,
+                shouldComplete: () => true,
+                terminalGate: (turn) =>
+                  turn.message.text === parentPrompt
+                    ? parentGate
+                    : turn.message.text === initialPrompt
+                      ? initialGate
+                      : turn.message.text === controlPrompt
+                        ? controlGate
+                        : turn.message.text === foregroundPrompt
+                          ? foregroundGate
+                          : undefined,
+                response: (turn) => `Result: ${turn.message.text}`,
+              }),
+              planSelectionTransition: ({ target }) =>
+                Effect.gen(function* () {
+                  if (target.model === "gpt-5.4-next") {
+                    yield* Deferred.succeed(selectionEntered, undefined);
+                    yield* Deferred.await(selectionGate);
+                  }
+                  return { type: "apply_on_next_turn" as const };
+                }),
+            },
           ]);
           const layer = makeOrchestratorV2ReplayLayerWithRegistry(
-            { name: "parent-wake-followup-comparison", runtimePolicyOverride: { cwd } },
+            {
+              name: "parent-wake-followup-comparison",
+              runtimePolicyOverride: { cwd },
+            },
             registryLayer,
             { runContinuationWorker: true },
           );
@@ -4069,27 +4093,52 @@ describe("orchestrator MCP toolkit", () => {
               (event) =>
                 event.type === "provider-turn.updated" && event.payload.status === "running",
             );
-            const childSequence = yield* orchestrator.getThreadEventSequence(worker.childThreadId!);
-            yield* orchestrator.dispatch({
-              type: "message.dispatch",
-              createdBy: "agent",
-              creationSource: "mcp",
-              commandId: CommandId.make("wake-comparison:followup"),
-              threadId: worker.childThreadId!,
-              messageId: MessageId.make("wake-comparison:followup"),
-              text: followupPrompt,
-              attachments: [],
-              modelSelection: codexSelection,
-              dispatchMode: { type: "start_immediately" },
-            });
-            const followupTerminal = yield* awaitEvent(
-              worker.childThreadId!,
-              childSequence,
-              (event) => event.type === "run.updated" && event.payload.status === "completed",
-            );
-            if (followupTerminal.event.type !== "run.updated")
-              throw new Error("Missing follow-up run.");
-            const followupRunId = followupTerminal.event.payload.id;
+            // A slow provider selection holds the actual parent dispatch lock.
+            // Both child runs finish before their result handlers acquire it.
+            const selectionFiber = delayedDelivery
+              ? yield* orchestrator
+                  .dispatch({
+                    type: "thread.model-selection.set",
+                    commandId: CommandId.make("wake-comparison:slow-selection"),
+                    threadId: parentThreadId,
+                    modelSelection: {
+                      ...codexSelection,
+                      model: "gpt-5.4-next",
+                    },
+                  })
+                  .pipe(Effect.forkChild)
+              : undefined;
+            if (delayedDelivery) yield* Deferred.await(selectionEntered);
+            const followupRunIds: RunId[] = [];
+            for (let index = 0; index < (delayedDelivery ? 2 : 1); index++) {
+              const childSequence = yield* orchestrator.getThreadEventSequence(
+                worker.childThreadId!,
+              );
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                createdBy: "agent",
+                creationSource: "mcp",
+                commandId: CommandId.make(`wake-comparison:followup:${index}`),
+                threadId: worker.childThreadId!,
+                messageId: MessageId.make(`wake-comparison:followup:${index}`),
+                text: `${followupPrompt} ${index}`,
+                attachments: [],
+                modelSelection: codexSelection,
+                dispatchMode: { type: "start_immediately" },
+              });
+              const followupTerminal = yield* awaitEvent(
+                worker.childThreadId!,
+                childSequence,
+                (event) => event.type === "run.updated" && event.payload.status === "completed",
+              );
+              if (followupTerminal.event.type !== "run.updated")
+                throw new Error("Missing follow-up run.");
+              followupRunIds.push(followupTerminal.event.payload.id);
+            }
+            if (selectionFiber !== undefined) {
+              yield* Deferred.succeed(selectionGate, undefined);
+              yield* Fiber.join(selectionFiber);
+            }
             // This later independent completion is a barrier on the sequential
             // terminal reactor and continuation worker, so absence needs no sleep.
             const controlSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
@@ -4141,7 +4190,7 @@ describe("orchestrator MCP toolkit", () => {
               (transfer) =>
                 transfer.type === "subagent_result" &&
                 transfer.sourceThreadId === worker.childThreadId &&
-                transfer.sourcePoint.runId === followupRunId,
+                followupRunIds.includes(transfer.sourcePoint.runId!),
             );
             const controlTransfers = finalParent.contextTransfers.filter(
               (transfer) =>
@@ -4154,7 +4203,10 @@ describe("orchestrator MCP toolkit", () => {
             expect(
               followupTransfers,
               "A completed follow-up must deliver its result to the parent",
-            ).toHaveLength(1);
+            ).toHaveLength(followupRunIds.length);
+            expect(
+              new Set(followupTransfers.map((transfer) => transfer.sourcePoint.runId)).size,
+            ).toBe(followupRunIds.length);
             expect(workerWakes).toHaveLength(2);
             const originalTask = initialParent.subagents.find((task) => task.id === worker.id)!;
             const finalTask = finalParent.subagents.find((task) => task.id === worker.id)!;

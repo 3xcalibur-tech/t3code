@@ -1792,17 +1792,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // valid observations can race after their read preflight. Re-emit the
       // existing task row so the second dispatch is a successful idempotent
       // no-op rather than "already acknowledged/disposed" or empty-events.
-      const latestResultTransfer = projection.contextTransfers.findLast(
+      const resultTransfers = projection.contextTransfers.filter(
         (transfer) =>
           transfer.type === "subagent_result" &&
           transfer.sourceThreadId === task.childThreadId &&
           transfer.targetThreadId === command.parentThreadId,
       );
+      const latestResultTransfer = resultTransfers.at(-1);
       if (
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
-          command.resultRunId !== undefined &&
-          latestResultTransfer?.sourcePoint.runId !== undefined &&
-          latestResultTransfer.sourcePoint.runId !== command.resultRunId) ||
+          (command.resultRunId === undefined
+            ? // Older callers can acknowledge the original result, but cannot
+              // identify which follow-up they read.
+              resultTransfers.length > 1
+            : latestResultTransfer?.sourcePoint.runId !== undefined &&
+              latestResultTransfer.sourcePoint.runId !== command.resultRunId)) ||
         task.completionDelivery?.state === state ||
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
           task.completionDelivery?.state === "disposed")
@@ -8487,7 +8491,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * other (stale policy on the terminal row, or a terminal row regressed to
    * running).
    */
-  const finalizeAppOwnedSubagent = (childThreadId: ThreadId) =>
+  const finalizeAppOwnedSubagent = (childThreadId: ThreadId, terminalRunId: RunId) =>
     Effect.gen(function* () {
       const childControls = yield* projectionStore.getThreadRecords(
         childThreadId,
@@ -8502,7 +8506,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         return;
       }
-      const progress = delegatedTaskProgress(childControls);
+      const progress = delegatedTaskProgress({
+        ...childControls,
+        // The parent lock can defer this event until a later child run finishes.
+        runs: childControls.runs.filter((run) => run.id === terminalRunId),
+      });
       if (progress.state !== "result_available") return;
       const childRun = progress.resultRun;
       if (childRun === undefined) return;
@@ -9503,8 +9511,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // child lock here would invert that order, and the keyed executor's
       // semaphores are neither reentrant nor deadlock-aware.
       const parentThreadId = yield* appOwnedSubagentParentThreadId(threadId);
-      if (parentThreadId !== undefined) {
-        yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
+      if (parentThreadId !== undefined && stored.event.type === "run.updated") {
+        yield* threadDispatch.withLock(
+          parentThreadId,
+          finalizeAppOwnedSubagent(threadId, stored.event.payload.id),
+        );
       }
       if (stored.event.type === "run.updated") {
         yield* threadDispatch.withLock(
@@ -9565,7 +9576,36 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const thread = yield* projectionStore.getThreadShell(threadId);
             const parentThreadId = thread?.lineage.parentThreadId;
             if (parentThreadId === undefined || parentThreadId === null) return;
-            yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
+            yield* threadDispatch.withLock(
+              parentThreadId,
+              Effect.gen(function* () {
+                const child = yield* projectionStore.getThreadRecords(threadId, ["runs"]);
+                const parent = yield* projectionStore.getThreadRecords(parentThreadId, [
+                  "contextTransfers",
+                ]);
+                const deliveredRunIds = new Set(
+                  parent.contextTransfers
+                    .filter(
+                      (transfer) =>
+                        transfer.type === "subagent_result" &&
+                        transfer.sourceThreadId === threadId &&
+                        transfer.targetThreadId === parentThreadId,
+                    )
+                    .map((transfer) => transfer.sourcePoint.runId),
+                );
+                for (const run of child.runs.toSorted(
+                  (left, right) => left.ordinal - right.ordinal,
+                )) {
+                  if (
+                    ["completed", "interrupted", "failed", "cancelled"].includes(run.status) &&
+                    !deliveredRunIds.has(run.id) &&
+                    !(run.ordinal === 1 && deliveredRunIds.has(undefined))
+                  ) {
+                    yield* finalizeAppOwnedSubagent(threadId, run.id);
+                  }
+                }
+              }),
+            );
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to recover terminal app-owned subagent", {

@@ -323,43 +323,45 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
             occurredAt: now,
             payload: { ...task, childThreadId: childId },
           },
-          {
-            id: EventId.make("event:follow-up-ack-transfer"),
-            type: "context-transfer.created",
+          ...[RunId.make("run:original-child"), resultRunId].map((childRunId) => ({
+            id: EventId.make(`event:follow-up-ack-transfer:${childRunId}`),
+            type: "context-transfer.created" as const,
             threadId,
             occurredAt: now,
             payload: {
-              id: ContextTransferId.make("transfer:follow-up-ack"),
-              type: "subagent_result",
+              id: ContextTransferId.make(`transfer:follow-up-ack:${childRunId}`),
+              type: "subagent_result" as const,
               sourceThreadId: childId,
               targetThreadId: threadId,
-              sourcePoint: { threadId: childId, runId: resultRunId },
+              sourcePoint: { threadId: childId, runId: childRunId },
               basePoint: null,
               sourceProviderInstanceId: modelSelection.instanceId,
               targetProviderInstanceId: modelSelection.instanceId,
               targetRunId: runId,
-              status: "consumed",
+              status: "consumed" as const,
               resolution: null,
-              createdBy: "system",
+              createdBy: "system" as const,
               error: null,
               createdAt: now,
               updatedAt: now,
               consumedAt: now,
             },
-          },
+          })),
         ],
       });
-      yield* orchestrator.dispatch({
-        type: "delegated_task.completion-delivery.acknowledge",
-        commandId: CommandId.make("command:follow-up-ack-stale"),
-        parentThreadId: threadId,
-        taskId,
-        resultRunId: RunId.make("run:original-child"),
-        observedByRunId: runId,
-      });
-      const unchanged = yield* orchestrator.getThreadProjection(threadId);
-      assert.equal(unchanged.subagents[0]?.completionDelivery?.state, "claimed");
-      assert.deepEqual(unchanged.runs[0]?.delegatedCompletion?.delivery?.taskIds, [taskId]);
+      for (const staleResultRunId of [RunId.make("run:original-child"), undefined]) {
+        yield* orchestrator.dispatch({
+          type: "delegated_task.completion-delivery.acknowledge",
+          commandId: CommandId.make(`command:follow-up-ack-stale:${staleResultRunId ?? "legacy"}`),
+          parentThreadId: threadId,
+          taskId,
+          ...(staleResultRunId === undefined ? {} : { resultRunId: staleResultRunId }),
+          observedByRunId: runId,
+        });
+        const unchanged = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(unchanged.subagents[0]?.completionDelivery?.state, "claimed");
+        assert.deepEqual(unchanged.runs[0]?.delegatedCompletion?.delivery?.taskIds, [taskId]);
+      }
       yield* orchestrator.dispatch({
         type: "delegated_task.completion-delivery.acknowledge",
         commandId: CommandId.make("command:follow-up-ack-current"),

@@ -412,6 +412,37 @@ const followUpResultRecovery = Effect.gen(function* () {
     payload: { ...followup, status: "completed" },
   });
   assert.include(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  const newer = { ...followup, id: RunId.make("run:newer-follow-up-result"), ordinal: 3 };
+  yield* store.apply({
+    id: EventId.make("follow-up-result:newer-running"),
+    type: "run.updated",
+    threadId: childId,
+    runId: newer.id,
+    occurredAt: now,
+    payload: newer,
+  });
+  assert.include(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  yield* store.apply({
+    id: EventId.make("follow-up-result:newer-completed"),
+    type: "run.updated",
+    threadId: childId,
+    runId: newer.id,
+    occurredAt: now,
+    payload: { ...newer, status: "completed" },
+  });
+  yield* store.apply({
+    id: EventId.make("follow-up-result:newer-transfer"),
+    type: "context-transfer.created",
+    threadId: childId,
+    occurredAt: now,
+    payload: {
+      ...transfer,
+      id: ContextTransferId.make("transfer:newer-follow-up"),
+      sourcePoint: { threadId: childId, runId: newer.id },
+    },
+  });
+  // A newer delivered result must not hide an older missing result.
+  assert.include(yield* store.getRecoveryThreadIds("subagent-results"), childId);
   yield* store.apply({
     id: EventId.make("follow-up-result:new-transfer"),
     type: "context-transfer.created",

@@ -498,21 +498,27 @@ function needsRecovery(
       return projection.runs.some((run) => run.delegatedCompletion?.delivery != null);
     case "subagent-results": {
       const parentThreadId = projection.thread.lineage.parentThreadId;
-      const latestRun = projection.runs.at(-1);
+      const deliveredRunIds = new Set(
+        projection.contextTransfers
+          .filter(
+            (transfer) =>
+              transfer.type === "subagent_result" &&
+              transfer.sourceThreadId === projection.thread.id &&
+              transfer.targetThreadId === parentThreadId,
+          )
+          .map((transfer) => transfer.sourcePoint.runId),
+      );
       return (
         projection.thread.lineage.relationshipToParent === "subagent" &&
         parentThreadId !== null &&
         projection.thread.forkedFrom?.type === "node" &&
-        ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-          latestRun?.status ?? "idle",
-        ) &&
-        !projection.contextTransfers.some(
-          (transfer) =>
-            transfer.type === "subagent_result" &&
-            transfer.sourceThreadId === projection.thread.id &&
-            transfer.targetThreadId === parentThreadId &&
-            (transfer.sourcePoint.runId === latestRun?.id ||
-              (transfer.sourcePoint.runId === undefined && latestRun?.ordinal === 1)),
+        projection.runs.some(
+          (run) =>
+            ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+              run.status,
+            ) &&
+            !deliveredRunIds.has(run.id) &&
+            !(run.ordinal === 1 && deliveredRunIds.has(undefined)),
         )
       );
     }
@@ -3399,26 +3405,22 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               `;
             case "subagent-results":
               return sql`
-                SELECT child.thread_id FROM orchestration_v2_projection_threads AS child
-                JOIN orchestration_v2_projection_runs AS latest
-                  ON latest.thread_id = child.thread_id
-                  AND latest.ordinal = (
-                    SELECT MAX(ordinal) FROM orchestration_v2_projection_runs
-                    WHERE thread_id = child.thread_id
-                  )
+                SELECT DISTINCT child.thread_id FROM orchestration_v2_projection_threads AS child
+                JOIN orchestration_v2_projection_runs AS terminal
+                  ON terminal.thread_id = child.thread_id
                 WHERE CASE WHEN json_valid(child.payload_json) THEN
                   json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                   AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
-                  AND latest.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+                  AND terminal.status IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
                   AND NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_context_transfers
                     WHERE source_thread_id = child.thread_id
                       AND target_thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
                       AND type = 'subagent_result'
                       AND CASE WHEN json_valid(payload_json) THEN
-                        json_extract(payload_json, '$.sourcePoint.runId') = latest.run_id
-                        OR (json_extract(payload_json, '$.sourcePoint.runId') IS NULL AND latest.ordinal = 1)
+                        json_extract(payload_json, '$.sourcePoint.runId') = terminal.run_id
+                        OR (json_extract(payload_json, '$.sourcePoint.runId') IS NULL AND terminal.ordinal = 1)
                         ELSE 0 END
                   )
                   ELSE 0 END
