@@ -3418,7 +3418,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
                   AND terminal.status IN ('completed', 'interrupted', 'failed', 'cancelled')
-                  AND (json_extract(terminal.payload_json, '$.startedAt') IS NOT NULL OR terminal.ordinal = 1)
+                  AND CASE WHEN terminal.ordinal = 1 THEN 1
+                    WHEN json_valid(terminal.payload_json) THEN
+                      json_extract(terminal.payload_json, '$.startedAt') IS NOT NULL
+                    ELSE 0 END
                   AND NOT EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_messages AS message
                     WHERE message.thread_id = child.thread_id AND message.run_id = terminal.run_id
