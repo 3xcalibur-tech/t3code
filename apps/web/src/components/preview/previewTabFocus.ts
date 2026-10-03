@@ -1,37 +1,34 @@
-/**
- * Native Tab targets the guest, but its default traversal can cross into the
- * embedder or another guest. Preserve host focus until that transition arrives;
- * human keyboard/pointer input relinquishes the guard before changing focus.
- */
-export async function runPreviewTabKeepingHostFocus<A>(
-  press: () => Promise<A>,
-  onHumanInput: (relinquish: () => void) => () => void,
-): Promise<A> {
-  const previous = document.activeElement;
-  if (
-    !(previous instanceof HTMLElement) ||
-    previous === document.body ||
-    previous.localName === "webview"
-  ) {
-    return await press();
-  }
+type HumanInputSubscription = (takeOver: (runtimeTabId: string) => void) => () => void;
 
+// A traversal can outlive its key receipt. Subsequent Tab presses share that
+// pending transition rather than accumulating guards or dropping late focus.
+let currentGuard: ReturnType<typeof createGuard> | undefined;
+
+function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription) {
   let released = false;
-  let completed = false;
+  let presses = 0;
   let pendingTraversal = false;
+  let restoredGuest: HTMLElement | null = null;
   let unsubscribe = () => {};
+  const stopKeepingFocus = () => {
+    document.removeEventListener("focusout", keepHostFocus, true);
+    document.removeEventListener("focus", keepHostFocus, true);
+  };
   const release = () => {
     if (released) return;
     released = true;
+    stopKeepingFocus();
     document.removeEventListener("pointerdown", relinquish, true);
     document.removeEventListener("keydown", relinquish, true);
-    document.removeEventListener("focusout", keepHostFocus, true);
-    document.removeEventListener("focus", keepHostFocus, true);
+    document.removeEventListener("visibilitychange", visibilityChanged);
+    window.removeEventListener("pagehide", release);
+    removed.disconnect();
     unsubscribe();
+    if (currentGuard?.release === release) currentGuard = undefined;
   };
   const relinquish = (event: Event) => {
-    // HostedBrowserWebview replays guest focus as a synthetic pointerdown to
-    // dismiss popups. It is not evidence of a human click.
+    // HostedBrowserWebview replays guest focus to dismiss popups. The real
+    // guest pointer signal follows through IPC, so this is not human input.
     if (
       !event.isTrusted &&
       event.target instanceof HTMLElement &&
@@ -39,6 +36,26 @@ export async function runPreviewTabKeepingHostFocus<A>(
     )
       return;
     release();
+  };
+  const takeOver = (runtimeTabId: string) => {
+    if (released) return;
+    const guest = restoredGuest;
+    const restoreHumanFocus =
+      guest?.isConnected &&
+      guest.getAttribute("data-preview-tab") === runtimeTabId &&
+      document.activeElement === previous;
+    release();
+    // Guest focus can precede the trusted pointer IPC. If we corrected that
+    // focus, return it to this guest only when its human signal confirms intent.
+    if (restoreHumanFocus) guest.focus({ preventScroll: true });
+  };
+  const settle = () => {
+    if (released || presses > 0) return;
+    if (!previous.isConnected) release();
+    else if (!pendingTraversal) {
+      if (restoredGuest) stopKeepingFocus();
+      else release();
+    }
   };
   const keepHostFocus = (event: Event) => {
     if (released) return;
@@ -54,26 +71,67 @@ export async function runPreviewTabKeepingHostFocus<A>(
       return;
     }
     if (target instanceof HTMLElement && target === document.activeElement && target !== previous) {
+      restoredGuest = target.localName === "webview" ? target : null;
       previous.focus({ preventScroll: true });
       pendingTraversal = false;
-      if (completed) release();
+      settle();
     }
   };
-
-  unsubscribe = onHumanInput(release);
+  const visibilityChanged = () => {
+    if (document.visibilityState === "hidden") release();
+  };
+  const removed = new MutationObserver(() => {
+    if (!previous.isConnected) release();
+  });
+  removed.observe(document, { childList: true, subtree: true });
   document.addEventListener("pointerdown", relinquish, true);
   document.addEventListener("keydown", relinquish, true);
-  document.addEventListener("focusout", keepHostFocus, true);
-  document.addEventListener("focus", keepHostFocus, true);
-  try {
-    const result = await press();
-    completed = true;
-    return result;
-  } finally {
-    // Guest-to-embedder traversal crosses renderer processes. The composer can
-    // blur before the key receipt, and the destination's focus can arrive after
-    // it. Keep only that pending transition guarded until it arrives or the
-    // human takes over; no timer or unconditional focus restoration.
-    if (!completed || !pendingTraversal || !previous.isConnected) release();
-  }
+  document.addEventListener("visibilitychange", visibilityChanged);
+  window.addEventListener("pagehide", release);
+  unsubscribe = onHumanInput(takeOver);
+  if (released) unsubscribe();
+
+  const run = async <A>(press: () => Promise<A>) => {
+    if (released) return await press();
+    presses++;
+    document.addEventListener("focusout", keepHostFocus, true);
+    document.addEventListener("focus", keepHostFocus, true);
+    let completed = false;
+    try {
+      const result = await press();
+      completed = true;
+      return result;
+    } finally {
+      presses--;
+      if (!completed && presses === 0) release();
+      else settle();
+    }
+  };
+  return {
+    previous,
+    run,
+    release,
+    get released() {
+      return released;
+    },
+  };
+}
+
+/** Preserve host focus across native Tab traversal without a focus timer. */
+export async function runPreviewTabKeepingHostFocus<A>(
+  press: () => Promise<A>,
+  onHumanInput: HumanInputSubscription,
+): Promise<A> {
+  const previous = document.activeElement;
+  if (currentGuard?.previous !== previous) currentGuard?.release();
+  if (
+    !(previous instanceof HTMLElement) ||
+    previous === document.body ||
+    previous.localName === "webview"
+  )
+    return await press();
+
+  const guard = currentGuard ?? createGuard(previous, onHumanInput);
+  if (!guard.released) currentGuard = guard;
+  return await guard.run(press);
 }

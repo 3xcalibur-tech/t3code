@@ -708,8 +708,8 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             const press = () => ready.bridge.automation.press(ready.runtimeTabId, input);
             return await (input.key === "Tab"
               ? runPreviewTabKeepingHostFocus(press, (relinquish) =>
-                  ready.bridge.onStateChange((_tabId, state) => {
-                    if (state.controller === "human") relinquish();
+                  ready.bridge.onStateChange((runtimeTabId, state) => {
+                    if (state.controller === "human") relinquish(runtimeTabId);
                   }),
                 )
               : press());

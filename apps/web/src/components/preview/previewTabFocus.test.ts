@@ -13,7 +13,10 @@ const mount = (tag: string) => {
   return element;
 };
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  document.dispatchEvent(new Event("pointerdown"));
+  document.body.replaceChildren();
+});
 
 describe("runPreviewTabKeepingHostFocus", () => {
   it("preserves the composer when guest traversal reaches a host toolbar button", async () => {
@@ -53,10 +56,10 @@ describe("runPreviewTabKeepingHostFocus", () => {
     const other = mount("button");
     composer.focus();
 
-    let humanInput = () => {};
+    let humanInput = (_runtimeTabId: string) => {};
     await runPreviewTabKeepingHostFocus(
       async () => {
-        humanInput();
+        humanInput("tab-a");
         preview.focus();
         expect(document.activeElement).toBe(preview);
         other.focus();
@@ -152,4 +155,97 @@ describe("runPreviewTabKeepingHostFocus", () => {
       expect(document.activeElement).toBe(other);
     },
   );
+
+  it("returns corrected guest focus when its trusted human signal arrives after focus", async () => {
+    const composer = mount("textarea");
+    const preview = mount("webview");
+    preview.setAttribute("data-preview-tab", "tab-a");
+    composer.focus();
+    let humanInput = (_runtimeTabId: string) => {};
+
+    await runPreviewTabKeepingHostFocus(
+      async () => composer.blur(),
+      (takeOver) => {
+        humanInput = takeOver;
+        return () => {};
+      },
+    );
+    preview.focus();
+    expect(document.activeElement).toBe(composer);
+    humanInput("tab-a");
+
+    expect(document.activeElement).toBe(preview);
+  });
+
+  it("does not reclaim guest focus after subsequent human host navigation", async () => {
+    const composer = mount("textarea");
+    const preview = mount("webview");
+    const other = mount("button");
+    preview.setAttribute("data-preview-tab", "tab-a");
+    composer.focus();
+    let humanInput = (_runtimeTabId: string) => {};
+
+    await runPreviewTabKeepingHostFocus(
+      async () => composer.blur(),
+      (takeOver) => {
+        humanInput = takeOver;
+        return () => {};
+      },
+    );
+    preview.focus();
+    other.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    other.focus();
+    humanInput("tab-a");
+
+    expect(document.activeElement).toBe(other);
+  });
+
+  it("shares an unresolved traversal across subsequent keys without dropping late focus", async () => {
+    const composer = mount("textarea");
+    const preview = mount("webview");
+    composer.focus();
+    let subscriptions = 0;
+    const subscribe = () => {
+      subscriptions++;
+      return () => subscriptions--;
+    };
+
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), subscribe);
+    await runPreviewTabKeepingHostFocus(async () => {}, subscribe);
+    await runPreviewTabKeepingHostFocus(async () => {}, subscribe);
+    expect(subscriptions).toBe(1);
+    preview.focus();
+
+    expect(document.activeElement).toBe(composer);
+    document.dispatchEvent(new Event("keydown"));
+    expect(subscriptions).toBe(0);
+  });
+
+  it("releases an unresolved traversal when the page is left", async () => {
+    const composer = mount("textarea");
+    const other = mount("button");
+    composer.focus();
+
+    await runPreviewTabKeepingHostFocus(async () => composer.blur(), noHumanInput);
+    window.dispatchEvent(new Event("pagehide"));
+    other.focus();
+
+    expect(document.activeElement).toBe(other);
+  });
+
+  it("releases removal without waiting for another focus event", async () => {
+    const composer = mount("textarea");
+    composer.focus();
+    let markUnsubscribed = () => {};
+    const unsubscribed = new Promise<void>((resolve) => {
+      markUnsubscribed = resolve;
+    });
+
+    await runPreviewTabKeepingHostFocus(
+      async () => composer.blur(),
+      () => markUnsubscribed,
+    );
+    composer.remove();
+    await unsubscribed;
+  });
 });
