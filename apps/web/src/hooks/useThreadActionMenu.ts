@@ -9,6 +9,7 @@ import {
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   AuthOrchestrationOperateScope,
+  CommandId,
   type ScopedThreadRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -42,6 +43,8 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
+import { reportTitleRegenerationFailures } from "../lib/titleRegenerationFailures";
+import { randomUUID } from "../lib/utils";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -253,15 +256,20 @@ export function useThreadActionMenu(input: {
           case "rename":
             onStartRename();
             return;
-          case "regenerate-title":
+          case "regenerate-title": {
             if (isRegeneratingTitle) return;
-            await reportFailure("Failed to regenerate thread title", () =>
-              updateThreadMetadata({
-                environmentId: threadRef.environmentId,
-                input: { threadId: threadRef.threadId, regenerateTitle: true },
-              }),
-            );
+            const requestId = CommandId.make(randomUUID());
+            const result = await updateThreadMetadata({
+              environmentId: threadRef.environmentId,
+              input: { commandId: requestId, threadId: threadRef.threadId, regenerateTitle: true },
+            });
+            if (result._tag === "Success") {
+              reportTitleRegenerationFailures([{ threadRef, requestId }]);
+            } else if (!isAtomCommandInterrupted(result)) {
+              failureToast("Failed to regenerate thread title", squashAtomCommandFailure(result));
+            }
             return;
+          }
           case "mark-unread":
             markThreadUnread(threadRef);
             return;
