@@ -1,6 +1,6 @@
 import { resolveFilesystemReadAccess } from "@t3tools/client-runtime/state/filesystem";
 import { environmentSession } from "../../state/session";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as DateTime from "effect/DateTime";
 
 import {
@@ -153,6 +153,11 @@ export function useReviewSections(input: {
   const activeSectionId = activeCheckpoint
     ? getReviewSectionIdForCheckpoint(activeCheckpoint)
     : null;
+  const gitScopeKey = `${environmentId}:${threadId}:${activeSectionId}`;
+  const [gitVisibility, setGitVisibility] = useState<{ scope: string; visible: boolean } | null>(
+    null,
+  );
+  const includeGitChanges = gitVisibility?.scope === gitScopeKey && gitVisibility.visible;
   const activeTurnDiff = useCheckpointDiff({
     environmentId: enabled ? (environmentId ?? null) : null,
     threadId: enabled ? (threadId ?? null) : null,
@@ -160,6 +165,7 @@ export function useReviewSections(input: {
       enabled && activeCheckpoint ? Math.max(0, activeCheckpoint.checkpointTurnCount - 1) : null,
     toTurnCount: enabled ? (activeCheckpoint?.checkpointTurnCount ?? null) : null,
     ignoreWhitespace: false,
+    includeGitChanges,
   });
 
   useEffect(() => {
@@ -173,9 +179,12 @@ export function useReviewSections(input: {
     if (!reviewCache.threadKey || !activeSectionId || !activeTurnDiff.data) {
       return;
     }
-    setReviewTurnDiff(reviewCache.threadKey, activeSectionId, activeTurnDiff.data.diff);
+    // This section cache holds only the default view. Full patches stay in the query's keyed cache.
+    if (!includeGitChanges) {
+      setReviewTurnDiff(reviewCache.threadKey, activeSectionId, activeTurnDiff.data.diff);
+    }
     setReviewAsyncError(reviewCache.threadKey, null);
-  }, [activeSectionId, activeTurnDiff.data, reviewCache.threadKey]);
+  }, [activeSectionId, activeTurnDiff.data, includeGitChanges, reviewCache.threadKey]);
 
   useEffect(() => {
     if (reviewCache.threadKey && activeTurnDiff.error) {
@@ -204,6 +213,9 @@ export function useReviewSections(input: {
   );
 
   return {
+    gitFileCount: selectedSection?.kind === "turn" ? (activeTurnDiff.data?.gitFileCount ?? 0) : 0,
+    includeGitChanges,
+    toggleGitChanges: () => setGitVisibility({ scope: gitScopeKey, visible: !includeGitChanges }),
     error:
       diffPreview.error ??
       activeTurnDiff.error ??
@@ -219,7 +231,14 @@ export function useReviewSections(input: {
       : undefined,
     loadingTurnIds,
     reviewSections,
-    selectedSection,
+    selectedSection:
+      selectedSection?.kind === "turn"
+        ? {
+            ...selectedSection,
+            diff: activeTurnDiff.data?.diff ?? (includeGitChanges ? null : selectedSection.diff),
+            isLoading: activeTurnDiff.isPending,
+          }
+        : selectedSection,
     refreshSelectedSection,
     selectSection,
   };

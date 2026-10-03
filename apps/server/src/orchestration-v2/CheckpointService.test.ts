@@ -53,6 +53,7 @@ it.effect.each([false, true, "interrupt"] as const)(
         Layer.mergeAll(
           IdAllocator.layer,
           Layer.mock(CheckpointStore.CheckpointStore)({
+            getGitChangedPaths: () => Effect.succeed([]),
             isGitRepository: () => Effect.succeed(true),
             hasCheckpointRef,
             captureCheckpoint: () => Effect.void,
