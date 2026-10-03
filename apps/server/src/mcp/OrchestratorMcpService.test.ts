@@ -46,6 +46,7 @@ describe("OrchestratorMcpService", () => {
             driver: "codex",
             model: "gpt-5.6-terra",
             result: "terminal result",
+            resultRunId: childRunId,
             completionDelivery: { state: "pending" },
           },
         ],
@@ -55,6 +56,7 @@ describe("OrchestratorMcpService", () => {
         runs: [{ id: childRunId, ordinal: 1, status: "completed" }],
         contextTransfers: [],
         messages: [],
+        turnItems: [],
         subagents: [],
         providerThreads: [],
       } as unknown as OrchestrationV2ThreadProjection;
@@ -115,7 +117,7 @@ describe("OrchestratorMcpService", () => {
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         const pending = yield* service.taskStatus(scope, taskId);
-        assert.equal(pending.status, "running");
+        assert.equal(pending.status, "waiting");
         assert.equal(pending.workState, "waiting_for_children");
         assert.isNull(pending.summary);
         assert.equal(yield* Ref.get(acknowledgementAttempts), 0);
