@@ -3,8 +3,9 @@
  * web agent rows render.
  */
 import * as DateTime from "effect/DateTime";
-import type { OrchestrationV2Subagent } from "@t3tools/contracts";
+import type { OrchestrationV2Subagent, OrchestrationV2ThreadShell } from "@t3tools/contracts";
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
+import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 export type RuntimeSubagentStatus =
   | "pending"
@@ -144,4 +145,39 @@ export function projectedSubagentsToRuntime(
       updatedAt,
     } satisfies RuntimeSubagent;
   });
+}
+
+/** Live child work is separate from the retained result of its original delegation. */
+export function activeSubagentThreadStatus(
+  child: OrchestrationV2ThreadShell | undefined,
+): OrchestrationV2Subagent["status"] | null {
+  if (child === undefined || child.deletedAt !== null || child.archivedAt !== null) return null;
+  const status = child.activityRunStatus ?? child.status;
+  if (status === "queued" || status === "preparing" || status === "starting") return "pending";
+  if (status === "running" || status === "waiting") return status;
+  return backgroundWorkHoldsCompletion(child.pendingBackgroundTasks ?? []) ? "waiting" : null;
+}
+
+/** A follow-up must not display the original task's completion, result, or elapsed time. */
+export function withSubagentThreadActivity(
+  subagent: OrchestrationV2Subagent,
+  child: OrchestrationV2ThreadShell | undefined,
+): OrchestrationV2Subagent {
+  if (subagent.origin !== "app_owned" || !isTerminalSubagentStatus(subagent.status))
+    return subagent;
+  const status = activeSubagentThreadStatus(child);
+  if (status === null || child === undefined) return subagent;
+  return {
+    ...subagent,
+    status,
+    result: null,
+    progress: undefined,
+    startedAt:
+      child.activityRunStartedAt ??
+      child.latestRunStartedAt ??
+      child.latestRunRequestedAt ??
+      child.createdAt,
+    completedAt: null,
+    updatedAt: child.updatedAt,
+  };
 }

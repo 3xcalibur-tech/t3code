@@ -3462,6 +3462,7 @@ export default function ChatView(props: ChatViewProps) {
     [activeThreadLiveTokenUsage, serverVisibleTurnItems, serverProjection],
   );
   const pendingBackgroundTasks = useMemo(() => {
+    if (activeThreadShell !== null) return activeThreadShell.pendingBackgroundTasks;
     if (serverProjection === null || serverProjection === undefined) {
       return [];
     }
@@ -3484,7 +3485,7 @@ export default function ChatView(props: ChatViewProps) {
         runs: serverProjection.runs,
       }),
     ];
-  }, [serverProjection]);
+  }, [activeThreadShell, serverProjection]);
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
