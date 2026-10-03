@@ -676,7 +676,8 @@ internal class SelectionAwareEditText(context: Context) : EditText(context) {
     val fromSoftKeyboard =
       event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD ||
         (event.flags and KeyEvent.FLAG_SOFT_KEYBOARD) != 0
-    if (!isReturn || fromSoftKeyboard || readOnly || !submitEnabled || submitListener == null) {
+    val canSubmit = submitEnabled && submitListener != null && !readOnly
+    if (!isReturn || fromSoftKeyboard || !canSubmit) {
       return null
     }
     return when {
