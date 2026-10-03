@@ -46,9 +46,10 @@ or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
 ## Right panel and browser
 
+From anywhere in a thread, `mod+t` opens a browser tab for that thread with the address bar focused. It does not open a browser from Settings. With a browser tab visible, `mod+l` focuses and selects its address from anywhere in the thread.
+
 While the right panel has focus, it works like a browser window:
 
-- `mod+t` opens a browser tab with the address bar focused, and `mod+l` returns to the address bar.
 - `mod+w` closes the tab. `ctrl+tab` and `ctrl+shift+tab`, or `mod+shift+]` and `mod+shift+[`, move between tabs. In the desktop app, `mod+1` through `mod+8` pick a tab and `mod+9` picks the last.
 - In a browser tab, `mod+[` and `mod+]` go back and forward, `mod+r` reloads, `mod+shift+r` reloads without the cache, `mod+shift+c` picks an element, `mod+shift+m` shows the device toolbar, and `mod+alt+i` opens DevTools.
 

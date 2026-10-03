@@ -4564,6 +4564,7 @@ export default function Sidebar() {
         platform: navigator.platform,
         context: {
           terminalFocus: isTerminalFocused(),
+          previewFocus: isPreviewFocused(),
           terminalOpen: routeTerminalOpen,
           modelPickerOpen: isModelPickerOpen(),
           isWeb: !isElectron,

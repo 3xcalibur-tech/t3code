@@ -33,7 +33,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
   { key: "mod+shift+j", command: "preview.toggle" },
   { key: "mod+r", command: "preview.refresh", when: "previewFocus" },
-  { key: "mod+l", command: "preview.focusUrl", when: "previewFocus" },
+  { key: "mod+l", command: "preview.focusUrl", when: "previewOpen" },
   { key: "mod+=", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod++", command: "preview.zoomIn", when: "previewFocus" },
   { key: "mod+-", command: "preview.zoomOut", when: "previewFocus" },
@@ -90,10 +90,10 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     command,
     when: "modelPickerOpen && isDesktop",
   })),
+  { key: "mod+t", command: "preview.newTab" },
   // The right panel behaves like a browser window while it has focus. These
   // sit after the global rules they shadow (thread traversal and jumps,
   // navigation history, copy reference, model picker) so they win there.
-  { key: "mod+t", command: "preview.newTab", when: "previewFocus && !terminalFocus" },
   { key: "mod+shift+r", command: "preview.hardRefresh", when: "previewFocus && previewOpen" },
   { key: "mod+[", command: "preview.back", when: "previewFocus && previewOpen" },
   { key: "mod+]", command: "preview.forward", when: "previewFocus && previewOpen" },

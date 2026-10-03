@@ -1520,6 +1520,32 @@ describe("Usage shortcuts", () => {
 describe("right panel shortcuts", () => {
   const panelContext = { previewFocus: true, previewOpen: true, isDesktop: true, isWeb: false };
 
+  it.each([
+    ...Array.from({ length: 9 }, (_, index) => ({
+      input: { key: `${index + 1}`, code: `Digit${index + 1}`, metaKey: true },
+      command: `rightPanel.jump.${index + 1}`,
+    })),
+    {
+      input: { key: "[", code: "BracketLeft", metaKey: true, shiftKey: true },
+      command: "rightPanel.previousTab",
+    },
+    {
+      input: { key: "]", code: "BracketRight", metaKey: true, shiftKey: true },
+      command: "rightPanel.nextTab",
+    },
+    { input: { key: "Tab", ctrlKey: true }, command: "rightPanel.nextTab" },
+    { input: { key: "Tab", ctrlKey: true, shiftKey: true }, command: "rightPanel.previousTab" },
+  ])("keeps $command out of chat navigation while the panel is focused", ({ input, command }) => {
+    const resolved = resolveShortcutCommand(event(input), DEFAULT_RESOLVED_KEYBINDINGS, {
+      platform: "MacIntel",
+      // Sidebar navigation needs panel focus even for non-browser panel tabs.
+      context: { previewFocus: true, isDesktop: true, isWeb: false },
+    });
+    assert.strictEqual(resolved, command);
+    assert.isNull(threadJumpIndexFromCommand(resolved ?? ""));
+    assert.isNull(threadTraversalDirectionFromCommand(resolved));
+  });
+
   it("acts like a browser while a browser tab has focus", () => {
     const resolve = (overrides: Partial<ShortcutEventLike>, context = panelContext) =>
       resolveShortcutCommand(event({ metaKey: true, ...overrides }), DEFAULT_RESOLVED_KEYBINDINGS, {
@@ -1538,7 +1564,39 @@ describe("right panel shortcuts", () => {
     const appContext = { ...panelContext, previewFocus: false, previewOpen: false };
     assert.strictEqual(resolve({ key: "[", code: "BracketLeft" }, appContext), "navigation.back");
     assert.strictEqual(resolve({ key: "1", code: "Digit1" }, appContext), "thread.jump.1");
-    assert.isNull(resolve({ key: "t" }, appContext));
+    assert.strictEqual(resolve({ key: "t" }, appContext), "preview.newTab");
+  });
+
+  it.each([
+    { composerFocus: true, editableFocus: true },
+    { terminalFocus: true, terminalOpen: true },
+    { previewFocus: false, previewOpen: false },
+  ])("opens a browser tab from thread focus %j", (context) => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context,
+      }),
+      "preview.newTab",
+    );
+  });
+
+  it("focuses the address bar from the composer only while a browser is visible", () => {
+    const shortcut = event({ key: "l", metaKey: true });
+    const context = { composerFocus: true, editableFocus: true, previewFocus: false };
+    assert.strictEqual(
+      resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { ...context, previewOpen: true },
+      }),
+      "preview.focusUrl",
+    );
+    assert.isNull(
+      resolveShortcutCommand(shortcut, DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { ...context, previewOpen: false },
+      }),
+    );
   });
 
   it("keeps page navigation off panel tabs that are not browsers", () => {

@@ -883,8 +883,14 @@ describe("agent browser close confirmation", () => {
 });
 
 describe("floating browser preview", () => {
-  it("only hides the duplicate while the same browser is rendered in the panel", () => {
+  it("hides floating browsers while any panel tab is visible", () => {
     expect(shouldRenderPreviewMiniPlayer(null, null)).toBe(false);
+    expect(shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "tab-1" }, null, false)).toBe(
+      true,
+    );
+    expect(shouldRenderPreviewMiniPlayer({ kind: "browser", tabId: "tab-1" }, null, true)).toBe(
+      false,
+    );
     expect(
       shouldRenderPreviewMiniPlayer(
         { kind: "browser", tabId: "tab-1" },
@@ -904,13 +910,13 @@ describe("floating browser preview", () => {
           resourceId: "tab-2",
         },
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldRenderPreviewMiniPlayer(
         { kind: "browser", tabId: "tab-1" },
         { id: "diff", kind: "diff" },
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -1807,8 +1813,14 @@ describe("shouldRefocusComposerOnWindowFocus", () => {
     expect(shouldRefocusComposerOnWindowFocus(element("BODY"))).toBe(true);
   });
 
-  it("refocuses away from a plain button, such as a pull request tab", () => {
+  it("refocuses away from a plain button outside the panel", () => {
     expect(shouldRefocusComposerOnWindowFocus(element("BUTTON"))).toBe(true);
+  });
+
+  it.each(["BUTTON", "DIV"])("preserves a focused panel %s after switching tabs", (tagName) => {
+    expect(
+      shouldRefocusComposerOnWindowFocus(element(tagName, { within: "data-preview-panel-mode" })),
+    ).toBe(false);
   });
 
   it("leaves other text fields alone", () => {

@@ -98,6 +98,7 @@ export function PreviewChromeRow({
   leadingActions,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const toolbarRef = useRef<HTMLFormElement | null>(null);
   const [draft, setDraft] = useState(url);
   const [inputFocused, setInputFocused] = useState(false);
 
@@ -106,6 +107,7 @@ export function PreviewChromeRow({
     const node = inputRef.current;
     if (!node) return;
     node.focus();
+    node.select();
   }, [focusUrlNonce]);
 
   useEffect(() => {
@@ -117,12 +119,14 @@ export function PreviewChromeRow({
     const next = draft.trim();
     if (next.length === 0) return;
     onSubmit(next);
-    inputRef.current?.blur();
+    toolbarRef.current?.focus({ preventScroll: true });
   };
 
   return (
     <div className="relative">
       <form
+        ref={toolbarRef}
+        tabIndex={-1}
         onSubmit={submit}
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
@@ -204,7 +208,7 @@ export function PreviewChromeRow({
                     if (event.key === "Escape") {
                       event.preventDefault();
                       setDraft(url);
-                      inputRef.current?.blur();
+                      toolbarRef.current?.focus({ preventScroll: true });
                     }
                   }}
                   placeholder="Search or enter URL"

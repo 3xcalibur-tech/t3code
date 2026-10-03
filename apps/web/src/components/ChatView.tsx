@@ -2298,6 +2298,7 @@ export default function ChatView(props: ChatViewProps) {
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
     activePreviewMiniPlayer?.source ?? null,
     renderedRightPanelSurface,
+    rightPanelPresent,
   );
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const rightPanelMaximized =
@@ -5412,18 +5413,30 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef) {
       // Closing the panel on a live browser or device floats it instead of dropping it.
       if (activeRightPanelSurface?.kind === "preview" && activeRightPanelSurface.resourceId) {
-        usePreviewMiniPlayerStore
-          .getState()
-          .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
+        const snapshot = activePreviewState.sessions[activeRightPanelSurface.resourceId];
+        if (snapshot && snapshot.navStatus._tag !== "Idle") {
+          usePreviewMiniPlayerStore
+            .getState()
+            .open(activeThreadRef, browserMiniPlayerSource(activeRightPanelSurface.resourceId));
+        } else {
+          usePreviewMiniPlayerStore.getState().close(activeThreadRef);
+        }
       } else if (activeRightPanelSurface?.kind === "device" && activeRightPanelSurface.target) {
         usePreviewMiniPlayerStore
           .getState()
           .open(activeThreadRef, { kind: "device", ...activeRightPanelSurface.target });
+      } else if (activePreviewMiniPlayer?.source.kind === "browser") {
+        usePreviewMiniPlayerStore.getState().close(activeThreadRef);
       }
       setMaximizedRightPanelThreadKey(null);
       useRightPanelStore.getState().close(activeThreadRef);
     }
-  }, [activeRightPanelSurface, activeThreadRef]);
+  }, [
+    activeRightPanelSurface,
+    activeThreadRef,
+    activePreviewState.sessions,
+    activePreviewMiniPlayer,
+  ]);
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {
@@ -6357,7 +6370,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
 
   // Tabbing back into the app lands focus wherever it last was, often the right panel or the
-  // body. Put it in the composer unless something that takes typing already holds it. The
+  // body. Preserve deliberate panel focus as well as fields that take typing. The
   // drawer terminal owns keyboard input while it is open, so it opts out here; a right panel
   // terminal is a surface and is recognized by the predicate instead. Mobile is left alone so
   // returning to the app does not raise the keyboard.

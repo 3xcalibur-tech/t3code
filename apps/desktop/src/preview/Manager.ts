@@ -2054,9 +2054,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       }
       // Browser and panel shortcuts belong to the app while a person has the
       // page focused. Agent keystrokes and native editing stay with the page.
+      // getFocusedWebContents() can return a hidden guest after switching tabs;
+      // check the guest receiving this event instead.
       if (
         agentDrivenWebContents.has(wc) ||
-        webContents.getFocusedWebContents() !== wc ||
+        !wc.isFocused() ||
         isPreviewEditingShortcut(input, hostPlatform)
       ) {
         return;
