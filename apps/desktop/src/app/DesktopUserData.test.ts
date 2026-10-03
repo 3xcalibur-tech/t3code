@@ -17,6 +17,7 @@ it.effect("identifies a failed source read and preserves its cause", () => {
   });
   return Effect.gen(function* () {
     const error = yield* resolveUserDataPath({
+      stateDir: "/test-state",
       appDataDirectory: "/profiles",
       isDevelopment: false,
       platform: "win32",
@@ -52,6 +53,7 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       yield* fs.writeFileString(path.join(source, "Local State"), state);
       yield* fs.writeFileString(path.join(source, "IndexedDB", "LOCK"), "V1 owns this database");
       yield* resolveUserDataPath({
+        stateDir: "/test-state",
         appDataDirectory: directory,
         isDevelopment: false,
         platform: "win32",
@@ -61,6 +63,7 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       assert.isFalse(yield* fs.exists(path.join(destination, "IndexedDB")));
       yield* fs.writeFileString(path.join(destination, "Local State"), "existing V2 state");
       yield* resolveUserDataPath({
+        stateDir: "/test-state",
         appDataDirectory: directory,
         isDevelopment: false,
         platform: "win32",
@@ -70,4 +73,18 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
         "existing V2 state",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("isolates development profiles and locks by environment", () =>
+  Effect.gen(function* () {
+    const input = {
+      appDataDirectory: "/profiles",
+      isDevelopment: true,
+      platform: "darwin" as const,
+    };
+    const first = yield* resolveUserDataPath({ ...input, stateDir: "/worktree-a/.t3/userdata" });
+    const second = yield* resolveUserDataPath({ ...input, stateDir: "/worktree-b/.t3/userdata" });
+    assert.equal(first, "/worktree-a/.t3/userdata/electron");
+    assert.notEqual(first, second);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

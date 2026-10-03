@@ -50,6 +50,7 @@ const makeDesktopClerkLayer = (
     openSystemSettings: () => Effect.succeed(false),
     copyText: () => Effect.void,
   },
+  acquireLock = true,
 ) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
     stateDir: "/tmp/t3-state",
@@ -59,6 +60,16 @@ const makeDesktopClerkLayer = (
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
   const electronApp = {
+    requestSingleInstanceLock: Effect.sync(() => {
+      events.push("requestSingleInstanceLock");
+      return acquireLock;
+    }),
+    releaseSingleInstanceLock: Effect.sync(() => {
+      events.push("releaseSingleInstanceLock");
+    }),
+    quit: Effect.sync(() => {
+      events.push("quit");
+    }),
     setPath: (name: string, value: string) =>
       Effect.sync(() => {
         events.push(`setPath:${name}:${value}`);
@@ -109,7 +120,12 @@ describe("DesktopClerk", () => {
       // The bridge acquires Electron's single-instance lock at creation, and
       // the lock both lives in and creates the userData directory — so the
       // real path must be set before the bridge exists.
-      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/t3code-dev", "createClerkBridge"]);
+      assert.deepEqual(events, [
+        "setPath:userData:/tmp/t3-state/electron",
+        "requestSingleInstanceLock",
+        "createClerkBridge",
+        "releaseSingleInstanceLock",
+      ]);
       storageMock.mockClear();
       createClerkBridgeMock.mockClear();
     });
@@ -126,7 +142,7 @@ describe("DesktopClerk", () => {
       name: "development",
       isDevelopment: true,
       platform: "win32" as const,
-      userData: "/tmp/app-data/t3code-dev",
+      userData: "/tmp/t3-state/electron",
     },
   ])(
     "creates the bridge before startup can yield to the event loop ($name)",
@@ -199,6 +215,24 @@ describe("DesktopClerk", () => {
       }
     });
   });
+
+  it.effect("stops a second macOS instance before creating the bridge", () =>
+    Effect.gen(function* () {
+      const events: string[] = [];
+      const exit = yield* Effect.exit(
+        Effect.scoped(
+          Layer.build(makeDesktopClerkLayer(true, events, "darwin", undefined, undefined, false)),
+        ),
+      );
+      assert.isTrue(Exit.hasInterrupts(exit));
+      assert.deepEqual(events, [
+        "setPath:userData:/tmp/t3-state/electron",
+        "requestSingleInstanceLock",
+        "quit",
+      ]);
+      assert.equal(createClerkBridgeMock.mock.calls.length, 0);
+    }),
+  );
 
   it.effect("registers the second-instance handler in the primary instance", () => {
     storageMock.mockReturnValue(storageAdapter);

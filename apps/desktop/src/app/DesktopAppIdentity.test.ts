@@ -44,6 +44,8 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
     name: Effect.succeed("T3 Code"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
+    requestSingleInstanceLock: Effect.succeed(true),
+    releaseSingleInstanceLock: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
     relaunch: () => Effect.void,
@@ -159,14 +161,11 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
-  it.effect("keeps using the legacy development profile", () =>
+  it.effect("isolates the development profile under its environment", () =>
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        assert.equal(
-          yield* identity.resolveUserDataPath,
-          "/Users/alice/Library/Application Support/T3 Code (Dev)",
-        );
+        assert.equal(yield* identity.resolveUserDataPath, "/Users/alice/.t3/dev/electron");
       }),
       {
         legacyPathExists: true,
@@ -175,8 +174,8 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
-  it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Dev)";
+  it.effect("preserves failures while inspecting the Windows userData path", () => {
+    const legacyPath = "/Users/alice/AppData/Roaming/t3code-v2/Local State";
     const cause = PlatformError.systemError({
       _tag: "PermissionDenied",
       module: "FileSystem",
@@ -200,7 +199,7 @@ describe("DesktopAppIdentity", () => {
       }),
       {
         legacyPathProbeError: cause,
-        environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
+        environment: { platform: "win32" },
       },
     );
   });

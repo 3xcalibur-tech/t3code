@@ -94,10 +94,21 @@ export const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const shell = yield* ElectronShell.ElectronShell;
 
-  // The SDK bridge acquires Electron's profile-scoped single-instance lock.
+  // The SDK owns the profile-scoped lock on Windows/Linux; macOS needs it here.
   // Must not yield: the bridge registers a scheme Electron rejects once ready.
   const userDataPath = yield* DesktopUserData.resolveUserDataPath(environment);
   yield* electronApp.setPath("userData", userDataPath);
+
+  if (environment.platform === "darwin") {
+    const isPrimaryInstance = yield* Effect.acquireRelease(
+      electronApp.requestSingleInstanceLock,
+      (acquired) => (acquired ? electronApp.releaseSingleInstanceLock : Effect.void),
+    );
+    if (!isPrimaryInstance) {
+      yield* electronApp.quit;
+      return yield* Effect.interrupt;
+    }
+  }
 
   const bridge = yield* Effect.acquireRelease(
     Effect.try({
