@@ -109,6 +109,9 @@ class T3ComposerEditorModule : Module() {
       Prop("enterBehavior") { view: T3ComposerEditorView, behavior: String ->
         view.setEnterBehavior(behavior)
       }
+      Prop("submitEnabled") { view: T3ComposerEditorView, enabled: Boolean ->
+        view.setSubmitEnabled(enabled)
+      }
       Prop("scrollEnabled") { view: T3ComposerEditorView, scrollEnabled: Boolean ->
         view.setScrollEnabled(scrollEnabled)
       }

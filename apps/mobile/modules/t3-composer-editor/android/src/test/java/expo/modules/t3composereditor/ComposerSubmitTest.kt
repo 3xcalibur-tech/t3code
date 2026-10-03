@@ -16,6 +16,7 @@ class ComposerSubmitTest {
   private val sends = mutableListOf<Boolean>()
   private val editor = SelectionAwareEditText(RuntimeEnvironment.getApplication()).apply {
     inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    submitEnabled = true
     submitListener = { alternate -> sends += alternate }
   }
 
@@ -64,6 +65,26 @@ class ComposerSubmitTest {
     pressReturn(KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON)
 
     assertEquals(listOf(false, true), sends)
+    assertEquals("\n", editor.text.toString())
+  }
+
+  @Test
+  fun returnInsertsANewlineWhenSubmissionIsUnavailable() {
+    editor.submitEnabled = false
+
+    pressReturn()
+
+    assertEquals(emptyList<Boolean>(), sends)
+    assertEquals("\n", editor.text.toString())
+  }
+
+  @Test
+  fun returnInsertsANewlineWithoutASubmitListener() {
+    editor.submitListener = null
+
+    pressReturn()
+
+    assertEquals(emptyList<Boolean>(), sends)
     assertEquals("\n", editor.text.toString())
   }
 

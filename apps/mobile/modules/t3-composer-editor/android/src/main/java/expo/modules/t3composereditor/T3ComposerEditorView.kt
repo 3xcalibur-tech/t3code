@@ -319,6 +319,10 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
     editor.returnSends = behavior != "newline"
   }
 
+  fun setSubmitEnabled(enabled: Boolean) {
+    editor.submitEnabled = enabled
+  }
+
   fun setScrollEnabled(scrollEnabled: Boolean) {
     editor.isVerticalScrollBarEnabled = scrollEnabled
   }
@@ -605,6 +609,9 @@ internal class SelectionAwareEditText(context: Context) : EditText(context) {
   /** Whether a hardware Return sends (`enterBehavior` "send") or inserts a newline. */
   var returnSends = true
 
+  /** The JS wrapper enables submission only when it has an onSubmit handler. */
+  var submitEnabled = false
+
   /**
    * Placeholder shown while the draft is empty. An editable TextView never ellipsizes its hint,
    * so a long placeholder wraps once a wide system font or a large font scale (Samsung defaults)
@@ -669,7 +676,9 @@ internal class SelectionAwareEditText(context: Context) : EditText(context) {
     val fromSoftKeyboard =
       event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD ||
         (event.flags and KeyEvent.FLAG_SOFT_KEYBOARD) != 0
-    if (!isReturn || fromSoftKeyboard || readOnly) return null
+    if (!isReturn || fromSoftKeyboard || readOnly || !submitEnabled || submitListener == null) {
+      return null
+    }
     return when {
       event.hasNoModifiers() -> if (returnSends) false else null
       event.hasModifiers(KeyEvent.META_CTRL_ON) -> returnSends

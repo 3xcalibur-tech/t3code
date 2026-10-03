@@ -182,6 +182,21 @@ private func concurrentRegistrations() throws {
   try require(delegates.map { $0.events.count } == removed, "Removed delegates must not receive new callbacks")
 }
 
+private func partiallyHandledReplay() throws {
+  let manager = NotificationCenterManager.shared
+  deliver("handled")
+  deliver("unhandled")
+  let original = TestDelegate()
+  original.onResponse = { $0.identifier == "handled" }
+  manager.addDelegate(original)
+  let receiver = TestDelegate()
+  receiver.onResponse = { _ in true }
+  manager.addDelegate(receiver)
+  try require(receiver.events == ["unhandled"], "Replay must retain each response that the delegate did not handle")
+  manager.removeDelegate(original)
+  manager.removeDelegate(receiver)
+}
+
 @main
 private enum RegressionTests {
   static func main() {
@@ -190,6 +205,7 @@ private enum RegressionTests {
       case "reentrant": try reentrantCallbacks()
       case "handoff": try registrationDuringDelivery()
       case "pending": try responseDuringReplay()
+      case "partial": try partiallyHandledReplay()
       case "concurrent": try concurrentRegistrations()
       default: throw NSError(domain: "NotificationCenterManagerRegression", code: 2)
       }

@@ -65,6 +65,7 @@ describe.skipIf(NodeOS.platform() !== "darwin")(
       ["reentrant", "allows callbacks to replace delegates without deadlocking"],
       ["handoff", "delivers responses to delegates registering during delivery"],
       ["pending", "retains new responses received while replaying pending responses"],
+      ["partial", "retains responses that a replaying delegate did not handle"],
       ["concurrent", "registers, removes, and broadcasts concurrently without data races"],
     ])("%s: %s", (name) => {
       const output = NodeChildProcess.execFileSync(executable, [name], {
