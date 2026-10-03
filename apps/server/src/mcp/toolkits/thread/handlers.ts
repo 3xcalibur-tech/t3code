@@ -272,6 +272,25 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       queuedRunId: input.queuedRunId,
       targetRunId: input.targetRunId,
     })),
+  wait_for_background_commands: (input) => {
+    const held = input.wait ?? true;
+    return dispatch(undefined, (common) => ({
+      ...common,
+      type: "thread.background-work.hold",
+      held,
+    })).pipe(
+      // The orchestrator rejects a hold when no background command runs.
+      Effect.mapError((error) =>
+        held && error.code === "orchestration_error"
+          ? new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "Could not wait: this thread has no background command running. Start the command in the background first.",
+            })
+          : error,
+      ),
+    );
+  },
   t3_thread_organize: (input) =>
     Effect.gen(function* () {
       const { threads, projection } = yield* readWritableThread(input.threadId);
