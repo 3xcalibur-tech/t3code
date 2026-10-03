@@ -12,7 +12,6 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
-  type OrchestrationV2ThreadProjection,
   type OrchestrationV2CreationSource,
   type PlanId,
   type ProjectId,
@@ -773,13 +772,12 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   input: InterruptThreadTurnInput,
 ) {
   let runId = input.runId ?? (input.turnId as RunId | undefined);
-  let parentProjection: OrchestrationV2ThreadProjection | undefined;
+  const parentProjection = yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
+    threadId: input.threadId,
+    includeInterruptTargets: true,
+  });
   if (runId === undefined) {
-    const projection = yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
-      threadId: input.threadId,
-      includeInterruptTargets: true,
-    });
-    parentProjection = projection;
+    const projection = parentProjection;
     runId = projection.runs.findLast(
       (run) =>
         run.status === "preparing" ||
@@ -803,11 +801,9 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     }
   }
   let childSequence = 0;
-  // The original task stays terminal after a follow-up. Its child link is
-  // still authoritative; read the child's current run when stopping a settled
-  // parent's background work, without asking callers to supply the roster.
+  // Older servers lack derived targets. Use their task links to discover
+  // resumed children when stopping a settled parent's background work.
   const resumedChildThreadIds =
-    parentProjection !== undefined &&
     parentProjection.childInterruptTargets === undefined &&
     !parentProjection.runs.some((run) =>
       ["preparing", "starting", "running"].includes(run.status),
@@ -824,7 +820,6 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
         )
       : [];
   if (
-    parentProjection !== undefined &&
     !parentProjection.runs.some((run) => ["preparing", "starting", "running"].includes(run.status))
   ) {
     for (const target of parentProjection.childInterruptTargets ?? []) {

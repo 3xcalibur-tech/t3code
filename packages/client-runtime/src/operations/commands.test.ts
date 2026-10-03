@@ -1134,7 +1134,7 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("interrupts a known run without fetching the full projection", () =>
+  it.effect("interrupts a known run after checking parent child targets", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
       const projectionRequests: ThreadId[] = [];
@@ -1150,7 +1150,7 @@ describe("V2 environment commands", () => {
         runId: RunId.make("active-run"),
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
-      expect(projectionRequests).toEqual([]);
+      expect(projectionRequests).toEqual([v2ThreadId]);
       expect(commands).toEqual([
         {
           type: "run.interrupt",
@@ -1162,101 +1162,104 @@ describe("V2 environment commands", () => {
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
-  it.effect("stopping a follow-up uses server targets without fetching historical children", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const projectionRequests: ThreadId[] = [];
-      const run = {
-        id: RunId.make("review:parent-run"),
-        threadId: v2ThreadId,
-        ordinal: 1,
-        providerInstanceId: v2Projection.thread.providerInstanceId,
-        modelSelection: v2Projection.thread.modelSelection,
-        providerThreadId: null,
-        userMessageId: MessageId.make("review:parent-input"),
-        rootNodeId: null,
-        activeAttemptId: null,
-        status: "completed" as const,
-        requestedAt: v2Now,
-        startedAt: v2Now,
-        completedAt: v2Now,
-        checkpointId: null,
-        contextHandoffId: null,
-      };
-      const tasks = Array.from({ length: 101 }, (_, index) => ({
-        id: NodeId.make(`review:task:${index}`),
-        threadId: v2ThreadId,
-        runId: run.id,
-        parentNodeId: NodeId.make("review:root"),
-        origin: "app_owned" as const,
-        createdBy: "agent" as const,
-        driver: ProviderDriverKind.make("codex"),
-        providerInstanceId: run.providerInstanceId,
-        providerThreadId: null,
-        childThreadId: ThreadId.make(`review:child:${index}`),
-        nativeTaskRef: null,
-        prompt: "old task",
-        title: null,
-        model: null,
-        status: "completed" as const,
-        result: "old result",
-        startedAt: v2Now,
-        completedAt: v2Now,
-        updatedAt: v2Now,
-      }));
-      const parent = {
-        ...v2Projection,
-        runs: [run],
-        subagents: tasks,
-        childInterruptTargets: [
-          {
-            threadId: tasks[100]!.childThreadId!,
-            runId: RunId.make("review:child-run:100"),
-            action: "interrupt" as const,
-          },
-        ],
-      };
-      const projections = new Map<ThreadId, OrchestrationV2ThreadProjection>([
-        [v2ThreadId, parent],
-      ]);
-      for (const [index, task] of tasks.entries())
-        projections.set(task.childThreadId, {
+  it.effect.each([false, true])(
+    "stopping a follow-up uses server targets without fetching historical children, explicit run %s",
+    (explicitRun) =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const projectionRequests: ThreadId[] = [];
+        const run = {
+          id: RunId.make("review:parent-run"),
+          threadId: v2ThreadId,
+          ordinal: 1,
+          providerInstanceId: v2Projection.thread.providerInstanceId,
+          modelSelection: v2Projection.thread.modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("review:parent-input"),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "completed" as const,
+          requestedAt: v2Now,
+          startedAt: v2Now,
+          completedAt: v2Now,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        const tasks = Array.from({ length: 101 }, (_, index) => ({
+          id: NodeId.make(`review:task:${index}`),
+          threadId: v2ThreadId,
+          runId: run.id,
+          parentNodeId: NodeId.make("review:root"),
+          origin: "app_owned" as const,
+          createdBy: "agent" as const,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: run.providerInstanceId,
+          providerThreadId: null,
+          childThreadId: ThreadId.make(`review:child:${index}`),
+          nativeTaskRef: null,
+          prompt: "old task",
+          title: null,
+          model: null,
+          status: "completed" as const,
+          result: "old result",
+          startedAt: v2Now,
+          completedAt: v2Now,
+          updatedAt: v2Now,
+        }));
+        const parent = {
           ...v2Projection,
-          thread: {
-            ...v2Projection.thread,
-            id: task.childThreadId,
-            lineage: {
-              parentThreadId: v2ThreadId,
-              rootThreadId: v2ThreadId,
-              relationshipToParent: "subagent",
-            },
-          },
-          runs: [
+          runs: [run],
+          subagents: tasks,
+          childInterruptTargets: [
             {
-              ...run,
-              id: RunId.make(`review:child-run:${index}`),
-              threadId: task.childThreadId,
-              status: index === 100 ? "running" : "completed",
+              threadId: tasks[100]!.childThreadId!,
+              runId: RunId.make("review:child-run:100"),
+              action: "interrupt" as const,
             },
           ],
+        };
+        const projections = new Map<ThreadId, OrchestrationV2ThreadProjection>([
+          [v2ThreadId, parent],
+        ]);
+        for (const [index, task] of tasks.entries())
+          projections.set(task.childThreadId, {
+            ...v2Projection,
+            thread: {
+              ...v2Projection.thread,
+              id: task.childThreadId,
+              lineage: {
+                parentThreadId: v2ThreadId,
+                rootThreadId: v2ThreadId,
+                relationshipToParent: "subagent",
+              },
+            },
+            runs: [
+              {
+                ...run,
+                id: RunId.make(`review:child-run:${index}`),
+                threadId: task.childThreadId,
+                status: index === 100 ? "running" : "completed",
+              },
+            ],
+          });
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          projections,
+          projectionRequests,
         });
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        projections,
-        projectionRequests,
-      });
-      yield* interruptThreadTurn({
-        commandId: CommandId.make("review:stop"),
-        threadId: v2ThreadId,
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toMatchObject({
-        type: "run.interrupt",
-        threadId: tasks[100]!.childThreadId,
-        runId: RunId.make("review:child-run:100"),
-      });
-      expect(projectionRequests).toEqual([v2ThreadId]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+        yield* interruptThreadTurn({
+          commandId: CommandId.make("review:stop"),
+          threadId: v2ThreadId,
+          ...(explicitRun ? { runId: run.id } : {}),
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        expect(commands).toHaveLength(explicitRun ? 2 : 1);
+        expect(commands[0]).toMatchObject({
+          type: "run.interrupt",
+          threadId: tasks[100]!.childThreadId,
+          runId: RunId.make("review:child-run:100"),
+        });
+        expect(projectionRequests).toEqual([v2ThreadId]);
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 });

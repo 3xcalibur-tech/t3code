@@ -4448,6 +4448,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   )).messages[0];
             const originalParentRun = parent.runs.find((run) => run.id === task.runId);
             delegatedTaskParentRunId =
+              parent.thread.archivedAt !== null ||
+              parent.thread.deletedAt !== null ||
               originalParentRun?.delegatedCompletion?.disposition === undefined ||
               originalParentRun.delegatedCompletion.disposition === "open"
                 ? (task.runId ?? undefined)

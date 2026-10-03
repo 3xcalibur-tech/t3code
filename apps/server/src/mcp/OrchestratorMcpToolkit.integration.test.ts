@@ -3915,35 +3915,47 @@ describe("orchestrator MCP toolkit", () => {
       completionWake: "always",
       delayedDelivery: false,
       closedCohort: false,
+      archivedIntake: false,
       followupStatus: "completed" as const,
     },
     {
       completionWake: "settled_only",
       delayedDelivery: false,
       closedCohort: false,
+      archivedIntake: false,
       followupStatus: "completed" as const,
     },
     {
       completionWake: "always",
       delayedDelivery: true,
       closedCohort: false,
+      archivedIntake: false,
       followupStatus: "completed" as const,
     },
     {
       completionWake: "always",
       delayedDelivery: false,
       closedCohort: true,
+      archivedIntake: false,
+      followupStatus: "completed" as const,
+    },
+    {
+      completionWake: "always",
+      delayedDelivery: false,
+      closedCohort: true,
+      archivedIntake: true,
       followupStatus: "completed" as const,
     },
     ...(["failed", "cancelled", "interrupted"] as const).map((followupStatus) => ({
       completionWake: "always" as const,
       delayedDelivery: false,
       closedCohort: false,
+      archivedIntake: false,
       followupStatus,
     })),
   ] as const)(
-    "wakes the parent after an original $completionWake delegation with delayed delivery $delayedDelivery and closed cohort $closedCohort, follow-up $followupStatus",
-    ({ completionWake, delayedDelivery, closedCohort, followupStatus }) =>
+    "routes follow-up results after an original $completionWake delegation, delayed delivery $delayedDelivery, closed cohort $closedCohort, archived intake $archivedIntake, outcome $followupStatus",
+    ({ completionWake, delayedDelivery, closedCohort, archivedIntake, followupStatus }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* checkpointWorkspace("parent-wake-followup-comparison");
@@ -3984,7 +3996,8 @@ describe("orchestrator MCP toolkit", () => {
                         ? controlGate
                         : turn.message.text === foregroundPrompt
                           ? foregroundGate
-                          : delayedDelivery && turn.message.text.startsWith(followupPrompt)
+                          : (delayedDelivery || archivedIntake) &&
+                              turn.message.text.startsWith(followupPrompt)
                             ? followupGate
                             : undefined,
                 response: (turn) => `Result: ${turn.message.text}`,
@@ -4147,6 +4160,13 @@ describe("orchestrator MCP toolkit", () => {
               (event) =>
                 event.type === "provider-turn.updated" && event.payload.status === "running",
             );
+            if (archivedIntake) {
+              yield* orchestrator.dispatch({
+                type: "thread.archive",
+                threadId: parentThreadId,
+                commandId: CommandId.make("wake-comparison:archive-intake"),
+              });
+            }
             const followupRunIds: RunId[] = [];
             for (let index = 0; index < (delayedDelivery ? 2 : 1); index++) {
               const childSequence = yield* orchestrator.getThreadEventSequence(
@@ -4171,13 +4191,25 @@ describe("orchestrator MCP toolkit", () => {
                   (run) => run.userMessageId === MessageId.make("wake-comparison:foreground"),
                 )!;
                 const task = parent.subagents.find((task) => task.id === worker.id)!;
-                expect(child.runs.at(-1)?.delegatedTaskParentRunId).toBe(owner.id);
-                expect(task.runId).toBe(owner.id);
-                expect(owner.delegatedCompletion?.disposition).toBe("open");
+                expect(child.runs.at(-1)?.delegatedTaskParentRunId).toBe(
+                  archivedIntake ? parentRun.id : owner.id,
+                );
+                expect(task.runId).toBe(archivedIntake ? parentRun.id : owner.id);
+                expect(owner.delegatedCompletion?.disposition).toBe(
+                  archivedIntake ? undefined : "open",
+                );
                 expect(
                   parent.runs.find((run) => run.id === parentRun.id)?.delegatedCompletion
                     ?.disposition,
                 ).toBe("disposed");
+              }
+              if (archivedIntake) {
+                yield* orchestrator.dispatch({
+                  type: "thread.unarchive",
+                  threadId: parentThreadId,
+                  commandId: CommandId.make("wake-comparison:unarchive-intake"),
+                });
+                yield* Deferred.succeed(followupGate, undefined);
               }
               // Intake takes the parent lock too. Hold it only after the
               // child's request commits, so its terminal delivery queues behind it.
@@ -4223,7 +4255,7 @@ describe("orchestrator MCP toolkit", () => {
               expect(
                 workerTask.completionDelivery?.state,
                 "An explicitly requested follow-up must be returned after reopening its parent",
-              ).toBe("claimed");
+              ).toBe(archivedIntake ? "disposed" : "claimed");
               return;
             }
             // This later independent completion is a barrier on the sequential
