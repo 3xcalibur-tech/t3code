@@ -38,8 +38,9 @@ function createGuard(previous: HTMLElement, onHumanInput: HumanInputSubscription
             previous.type,
           ))) &&
       (event.isComposing ||
-        (!["Tab", "Escape", "Enter"].includes(event.key) &&
-          !event.altKey &&
+        ["Shift", "Control", "Alt", "Meta", "AltGraph", "Dead", "Process"].includes(event.key) ||
+        (!["Tab", "Escape"].includes(event.key) &&
+          (event.key !== "Enter" || event.shiftKey) &&
           (!(event.metaKey || event.ctrlKey) ||
             [
               "a",

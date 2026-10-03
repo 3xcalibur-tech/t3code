@@ -255,6 +255,14 @@ describe("runPreviewTabKeepingHostFocus", () => {
     { key: "v", metaKey: true },
     { key: "V", metaKey: true, shiftKey: true },
     { key: "Enter", isComposing: true },
+    { key: "Enter", shiftKey: true },
+    { key: "é", altKey: true },
+    { key: "Dead", altKey: true },
+    { key: "ArrowLeft", altKey: true },
+    { key: "Backspace", altKey: true },
+    { key: "Alt", altKey: true },
+    { key: "Meta", metaKey: true },
+    { key: "Control", ctrlKey: true },
   ])("preserves typing focus across a late traversal after $key", async (input) => {
     const composer = mount("textarea");
     const preview = mount("webview");
