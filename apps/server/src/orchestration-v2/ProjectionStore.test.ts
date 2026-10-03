@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   EventId,
   CommandId,
+  ContextTransferId,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -326,6 +327,110 @@ it.effect("memory recovery selection includes unfinished items from missing runs
 
     assert.include(yield* projectionStore.getRecoveryThreadIds("runtime"), threadId);
   }).pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
+const followUpResultRecovery = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const childId = yield* addRolledBackRecoveryCandidate("follow-up-result");
+  const projection = yield* store.getThreadProjection(childId);
+  const parentId = ThreadId.make("parent:follow-up-result");
+  const original = { ...projection.runs[0]!, status: "completed" as const };
+  const now = yield* DateTime.now;
+  yield* store.apply({
+    id: EventId.make("follow-up-result:lineage"),
+    type: "thread.metadata-updated",
+    threadId: childId,
+    occurredAt: now,
+    payload: {
+      ...projection.thread,
+      lineage: {
+        parentThreadId: parentId,
+        rootThreadId: parentId,
+        relationshipToParent: "subagent",
+      },
+      forkedFrom: {
+        type: "node",
+        nodeId: NodeId.make("task:follow-up-result"),
+      },
+    },
+  });
+  yield* store.apply({
+    id: EventId.make("follow-up-result:original"),
+    type: "run.updated",
+    threadId: childId,
+    runId: original.id,
+    occurredAt: now,
+    payload: original,
+  });
+  const transfer = {
+    id: ContextTransferId.make("transfer:original"),
+    type: "subagent_result" as const,
+    sourceThreadId: childId,
+    targetThreadId: parentId,
+    sourcePoint: { threadId: childId },
+    basePoint: null,
+    sourceProviderInstanceId: providerInstanceId,
+    targetProviderInstanceId: providerInstanceId,
+    targetRunId: null,
+    status: "consumed" as const,
+    resolution: null,
+    createdBy: "system" as const,
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+    consumedAt: now,
+  };
+  yield* store.apply({
+    id: EventId.make("follow-up-result:legacy-transfer"),
+    type: "context-transfer.created",
+    threadId: childId,
+    occurredAt: now,
+    payload: transfer,
+  });
+  assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  const followup = {
+    ...original,
+    id: RunId.make("run:follow-up-result"),
+    ordinal: 2,
+    status: "running" as const,
+  };
+  yield* store.apply({
+    id: EventId.make("follow-up-result:running"),
+    type: "run.updated",
+    threadId: childId,
+    runId: followup.id,
+    occurredAt: now,
+    payload: followup,
+  });
+  assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  yield* store.apply({
+    id: EventId.make("follow-up-result:completed"),
+    type: "run.updated",
+    threadId: childId,
+    runId: followup.id,
+    occurredAt: now,
+    payload: { ...followup, status: "completed" },
+  });
+  assert.include(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  yield* store.apply({
+    id: EventId.make("follow-up-result:new-transfer"),
+    type: "context-transfer.created",
+    threadId: childId,
+    occurredAt: now,
+    payload: {
+      ...transfer,
+      id: ContextTransferId.make("transfer:follow-up"),
+      sourcePoint: { threadId: childId, runId: followup.id },
+    },
+  });
+  assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+});
+
+it.effect("recovers only undelivered follow-up results in memory", () =>
+  followUpResultRecovery.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+it.effect("recovers only undelivered follow-up results in SQLite", () =>
+  followUpResultRecovery.pipe(Effect.provide(TestLayer)),
 );
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {

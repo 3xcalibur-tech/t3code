@@ -9,6 +9,7 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2DelegatedCompletionDelivery,
+  type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderSession,
   type OrchestrationV2ProviderThread,
@@ -27,6 +28,7 @@ import {
   type ProviderOptionDescriptor,
   ProviderThreadId,
   ProviderTurnId,
+  type RunId,
   type ScheduledTask,
   ScheduledTaskId,
   type ScheduledTaskUpsertInput,
@@ -413,6 +415,32 @@ function waitForProjection(
     );
   });
 }
+
+const waitForChildResultTransfer = Effect.fn("waitForChildResultTransfer")(function* (
+  orchestrator: Orchestrator.OrchestratorV2Shape,
+  childThreadId: ThreadId,
+  runId: RunId,
+  afterSequence: number,
+) {
+  return yield* orchestrator
+    .streamStoredEventsFrom({ threadId: parentThreadId, afterSequence })
+    .pipe(
+      Stream.filter(
+        (stored) =>
+          stored.event.type === "context-transfer.created" &&
+          stored.event.payload.type === "subagent_result" &&
+          stored.event.payload.sourceThreadId === childThreadId &&
+          stored.event.payload.sourcePoint.runId === runId,
+      ),
+      Stream.runHead,
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.die("Child result transfer was not created."),
+          onSome: Effect.succeed,
+        }),
+      ),
+    );
+});
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -1552,6 +1580,10 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatus.resultContextTransferId).not.toBeNull();
             expect(delegatedStatus.latestTerminalResultContextTransferId).not.toBeNull();
 
+            // The blocking original delegation returned its result directly.
+            expect(yield* Ref.get(continuationOffers)).toHaveLength(0);
+            const childFollowupParentSequence =
+              yield* orchestrator.getThreadEventSequence(parentThreadId);
             const childFollowupCall = yield* invoke("t3_thread_send", {
               threadId: delegated.childThreadId,
               message: "Confirm the delegated API boundary remains inspected.",
@@ -1573,6 +1605,12 @@ describe("orchestrator MCP toolkit", () => {
               status: "completed",
               timedOut: false,
             });
+            yield* waitForChildResultTransfer(
+              orchestrator,
+              delegated.childThreadId,
+              childFollowup.runId,
+              childFollowupParentSequence,
+            );
             const delegatedStatusAfterFollowupCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
             });
@@ -1656,6 +1694,8 @@ describe("orchestrator MCP toolkit", () => {
                 (run) => run.id === activeChildFollowup.runId,
               )?.status,
             ).toBe("running");
+            const cleanupParentSequence =
+              yield* orchestrator.getThreadEventSequence(parentThreadId);
             const activeChildCleanupCall = yield* invoke("t3_thread_interrupt", {
               threadId: delegated.childThreadId,
               runId: activeChildFollowup.runId,
@@ -1674,6 +1714,12 @@ describe("orchestrator MCP toolkit", () => {
                 (run) => run.id === activeChildFollowup.runId && run.status === "interrupted",
               ),
             );
+            yield* waitForChildResultTransfer(
+              orchestrator,
+              delegated.childThreadId,
+              activeChildFollowup.runId,
+              cleanupParentSequence,
+            );
             const delegatedStatusAfterCleanupCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
             });
@@ -1689,10 +1735,10 @@ describe("orchestrator MCP toolkit", () => {
               latestTerminalStatus: "interrupted",
             });
 
-            // A wait-mode child (completionWake settled_only) that completes
-            // while the parent run is live does not offer a wake: the
-            // blocking delegate_task call above already returned the result.
-            yield* expectOffersToStay(0);
+            // Later child turns are asynchronous work, so both completed
+            // follow-ups notify the parent even after a wait-mode delegation.
+            expect(yield* Ref.get(continuationOffers)).toHaveLength(2);
+            yield* Ref.set(continuationOffers, []);
 
             const repeatedDelegatedCall = yield* invoke("delegate_task", {
               task: delegatedPrompt,
@@ -2415,30 +2461,46 @@ describe("orchestrator MCP toolkit", () => {
             ).toMatchObject({ state: "disposed" });
             yield* expectOffersToStay(0);
 
-            // The MCP tool cannot force the reverse interleaving (child
-            // terminal before the upgrade lands), so dispatch the command
-            // directly. The first wait-mode delegation completed while the
-            // parent run was live, so finalize skipped its offer under
-            // settled_only; the upgrade must accept, persist the policy, and
-            // deliver the wake finalize declined.
+            // Use an untouched wait-mode task for the terminal policy upgrade.
+            // The earlier task's asynchronous follow-ups already made it eager.
+            const terminalControlSequence =
+              yield* orchestrator.getThreadEventSequence(parentThreadId);
+            const terminalControlCall = yield* invoke("delegate_task", {
+              task: "Complete once without follow-ups for the wake-policy control.",
+              target: { providerInstanceId: claudeInstanceId, model: claudeModel },
+              mode: "wait",
+              clientRequestId: "delegate-terminal-policy-control",
+            });
+            const terminalControl = yield* decodeDelegateTaskResult(
+              terminalControlCall.structuredContent,
+            ).pipe(Effect.orDie);
+            if (terminalControl.childRunId === null)
+              return yield* Effect.die("Missing control child run.");
+            yield* waitForChildResultTransfer(
+              orchestrator,
+              terminalControl.childThreadId,
+              terminalControl.childRunId,
+              terminalControlSequence,
+            );
+            yield* invoke("task_status", { taskId: terminalControl.taskId });
             const terminalUpgrade = yield* orchestrator.dispatch({
               type: "delegated_task.wake-policy",
               commandId: CommandId.make("command:mcp-parent:wake-policy-terminal"),
               parentThreadId,
-              taskId: delegated.taskId,
+              taskId: terminalControl.taskId,
               completionWake: "always",
             });
             expect(
               terminalUpgrade.storedEvents.some(
                 (stored) =>
                   stored.event.type === "subagent.updated" &&
-                  stored.event.payload.id === delegated.taskId &&
+                  stored.event.payload.id === terminalControl.taskId &&
                   stored.event.payload.completionWake === "always",
               ),
             ).toBe(true);
             expect(
               (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
-                (task) => task.id === delegated.taskId,
+                (task) => task.id === terminalControl.taskId,
               )?.completionWake,
             ).toBe("always");
             // task_status above acknowledged this terminal result, so making
@@ -3751,6 +3813,7 @@ describe("orchestrator MCP toolkit", () => {
           });
 
           const finalSequence = yield* orchestrator.getThreadEventSequence(delegated.childThreadId);
+          const parentFinalSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
           const interruptCall = yield* invoke("t3_thread_interrupt", {
             threadId: delegated.childThreadId,
             runId: runningFollowup.runId,
@@ -3785,6 +3848,28 @@ describe("orchestrator MCP toolkit", () => {
               ),
             );
 
+          yield* orchestrator
+            .streamStoredEventsFrom({
+              threadId: parentThreadId,
+              afterSequence: parentFinalSequence,
+            })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "context-transfer.created" &&
+                  stored.event.payload.type === "subagent_result" &&
+                  stored.event.payload.sourceThreadId === delegated.childThreadId &&
+                  stored.event.payload.sourcePoint.runId === queuedFollowup.runId,
+              ),
+              Stream.runHead,
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.die("Follow-up result transfer was not created."),
+                  onSome: () => Effect.void,
+                }),
+              ),
+            );
+
           const finalProjection = yield* orchestrator.getThreadProjection(delegated.childThreadId);
           expect(finalProjection.runs.find((run) => run.id === runningFollowup.runId)?.status).toBe(
             "interrupted",
@@ -3807,10 +3892,288 @@ describe("orchestrator MCP toolkit", () => {
             latestTerminalRunId: queuedFollowup.runId,
             latestTerminalStatus: "completed",
             latestTerminalSummary: queuedFollowupResult,
-            latestTerminalResultContextTransferId: null,
+            latestTerminalResultContextTransferId: expect.any(String),
           });
         }).pipe(Effect.provide(testLayer));
       }),
     ),
+  );
+  it.live.each(["always", "settled_only"] as const)(
+    "wakes the parent for completed child follow-ups after an original %s delegation",
+    (completionWake) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace("parent-wake-followup-comparison");
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const parentGate = yield* Deferred.make<void>();
+          const initialGate = yield* Deferred.make<void>();
+          const controlGate = yield* Deferred.make<void>();
+          const foregroundGate = yield* Deferred.make<void>();
+          const foregroundPrompt = "Hold the parent while its child follow-up completes.";
+          const initialPrompt = "Original delegated task for follow-up comparison.";
+          const controlPrompt = "Control delegated task without follow-ups.";
+          const followupPrompt = "Follow-up after the original delegated task completed.";
+          const registryLayer = ProviderAdapterRegistry.makeLayer([
+            makeDeterministicAdapter({
+              instanceId: codexInstanceId,
+              driver: ProviderDriverKind.make("codex"),
+              capabilities: {
+                ...CodexProviderCapabilitiesV2,
+                turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: false },
+              },
+              capturedTurns,
+              shouldComplete: () => true,
+              terminalGate: (turn) =>
+                turn.message.text === parentPrompt
+                  ? parentGate
+                  : turn.message.text === initialPrompt
+                    ? initialGate
+                    : turn.message.text === controlPrompt
+                      ? controlGate
+                      : turn.message.text === foregroundPrompt
+                        ? foregroundGate
+                        : undefined,
+              response: (turn) => `Result: ${turn.message.text}`,
+            }),
+          ]);
+          const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+            { name: "parent-wake-followup-comparison", runtimePolicyOverride: { cwd } },
+            registryLayer,
+            { runContinuationWorker: true },
+          );
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const awaitEvent = (
+              threadId: ThreadId,
+              afterSequence: number,
+              predicate: (event: OrchestrationV2DomainEvent) => boolean,
+            ) =>
+              orchestrator.streamStoredEventsFrom({ threadId, afterSequence }).pipe(
+                Stream.filter((stored) => predicate(stored.event)),
+                Stream.runHead,
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.die("Expected orchestration event was not emitted."),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+            const created = yield* orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("wake-comparison:create"),
+              threadId: parentThreadId,
+              projectId,
+              title: "Parent wake-up comparison",
+              modelSelection: codexSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+            });
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("wake-comparison:start"),
+              threadId: parentThreadId,
+              messageId: MessageId.make("wake-comparison:start"),
+              text: parentPrompt,
+              attachments: [],
+              modelSelection: codexSelection,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* awaitEvent(
+              parentThreadId,
+              created.sequence,
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            );
+            const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+            const parentRun = parent.runs[0]!;
+            const delegate = (task: string, suffix: string) =>
+              orchestrator
+                .dispatch({
+                  type: "delegated_task.request",
+                  createdBy: "agent",
+                  creationSource: "mcp",
+                  commandId: CommandId.make(`wake-comparison:delegate:${suffix}`),
+                  parentThreadId,
+                  parentRunId: parentRun.id,
+                  parentNodeId: parentRun.rootNodeId!,
+                  task,
+                  modelSelection: codexSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  completionWake: suffix === "control" ? "always" : completionWake,
+                })
+                .pipe(
+                  Effect.map((result) => {
+                    const taskEvent = result.storedEvents.find(
+                      (stored) => stored.event.type === "subagent.updated",
+                    );
+                    if (
+                      taskEvent?.event.type !== "subagent.updated" ||
+                      taskEvent.event.payload.childThreadId === null
+                    )
+                      throw new Error("Delegation did not produce a child thread.");
+                    return taskEvent.event.payload;
+                  }),
+                );
+            const worker = yield* delegate(initialPrompt, "worker");
+            const control = yield* delegate(controlPrompt, "control");
+            const parentSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
+            yield* Deferred.succeed(parentGate, undefined);
+            yield* awaitEvent(
+              parentThreadId,
+              parentSequence,
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.id === parentRun.id &&
+                ["waiting", "completed"].includes(event.payload.status),
+            );
+            const initialSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
+            yield* Deferred.succeed(initialGate, undefined);
+            yield* awaitEvent(
+              parentThreadId,
+              initialSequence,
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.id !== parentRun.id &&
+                event.payload.status === "completed",
+            );
+            const initialParent = yield* orchestrator.getThreadProjection(parentThreadId);
+            const initialTransfers = initialParent.contextTransfers.filter(
+              (transfer) =>
+                transfer.type === "subagent_result" &&
+                transfer.sourceThreadId === worker.childThreadId,
+            );
+            expect(initialTransfers).toHaveLength(1);
+            const foregroundSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make("wake-comparison:foreground"),
+              threadId: parentThreadId,
+              messageId: MessageId.make("wake-comparison:foreground"),
+              text: foregroundPrompt,
+              attachments: [],
+              modelSelection: codexSelection,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* awaitEvent(
+              parentThreadId,
+              foregroundSequence,
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            );
+            const childSequence = yield* orchestrator.getThreadEventSequence(worker.childThreadId!);
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "agent",
+              creationSource: "mcp",
+              commandId: CommandId.make("wake-comparison:followup"),
+              threadId: worker.childThreadId!,
+              messageId: MessageId.make("wake-comparison:followup"),
+              text: followupPrompt,
+              attachments: [],
+              modelSelection: codexSelection,
+              dispatchMode: { type: "start_immediately" },
+            });
+            const followupTerminal = yield* awaitEvent(
+              worker.childThreadId!,
+              childSequence,
+              (event) => event.type === "run.updated" && event.payload.status === "completed",
+            );
+            if (followupTerminal.event.type !== "run.updated")
+              throw new Error("Missing follow-up run.");
+            const followupRunId = followupTerminal.event.payload.id;
+            // This later independent completion is a barrier on the sequential
+            // terminal reactor and continuation worker, so absence needs no sleep.
+            const controlSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
+            yield* Deferred.succeed(controlGate, undefined);
+            yield* awaitEvent(
+              parentThreadId,
+              controlSequence,
+              (event) =>
+                event.type === "context-transfer.created" &&
+                event.payload.type === "subagent_result" &&
+                event.payload.sourceThreadId === control.childThreadId,
+            );
+            const controlMessage = yield* awaitEvent(
+              parentThreadId,
+              controlSequence,
+              (event) =>
+                event.type === "message.updated" &&
+                event.payload.delegatedCompletion?.taskIds.includes(control.id) === true,
+            );
+            if (controlMessage.event.type !== "message.updated")
+              throw new Error("Missing control wake message.");
+            const controlMessageId = controlMessage.event.payload.id;
+            const queuedParent = yield* orchestrator.getThreadProjection(parentThreadId);
+            expect(
+              queuedParent.runs.some(
+                (run) =>
+                  run.status === "queued" &&
+                  queuedParent.messages
+                    .find((message) => message.id === run.userMessageId)
+                    ?.delegatedCompletion?.taskIds.includes(worker.id),
+              ),
+            ).toBe(true);
+            yield* Deferred.succeed(foregroundGate, undefined);
+            yield* awaitEvent(
+              parentThreadId,
+              controlSequence,
+              (event) =>
+                event.type === "run.updated" &&
+                event.payload.userMessageId === controlMessageId &&
+                event.payload.status === "completed",
+            );
+            const finalParent = yield* orchestrator.getThreadProjection(parentThreadId);
+            const turns = (yield* Ref.get(capturedTurns)).filter(
+              (turn) => turn.threadId === parentThreadId,
+            );
+            const workerWakes = turns.filter((turn) => turn.text.includes(worker.id));
+            const controlWakes = turns.filter((turn) => turn.text.includes(control.id));
+            const followupTransfers = finalParent.contextTransfers.filter(
+              (transfer) =>
+                transfer.type === "subagent_result" &&
+                transfer.sourceThreadId === worker.childThreadId &&
+                transfer.sourcePoint.runId === followupRunId,
+            );
+            const controlTransfers = finalParent.contextTransfers.filter(
+              (transfer) =>
+                transfer.type === "subagent_result" &&
+                transfer.sourceThreadId === control.childThreadId,
+            );
+            expect(controlTransfers).toHaveLength(1);
+            expect(controlWakes).toHaveLength(1);
+            expect(workerWakes.length).toBeGreaterThanOrEqual(1);
+            expect(
+              followupTransfers,
+              "A completed follow-up must deliver its result to the parent",
+            ).toHaveLength(1);
+            expect(workerWakes).toHaveLength(2);
+            const originalTask = initialParent.subagents.find((task) => task.id === worker.id)!;
+            const finalTask = finalParent.subagents.find((task) => task.id === worker.id)!;
+            expect(finalTask).toMatchObject({
+              result: originalTask.result,
+              status: originalTask.status,
+              completedAt: originalTask.completedAt,
+            });
+            expect(
+              finalParent.turnItems.find(
+                (item) => item.type === "subagent" && item.subagentId === worker.id,
+              ),
+            ).toEqual(
+              initialParent.turnItems.find(
+                (item) => item.type === "subagent" && item.subagentId === worker.id,
+              ),
+            );
+          }).pipe(Effect.provide(layer));
+        }),
+      ),
   );
 });

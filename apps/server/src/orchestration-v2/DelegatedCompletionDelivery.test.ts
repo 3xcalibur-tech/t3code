@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  ContextTransferId,
   EventId,
   MessageId,
   type ModelSelection,
@@ -291,6 +292,88 @@ const seedParentWithTerminalTask = (input: {
   });
 
 it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
+  it.effect("an older result acknowledgement does not consume a follow-up delivery", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const sink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:follow-up-ack");
+      const childId = ThreadId.make("child:follow-up-ack");
+      const runId = RunId.make("run:follow-up-ack-parent");
+      const resultRunId = RunId.make("run:follow-up-ack-child");
+      const taskId = NodeId.make("task:follow-up-ack");
+      yield* seedParentWithTerminalTask({
+        threadId,
+        runId,
+        projectId: ProjectId.make("project:follow-up-ack"),
+        rootNodeId: NodeId.make("root:follow-up-ack"),
+        taskId,
+        deliveryState: "claimed",
+        completionWake: "always",
+        deliveryTaskIds: [taskId],
+        now,
+      });
+      const task = (yield* orchestrator.getThreadProjection(threadId)).subagents[0]!;
+      yield* sink.write({
+        events: [
+          {
+            id: EventId.make("event:follow-up-ack-task"),
+            type: "subagent.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...task, childThreadId: childId },
+          },
+          {
+            id: EventId.make("event:follow-up-ack-transfer"),
+            type: "context-transfer.created",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: ContextTransferId.make("transfer:follow-up-ack"),
+              type: "subagent_result",
+              sourceThreadId: childId,
+              targetThreadId: threadId,
+              sourcePoint: { threadId: childId, runId: resultRunId },
+              basePoint: null,
+              sourceProviderInstanceId: modelSelection.instanceId,
+              targetProviderInstanceId: modelSelection.instanceId,
+              targetRunId: runId,
+              status: "consumed",
+              resolution: null,
+              createdBy: "system",
+              error: null,
+              createdAt: now,
+              updatedAt: now,
+              consumedAt: now,
+            },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "delegated_task.completion-delivery.acknowledge",
+        commandId: CommandId.make("command:follow-up-ack-stale"),
+        parentThreadId: threadId,
+        taskId,
+        resultRunId: RunId.make("run:original-child"),
+        observedByRunId: runId,
+      });
+      const unchanged = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(unchanged.subagents[0]?.completionDelivery?.state, "claimed");
+      assert.deepEqual(unchanged.runs[0]?.delegatedCompletion?.delivery?.taskIds, [taskId]);
+      yield* orchestrator.dispatch({
+        type: "delegated_task.completion-delivery.acknowledge",
+        commandId: CommandId.make("command:follow-up-ack-current"),
+        parentThreadId: threadId,
+        taskId,
+        resultRunId,
+        observedByRunId: runId,
+      });
+      const acknowledged = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(acknowledged.subagents[0]?.completionDelivery?.state, "acknowledged");
+      assert.equal(acknowledged.runs[0]?.delegatedCompletion?.delivery, null);
+    }),
+  );
+
   it.effect("acceptance batches pending siblings without acknowledging their results", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

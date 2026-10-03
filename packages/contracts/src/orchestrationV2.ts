@@ -2805,6 +2805,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     parentThreadId: ThreadId,
     taskId: NodeId,
+    /** The child result read by the observer, to avoid consuming a newer delivery. */
+    resultRunId: Schema.optional(RunId),
     observedByRunId: Schema.NullOr(RunId),
   }),
   Schema.Struct({

@@ -1760,7 +1760,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = yield* projectionStore
         .getThreadRecords(
           command.parentThreadId,
-          ["subagents", "runs", "messages", "nodes", "attempts", "turnItems"],
+          ["subagents", "runs", "messages", "nodes", "attempts", "turnItems", "contextTransfers"],
           { turnItemTypes: [], messageRoles: ["user"] },
         )
         .pipe(
@@ -1792,7 +1792,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // valid observations can race after their read preflight. Re-emit the
       // existing task row so the second dispatch is a successful idempotent
       // no-op rather than "already acknowledged/disposed" or empty-events.
+      const latestResultTransfer = projection.contextTransfers.findLast(
+        (transfer) =>
+          transfer.type === "subagent_result" &&
+          transfer.sourceThreadId === task.childThreadId &&
+          transfer.targetThreadId === command.parentThreadId,
+      );
       if (
+        (command.type === "delegated_task.completion-delivery.acknowledge" &&
+          command.resultRunId !== undefined &&
+          latestResultTransfer?.sourcePoint.runId !== undefined &&
+          latestResultTransfer.sourcePoint.runId !== command.resultRunId) ||
         task.completionDelivery?.state === state ||
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
           task.completionDelivery?.state === "disposed")
@@ -8540,15 +8550,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (task === undefined) {
         return;
       }
-      const existingResultTransfer = parentProjection.contextTransfers.find(
+      const resultTransfers = parentProjection.contextTransfers.filter(
         (transfer) =>
           transfer.type === "subagent_result" &&
           transfer.sourceThreadId === childThreadId &&
           transfer.targetThreadId === parentThreadId,
       );
-      if (existingResultTransfer !== undefined) {
+      if (
+        resultTransfers.some(
+          (transfer) =>
+            transfer.sourcePoint.runId === childRun.id ||
+            // Legacy unscoped transfers belong to the original child turn.
+            (transfer.sourcePoint.runId === undefined && childRun.ordinal === 1),
+        )
+      )
         return;
-      }
+      const isFollowUp = resultTransfers.length > 0;
 
       const now = yield* DateTime.now;
       const result = subagentResultForRun(childProjection, childRun);
@@ -8560,18 +8577,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const parentTurnItem = parentProjection.turnItems.find(
         (candidate) => candidate.type === "subagent" && candidate.subagentId === task.id,
       );
-      const updatedTask: OrchestrationV2Subagent = {
-        ...task,
-        providerThreadId: childRun.providerThreadId,
-        status: terminalStatus,
-        result: result.text,
-        completedAt: now,
-        updatedAt: now,
-      };
+      // Keep the original task result and history. A new child run only
+      // reopens completion delivery for its own result.
+      const updatedTask: OrchestrationV2Subagent = isFollowUp
+        ? {
+            ...task,
+            // Follow-ups return through notifications even when the original
+            // delegation returned through a blocking wait tool call.
+            completionWake: "always",
+            completionDelivery: { state: "pending", observedByRunId: null },
+            updatedAt: now,
+          }
+        : {
+            ...task,
+            providerThreadId: childRun.providerThreadId,
+            status: terminalStatus,
+            result: result.text,
+            completedAt: now,
+            updatedAt: now,
+          };
       const completionPlan = yield* planDelegatedCompletionDelivery({
         parentProjection,
         parentRun,
-        task,
+        task: updatedTask,
         updatedTask,
         now,
       });
@@ -8693,7 +8721,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 payload: completionPlan.message,
               },
             ]),
-        ...(parentNode === undefined
+        ...(isFollowUp || parentNode === undefined
           ? []
           : [
               {
@@ -8711,7 +8739,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 },
               },
             ]),
-        ...(parentTurnItem === undefined
+        ...(isFollowUp || parentTurnItem === undefined
           ? []
           : [
               {
