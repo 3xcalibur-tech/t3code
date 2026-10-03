@@ -34,7 +34,8 @@ class T3KeyboardCommandsView(
 
   init {
     // A key reaches dispatchKeyEvent only while focus is inside this view. With nothing focused,
-    // Android offers it to unhandled-key listeners instead.
+    // Android offers it to unhandled-key listeners instead. That listener needs API 28, so on
+    // API 24-27 shortcuts work only while something inside this view has focus.
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       addOnUnhandledKeyEventListener { _, event ->
         val command = enabledCommandFor(event)
