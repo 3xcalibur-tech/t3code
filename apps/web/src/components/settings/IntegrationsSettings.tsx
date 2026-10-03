@@ -940,15 +940,7 @@ function ComputerAccessSettings() {
         settingKeys={["enableAgentBrowserTabs"]}
         description={`Let agents use the open browser tabs and sign-ins on ${hostLabel} through Chrome DevTools MCP.`}
         status={
-          browserTabsOn && status ? (
-            status.browserToolError ? (
-              <span className="block text-destructive">{status.browserToolError}</span>
-            ) : browser ? (
-              `Using ${browser.name}`
-            ) : (
-              "Needs setup"
-            )
-          ) : null
+          browserTabsOn && status ? (browser ? `Using ${browser.name}` : "Needs setup") : null
         }
         control={
           <>

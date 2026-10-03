@@ -601,8 +601,7 @@ export type ServerComputerAccessBrowser = typeof ServerComputerAccessBrowser.Typ
 
 /**
  * What the computer access setup flows show. Computer access is macOS-only for
- * now; other hosts report nothing installed. Checking also installs Chrome
- * DevTools MCP when browser tab access is on, so a session does not wait for npm.
+ * now; other hosts report nothing installed. Checking never installs anything.
  */
 export const ServerComputerAccessStatus = Schema.Struct({
   cuaDriver: Schema.Struct({
@@ -616,8 +615,8 @@ export const ServerComputerAccessStatus = Schema.Struct({
     permissionsFailed: Schema.Boolean,
   }),
   browsers: Schema.Array(ServerComputerAccessBrowser),
-  /** Why Chrome DevTools MCP cannot start, or null when it is ready or turned off. */
-  browserToolError: Schema.NullOr(Schema.String),
+  /** Whether Chrome DevTools MCP is installed. Browser setup installs it. */
+  browserToolInstalled: Schema.Boolean,
 });
 export type ServerComputerAccessStatus = typeof ServerComputerAccessStatus.Type;
 
@@ -628,6 +627,7 @@ export const ServerComputerAccessAction = Schema.Literals([
   "cancel-cua-permissions",
   "open-accessibility-settings",
   "open-screen-recording-settings",
+  "install-browser-tool",
 ]);
 export type ServerComputerAccessAction = typeof ServerComputerAccessAction.Type;
 
@@ -645,11 +645,16 @@ export class ServerComputerAccessError extends Schema.TaggedError<ServerComputer
       return "Computer access is only available on macOS for now.";
     }
     if (this.reason === "driver-missing") return "Install Cua Driver first.";
-    return this.action === "install-cua-driver"
-      ? "Cua Driver did not install."
-      : this.action === "request-cua-permissions"
-        ? "Cua Driver did not get both permissions."
-        : "System Settings did not open.";
+    switch (this.action) {
+      case "install-cua-driver":
+        return "Cua Driver did not install.";
+      case "install-browser-tool":
+        return "Chrome DevTools MCP did not install.";
+      case "request-cua-permissions":
+        return "Cua Driver did not get both permissions.";
+      default:
+        return "System Settings did not open.";
+    }
   }
 }
 

@@ -6,8 +6,8 @@ Turn them on in **Settings → Integrations → Computer**. Turning one on opens
 setup. Changes apply when an agent session next starts.
 
 Codex threads use Codex's own Computer Use, so these settings do not change
-them. Claude, Cursor, Grok, OpenCode, and Antigravity threads use the tools
-below.
+them. Claude, Cursor, Grok, Antigravity, ACP Registry, and OpenCode 1.x threads
+use the tools below. OpenCode 2 and Pi threads do not get them yet.
 
 ## Use apps
 

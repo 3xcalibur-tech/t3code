@@ -1,16 +1,16 @@
 /**
  * Opt-in stdio MCP servers that reach past T3's own browser: Cua Driver for
  * native apps, and Chrome DevTools MCP for the user's running Chromium browser.
- * Each provider launches them itself, next to the `t3-code` HTTP server. Codex
- * threads keep Codex's own Computer Use, so ProviderService skips them there.
- * macOS only for now: Windows and Linux are untested, and headless hosts have
+ * Each provider launches them itself, next to the `t3-code` HTTP server. The
+ * session manager records them on every thread's MCP session; only adapters
+ * that can run stdio MCP servers attach them, so Codex keeps its own Computer
+ * Use. macOS only for now: Windows and Linux are untested, and headless hosts have
  * nothing to drive.
  */
 import {
   ServerComputerAccessError,
   type ServerComputerAccessAction,
   type ServerComputerAccessStatus,
-  type ServerSettingsError,
 } from "@t3tools/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
@@ -27,7 +27,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
-import { ensurePinnedTool, type ToolSpec } from "../device/DeviceToolchain.ts";
+import { ensurePinnedTool, findPinnedTool, type ToolSpec } from "../device/DeviceToolchain.ts";
 import { cuaControlPath, endCuaSession, ensureCuaMcpProxy } from "./CuaMcpProxy.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -40,11 +40,6 @@ export interface LocalMcpServer {
   readonly env: Readonly<Record<string, string>>;
   /** Prompt text that tells the agent when to use this server. */
   readonly instructions: string;
-}
-
-export interface ComputerAccessSettings {
-  readonly apps: boolean;
-  readonly browserTabs: boolean;
 }
 
 const CHROME_DEVTOOLS_MCP: ToolSpec = {
@@ -94,7 +89,7 @@ export const UNAVAILABLE_STATUS: ServerComputerAccessStatus = {
     permissionsFailed: false,
   },
   browsers: [],
-  browserToolError: null,
+  browserToolInstalled: false,
 };
 
 export interface DetectedBrowser {
@@ -191,16 +186,16 @@ const decodeCuaPermissions = Schema.decodeEffect(CuaPermissionsJson);
 export class ComputerAccess extends Context.Service<
   ComputerAccess,
   {
-    /** Servers to attach to a thread's new session. A server that cannot start is left out. */
-    readonly servers: (
-      access: ComputerAccessSettings,
-      threadId: string,
-    ) => Effect.Effect<ReadonlyArray<LocalMcpServer>>;
-    /** What the setup flows show. Installs Chrome DevTools MCP when browser tab access is on. */
-    readonly status: Effect.Effect<ServerComputerAccessStatus, ServerSettingsError>;
+    /**
+     * Servers the settings turn on for a thread's session. A server that is not
+     * set up is left out; nothing is installed here.
+     */
+    readonly servers: (threadId: string) => Effect.Effect<ReadonlyArray<LocalMcpServer>>;
+    /** What the setup flows show. */
+    readonly status: Effect.Effect<ServerComputerAccessStatus>;
     readonly runAction: (
       action: ServerComputerAccessAction,
-    ) => Effect.Effect<ServerComputerAccessStatus, ServerComputerAccessError | ServerSettingsError>;
+    ) => Effect.Effect<ServerComputerAccessStatus, ServerComputerAccessError>;
     /**
      * Ends the thread's Cua session, which removes its cursor. Called at turn
      * end, on Stop, and on errors; the next tool call starts a new session.
@@ -236,13 +231,7 @@ export const make = Effect.gen(function* () {
 
   const cuaDriver = provide(resolveCuaDriverPath());
   const browsers = provide(detectBrowsers());
-  const chromeDevTools = provide(
-    Effect.gen(function* () {
-      const node = yield* resolveNodeExecutable("Browser tab access");
-      const tool = yield* ensurePinnedTool(config.baseDir, CHROME_DEVTOOLS_MCP);
-      return { node, entryPath: tool.entryPath };
-    }),
-  );
+  const installedChromeDevTools = provide(findPinnedTool(config.baseDir, CHROME_DEVTOOLS_MCP));
 
   /** Unverified grants read as false; `permissions grant` verifies them. */
   const cuaPermissions = (driverPath: string) =>
@@ -280,13 +269,18 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const servers = Effect.fn("ComputerAccess.servers")(function* (
-    access: ComputerAccessSettings,
-    threadId: string,
-  ) {
+  const servers = Effect.fn("ComputerAccess.servers")(function* (threadId: string) {
     const result: Array<LocalMcpServer> = [];
     if (platform !== "darwin") return result;
-    if (access.apps) {
+    const current = yield* settings.getSettings.pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not read settings; leaving computer access off.", {
+          cause,
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (current === null) return result;
+    if (current.enableAgentComputerAccess) {
       const driverPath = yield* cuaDriver;
       if (driverPath) {
         result.push({
@@ -298,8 +292,18 @@ export const make = Effect.gen(function* () {
         yield* Effect.logWarning("Computer access is on, but Cua Driver is not installed.");
       }
     }
-    if (access.browserTabs) {
-      const tool = yield* chromeDevTools.pipe(
+    if (current.enableAgentBrowserTabs) {
+      const tool = yield* Effect.all({
+        node: provide(resolveNodeExecutable("Browser tab access")),
+        paths: installedChromeDevTools,
+      }).pipe(
+        Effect.flatMap(({ node, paths }) =>
+          paths === null
+            ? Effect.logWarning(
+                "Browser tab access is on, but Chrome DevTools MCP is not installed.",
+              ).pipe(Effect.as(null))
+            : Effect.succeed({ node, entryPath: paths.entryPath }),
+        ),
         Effect.catch((cause) =>
           Effect.logWarning("Chrome DevTools MCP is unavailable.", { cause }).pipe(Effect.as(null)),
         ),
@@ -329,17 +333,12 @@ export const make = Effect.gen(function* () {
 
   const status = Effect.gen(function* () {
     if (platform !== "darwin") return UNAVAILABLE_STATUS;
-    const current = yield* settings.getSettings;
     const driverPath = yield* cuaDriver;
     const permissions = driverPath
       ? yield* cuaPermissions(driverPath)
       : { accessibility: false, screenRecording: false };
-    const browserToolError = current.enableAgentBrowserTabs
-      ? yield* chromeDevTools.pipe(
-          Effect.as(null),
-          Effect.catch((error) => Effect.succeed(error.message)),
-        )
-      : null;
+    const browserToolInstalled =
+      (yield* installedChromeDevTools.pipe(Effect.orElseSucceed(() => null))) !== null;
     return {
       cuaDriver: {
         path: driverPath,
@@ -353,7 +352,7 @@ export const make = Effect.gen(function* () {
         inspectUrl,
         remoteDebugging,
       })),
-      browserToolError,
+      browserToolInstalled,
     };
   });
 
@@ -392,6 +391,19 @@ export const make = Effect.gen(function* () {
             env: { CUA_DRIVER_RS_VERSION: CUA_DRIVER_VERSION },
             timeout: "10 minutes",
           });
+        }
+        if (action === "install-browser-tool") {
+          // Chrome DevTools MCP runs on the server's Node runtime.
+          return yield* provide(
+            resolveNodeExecutable("Browser tab access").pipe(
+              Effect.andThen(ensurePinnedTool(config.baseDir, CHROME_DEVTOOLS_MCP)),
+            ),
+          ).pipe(
+            Effect.mapError(
+              (cause) => new ServerComputerAccessError({ action, reason: "command-failed", cause }),
+            ),
+            Effect.asVoid,
+          );
         }
         if (
           action === "open-accessibility-settings" ||

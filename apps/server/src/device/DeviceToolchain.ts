@@ -215,6 +215,17 @@ export const ensurePinnedTool = Effect.fn("DeviceToolchain.ensurePinnedTool")(fu
   return yield* installLock.withPermit(installTool(spec, toolPaths(path, baseDir, spec)));
 });
 
+/** The pinned tool's paths when its install is complete, or null. Never installs. */
+export const findPinnedTool = Effect.fn("DeviceToolchain.findPinnedTool")(function* (
+  baseDir: string,
+  spec: ToolSpec,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const paths = toolPaths(path, baseDir, spec);
+  return (yield* isInstalled(fs, paths, spec.version)) ? paths : null;
+});
+
 const isToolInstalled = Effect.fn("DeviceToolchain.isToolInstalled")(function* (
   baseDir: string,
   spec: ToolSpec,

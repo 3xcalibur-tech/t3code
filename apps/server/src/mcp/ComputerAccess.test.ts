@@ -201,3 +201,49 @@ describe("Cua permission requests", () => {
     ),
   );
 });
+
+describe("Browser tab access", () => {
+  // A settings poll or a new session must never wait on npm; browser setup
+  // installs Chrome DevTools MCP as its own action.
+  it.effect("checks and starts sessions without installing Chrome DevTools MCP", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const commands: Array<string> = [];
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: (input) =>
+          Effect.sync(() => {
+            commands.push([input.command, ...input.args].join(" "));
+            return {
+              stdout: "",
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+      });
+      const access = yield* ComputerAccess.make.pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provide(
+          Layer.mergeAll(
+            ServerConfig.layerTest(root, root),
+            ServerSettings.layerTest({ enableAgentBrowserTabs: true }),
+          ),
+        ),
+        Effect.provideService(HostProcessEnvironment, { PATH: "", HOME: root }),
+      );
+
+      expect((yield* access.status).browserToolInstalled).toBe(false);
+      expect(yield* access.servers("thread-1")).toEqual([]);
+      expect(commands).toEqual([]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcessPlatform, "darwin"),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+});

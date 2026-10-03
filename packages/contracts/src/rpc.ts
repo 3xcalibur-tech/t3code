@@ -560,17 +560,13 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
 const WsServerCheckComputerAccessRpc = Rpc.make(WS_METHODS.serverCheckComputerAccess, {
   payload: Schema.Struct({}),
   success: ServerComputerAccessStatus,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerRunComputerAccessActionRpc = Rpc.make(WS_METHODS.serverRunComputerAccessAction, {
   payload: Schema.Struct({ action: ServerComputerAccessAction }),
   success: ServerComputerAccessStatus,
-  error: Schema.Union([
-    ServerComputerAccessError,
-    ServerSettingsError,
-    EnvironmentAuthorizationError,
-  ]),
+  error: Schema.Union([ServerComputerAccessError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {

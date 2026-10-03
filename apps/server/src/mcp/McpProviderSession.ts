@@ -25,14 +25,16 @@ export interface McpProviderSessionConfig {
    */
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   /**
-   * Opt-in stdio servers (Cua Driver, Chrome DevTools MCP) that non-Codex
-   * adapters attach next to `t3-code`, with their prompt text.
+   * Opt-in stdio servers (Cua Driver, Chrome DevTools MCP), with their prompt
+   * text. Adapters that run stdio MCP servers attach them next to `t3-code`
+   * and pass them to `buildRuntimeInstructions`; Codex keeps its own Computer
+   * Use, and OpenCode 2 and Pi do not attach them yet.
    */
   readonly localMcpServers?: ReadonlyArray<LocalMcpServer>;
 }
 
-/** Claude SDK `mcpServers` entries for the session's local servers. */
-export function claudeLocalMcpServers(config: McpProviderSessionConfig | undefined) {
+/** Claude and Cursor SDK `mcpServers` entries for the session's local servers. */
+export function stdioLocalMcpServers(config: McpProviderSessionConfig | undefined) {
   return Object.fromEntries(
     (config?.localMcpServers ?? []).map((server) => [
       server.name,

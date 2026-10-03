@@ -4,7 +4,7 @@ import type {
   ServerComputerAccessStatus,
 } from "@t3tools/contracts";
 import { CircleCheckIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { serverEnvironment } from "~/state/server";
@@ -24,6 +24,8 @@ const ACTION_FAILURES: Record<ServerComputerAccessAction, string> = {
   "open-accessibility-settings": "System Settings did not open. Open Privacy & Security yourself.",
   "open-screen-recording-settings":
     "System Settings did not open. Open Privacy & Security yourself.",
+  "install-browser-tool":
+    "Chrome DevTools MCP did not install. It needs Node.js on the Mac that runs T3 Code.",
 };
 
 /** Whether agents can control apps: the driver is installed and macOS allows it. */
@@ -32,11 +34,14 @@ export function computerAppsReady(status: ServerComputerAccessStatus): boolean {
   return path !== null && permissions.accessibility && permissions.screenRecording;
 }
 
-/** The browser agents attach to, or undefined when none has remote debugging on. */
+/** The browser with remote debugging on, which agents attach to, if any. */
+function debuggableBrowser(status: ServerComputerAccessStatus) {
+  return status.browsers.find((browser) => browser.remoteDebugging);
+}
+
+/** The browser agents attach to, or undefined until setup has finished on this Mac. */
 export function computerBrowserReady(status: ServerComputerAccessStatus) {
-  return status.browserToolError === null
-    ? status.browsers.find((browser) => browser.remoteDebugging)
-    : undefined;
+  return status.browserToolInstalled ? debuggableBrowser(status) : undefined;
 }
 
 /**
@@ -86,21 +91,32 @@ export function ComputerAccessSetupDialog({
     };
   }, [requesting]);
 
+  // Set as soon as Start is pressed, since the status that reports the
+  // request can arrive after the dialog closes.
+  const requestStarted = useRef(false);
   const runAction = async (action: ServerComputerAccessAction) => {
+    if (action === "request-cua-permissions") requestStarted.current = true;
     setPending(action);
     setError(null);
     const result = await run({ environmentId, input: { action } });
     setPending(null);
     if (result._tag === "Failure") setError(ACTION_FAILURES[action]);
     onRefresh();
+    return result._tag !== "Failure";
   };
   // A request left running would keep waiting on the user for minutes, so
   // the dialog cancels it when it closes for any reason.
   const cancelRequest = useEffectEvent(() => {
-    if (requesting) void run({ environmentId, input: { action: "cancel-cua-permissions" } });
+    if (requesting || requestStarted.current) {
+      void run({ environmentId, input: { action: "cancel-cua-permissions" } });
+    }
   });
   useEffect(() => () => cancelRequest(), []);
   const close = onClose;
+  // Installed here, not by a status check, so polling never waits on npm.
+  const finishBrowser = async () => {
+    if (status?.browserToolInstalled || (await runAction("install-browser-tool"))) onFinish();
+  };
 
   return (
     <Dialog
@@ -141,8 +157,10 @@ export function ComputerAccessSetupDialog({
           <BrowserSetup
             hostLabel={hostLabel}
             status={status}
+            installing={pending === "install-browser-tool"}
+            error={error}
             onRefresh={onRefresh}
-            onFinish={onFinish}
+            onFinish={() => void finishBrowser()}
             onClose={close}
           />
         )}
@@ -308,12 +326,16 @@ function AppsSetup({
 function BrowserSetup({
   hostLabel,
   status,
+  installing,
+  error,
   onRefresh,
   onFinish,
   onClose,
 }: {
   hostLabel: string;
   status: ServerComputerAccessStatus | null;
+  installing: boolean;
+  error: string | null;
   onRefresh: () => void;
   onFinish: () => void;
   onClose: () => void;
@@ -322,7 +344,7 @@ function BrowserSetup({
   // Only a successful copy marks its link as copied.
   const { copyToClipboard, isCopied } = useCopyToClipboard<string>({ onCopy: setCopiedUrl });
   const browsers = status?.browsers ?? [];
-  const ready = status !== null && computerBrowserReady(status) !== undefined;
+  const ready = status !== null && debuggableBrowser(status) !== undefined;
 
   return (
     <>
@@ -376,22 +398,22 @@ function BrowserSetup({
               ))}
             </div>
           )}
-          {status?.browserToolError ? (
+          {error ? (
             <p role="alert" className="text-destructive">
-              {status.browserToolError}
+              {error}
             </p>
           ) : null}
         </div>
       </WizardPanel>
       <WizardFooter>
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" disabled={installing} onClick={onClose}>
           Finish later
         </Button>
-        <Button variant="outline" onClick={onRefresh}>
+        <Button variant="outline" disabled={installing} onClick={onRefresh}>
           Check again
         </Button>
-        <Button disabled={!ready} onClick={onFinish}>
-          Done
+        <Button disabled={!ready || installing} aria-busy={installing} onClick={onFinish}>
+          {installing ? "Installing…" : "Done"}
         </Button>
       </WizardFooter>
     </>

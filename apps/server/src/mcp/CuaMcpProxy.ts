@@ -7,7 +7,8 @@
  * provider keeps one MCP connection for its whole life.
  *
  * The proxy also exits, ending its session, when its stdin closes or the T3
- * server that launched it dies.
+ * server that launched it dies. The socket is per thread, so a newer proxy for
+ * the same thread (a replacement provider session) takes the path over.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
@@ -17,6 +18,8 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+
+import { writeFileStringAtomically } from "../atomicWrite.ts";
 
 const PROXY_FILE = "computer/cua-mcp-proxy.mjs";
 
@@ -125,18 +128,23 @@ function end() {
   failPending();
 }
 
+// The socket file stays behind on exit: a newer proxy for the same thread may
+// already own the path, and a stale file only refuses connections.
 function shutdown() {
   child?.kill();
-  if (!process.platform.startsWith("win")) rmSync(controlPath, { force: true });
   process.exit(0);
 }
 
+// A newer proxy for the thread takes the path over from an older one.
 if (!process.platform.startsWith("win")) rmSync(controlPath, { force: true });
-// A connection is the whole message: end the session.
+// A connection is the whole message: end the session. Without the socket the
+// session still ends when this proxy exits, so a failed listen is not fatal.
 createServer((socket) => {
   socket.destroy();
   end();
-}).listen(controlPath);
+})
+  .on("error", (error) => console.error("cua-mcp-proxy: control socket failed:", error.message))
+  .listen(controlPath);
 
 if (Number.isInteger(serverPid) && serverPid > 0) {
   setInterval(() => {
@@ -158,13 +166,18 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", shutdown);
 `;
 
-/** Writes the proxy script under the state dir and returns its path. */
+/**
+ * Writes the proxy script under the state dir and returns its path. The write
+ * is atomic because a proxy for another thread may be starting from it.
+ */
 export const ensureCuaMcpProxy = Effect.fn("CuaMcpProxy.ensure")(function* (stateDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const proxyPath = path.join(stateDir, PROXY_FILE);
-  yield* fs.makeDirectory(path.dirname(proxyPath), { recursive: true });
-  yield* fs.writeFileString(proxyPath, PROXY_SOURCE);
+  const current = yield* fs.readFileString(proxyPath).pipe(Effect.orElseSucceed(() => null));
+  if (current !== PROXY_SOURCE) {
+    yield* writeFileStringAtomically({ filePath: proxyPath, contents: PROXY_SOURCE });
+  }
   return proxyPath;
 });
 
