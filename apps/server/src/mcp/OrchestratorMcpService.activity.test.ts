@@ -7,6 +7,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -447,7 +448,17 @@ it("readThread and sendToThread reach threads in other projects", async () => {
         } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({
-          list: () => Effect.succeed({ tasks: [] }),
+          list: () =>
+            Effect.succeed({
+              tasks: [
+                {
+                  id: "task-foreign",
+                  projectId: foreignProjectId,
+                  runtimeMode: "approval-required",
+                  interactionMode: "default",
+                } as never,
+              ],
+            }),
         } satisfies Partial<ScheduledTaskService.ScheduledTaskService["Service"]>),
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
@@ -481,5 +492,25 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       .interruptThread(makeScope(), { threadId: foreignThreadId })
       .pipe(Effect.flip);
     expect(staleInterrupt.code).toBe("parent_not_active");
+    // Nor create, change or remove scheduled work in another project.
+    const staleSchedule = yield* service
+      .scheduleTask(makeScope(), {
+        projectId: foreignProjectId,
+        prompt: "check in later",
+        schedule: { type: "interval", everyMs: 3_600_000 },
+      })
+      .pipe(Effect.flip);
+    expect(staleSchedule.code).toBe("parent_not_active");
+    const staleUpdate = yield* service
+      .updateScheduledTask(makeScope(), {
+        scheduledTaskId: ScheduledTaskId.make("task-foreign"),
+        enabled: false,
+      })
+      .pipe(Effect.flip);
+    expect(staleUpdate.code).toBe("parent_not_active");
+    const staleDelete = yield* service
+      .deleteScheduledTask(makeScope(), { scheduledTaskId: ScheduledTaskId.make("task-foreign") })
+      .pipe(Effect.flip);
+    expect(staleDelete.code).toBe("parent_not_active");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
