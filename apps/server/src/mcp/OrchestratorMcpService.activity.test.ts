@@ -347,6 +347,9 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
 });
 
 it("readThread and sendToThread reach threads in other projects", async () => {
+  let parentRuns: ReadonlyArray<unknown> = [
+    makeRun({ id: RunId.make("run-parent-live"), ordinal: 1, status: "running" }),
+  ];
   const foreignProjectId = ProjectId.make("project-mcp-orchestrator-foreign");
   const foreignThreadId = ThreadId.make("thread-mcp-orchestrator-foreign");
   const parentProjection = {
@@ -356,7 +359,9 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       instanceId: parentInstanceId,
       model: "gpt-5.4",
     }),
-    runs: [],
+    get runs() {
+      return parentRuns;
+    },
     visibleTurnItems: [],
     runtimeRequests: [],
     messages: [],
@@ -464,5 +469,17 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       message: "hi",
     });
     expect(sent.threadId).toBe(foreignThreadId);
+
+    // Once the caller's run ends, it can still read other threads but no longer write to them.
+    parentRuns = [];
+    yield* service.readThread(makeScope(), { threadId: foreignThreadId });
+    const stale = yield* service
+      .sendToThread(makeScope(), { threadId: foreignThreadId, message: "hi again" })
+      .pipe(Effect.flip);
+    expect(stale.code).toBe("parent_not_active");
+    const staleInterrupt = yield* service
+      .interruptThread(makeScope(), { threadId: foreignThreadId })
+      .pipe(Effect.flip);
+    expect(staleInterrupt.code).toBe("parent_not_active");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });

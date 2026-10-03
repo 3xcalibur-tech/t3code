@@ -924,6 +924,26 @@ const make = Effect.gen(function* () {
       return { ...caller, target } as const;
     });
 
+  /**
+   * A thread caller writes to another thread only while its own run is live,
+   * so a credential that outlived its session cannot reach across threads.
+   */
+  const assertLiveCallerForOtherThread = (
+    scope: McpInvocationScope,
+    parent: Pick<OrchestrationV2ThreadProjection, "thread" | "runs"> | undefined,
+    target: Pick<OrchestrationV2ThreadProjection, "thread">,
+  ) => {
+    if (parent === undefined || target.thread.id === parent.thread.id) return Effect.void;
+    const activeRun = ThreadManagementService.latestActiveRun(parent);
+    return parent.thread.archivedAt !== null ||
+      activeRun === undefined ||
+      activeRun.providerInstanceId !== scope.thread?.providerInstanceId
+      ? Effect.fail(
+          failure("parent_not_active", "The calling provider no longer owns an active thread run."),
+        )
+      : Effect.void;
+  };
+
   const loadReadableThread = (scope: McpInvocationScope, threadId: ThreadId) =>
     Effect.gen(function* () {
       const { parent } = yield* loadCaller(scope);
@@ -1942,6 +1962,7 @@ const make = Effect.gen(function* () {
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
+        yield* assertLiveCallerForOtherThread(scope, parent, target);
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 
@@ -2010,7 +2031,8 @@ const make = Effect.gen(function* () {
       }),
     interruptThread: (scope, input) =>
       Effect.gen(function* () {
-        const { limits, target } = yield* loadScopedThread(scope, input.threadId);
+        const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
+        yield* assertLiveCallerForOtherThread(scope, parent, target);
         // Stopping another thread's work is a write: it must run within the caller's modes.
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
