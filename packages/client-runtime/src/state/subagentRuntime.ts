@@ -158,26 +158,56 @@ export function activeSubagentThreadStatus(
   return backgroundWorkHoldsCompletion(child.pendingBackgroundTasks ?? []) ? "waiting" : null;
 }
 
-/** A follow-up must not display the original task's completion, result, or elapsed time. */
+/** Child work owns current status; the task row supplies its versioned result. */
 export function withSubagentThreadActivity(
   subagent: OrchestrationV2Subagent,
   child: OrchestrationV2ThreadShell | undefined,
 ): OrchestrationV2Subagent {
-  if (subagent.origin !== "app_owned" || !isTerminalSubagentStatus(subagent.status))
+  if (
+    subagent.origin !== "app_owned" ||
+    child === undefined ||
+    child.deletedAt !== null ||
+    child.archivedAt !== null
+  )
     return subagent;
-  const status = activeSubagentThreadStatus(child);
-  if (status === null || child === undefined) return subagent;
+  const activeStatus = activeSubagentThreadStatus(child);
+  if (activeStatus === null && child.latestRunId === null) return subagent;
+  const status =
+    activeStatus ??
+    (child.status === "completed" ||
+    child.status === "failed" ||
+    child.status === "cancelled" ||
+    child.status === "interrupted"
+      ? child.status
+      : null);
+  if (status === null) return subagent;
+  const resultIsCurrent =
+    subagent.resultRunId === undefined
+      ? subagent.status === status &&
+        subagent.completedAt !== null &&
+        (child.latestRunRequestedAt == null ||
+          DateTime.toEpochMillis(child.latestRunRequestedAt) <=
+            DateTime.toEpochMillis(subagent.completedAt))
+      : subagent.resultRunId === child.latestRunId;
+  if (activeStatus === null && resultIsCurrent && status === subagent.status) return subagent;
   return {
     ...subagent,
     status,
-    result: null,
+    result:
+      activeStatus !== null
+        ? null
+        : resultIsCurrent
+          ? subagent.result
+          : status === "failed"
+            ? (child.lastError ?? null)
+            : null,
     progress: undefined,
     startedAt:
       child.activityRunStartedAt ??
       child.latestRunStartedAt ??
       child.latestRunRequestedAt ??
       child.createdAt,
-    completedAt: null,
+    completedAt: activeStatus !== null ? null : (child.latestRunCompletedAt ?? null),
     updatedAt: child.updatedAt,
   };
 }

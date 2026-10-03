@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
+  TurnItemId,
   ContextTransferId,
   EventId,
   MessageId,
@@ -34,6 +36,11 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
+import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import {
@@ -292,6 +299,243 @@ const seedParentWithTerminalTask = (input: {
   });
 
 it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
+  it.effect.each([false, true])(
+    "a timeline read acknowledges only the result it returns, racing=%s",
+    (racing) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const parentId = ThreadId.make(`review:${racing}:parent`);
+        const childId = ThreadId.make(`review:${racing}:child`);
+        const parentRunId = RunId.make(`review:${racing}:parent-run`);
+        const taskId = NodeId.make(`review:${racing}:task`);
+        const projectId = ProjectId.make(`review:${racing}:project`);
+        yield* seedParentWithTerminalTask({
+          threadId: parentId,
+          runId: parentRunId,
+          taskId,
+          projectId,
+          rootNodeId: NodeId.make(`review:${racing}:parent-root`),
+          deliveryState: "claimed",
+          completionWake: "always",
+          deliveryTaskIds: [taskId],
+          now,
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`review:${racing}:create-child`),
+          threadId: childId,
+          projectId,
+          title: "Review child",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const originalTask = (yield* orchestrator.getThreadProjection(parentId)).subagents[0]!;
+        const child = (yield* orchestrator.getThreadProjection(childId)).thread;
+        yield* sink.write({
+          events: [
+            {
+              id: EventId.make(`review:${racing}:child-lineage`),
+              type: "thread.metadata-updated",
+              threadId: childId,
+              occurredAt: now,
+              payload: {
+                ...child,
+                lineage: {
+                  parentThreadId: parentId,
+                  rootThreadId: parentId,
+                  relationshipToParent: "subagent",
+                },
+                forkedFrom: { type: "node", nodeId: taskId },
+              },
+            },
+            {
+              id: EventId.make(`review:${racing}:task-link`),
+              type: "subagent.updated",
+              threadId: parentId,
+              occurredAt: now,
+              payload: { ...originalTask, childThreadId: childId },
+            },
+          ],
+        });
+        const addResult = (ordinal: number) =>
+          Effect.gen(function* () {
+            const runId = RunId.make(`review:${racing}:result-run:${ordinal}`);
+            const messageId = MessageId.make(`review:${racing}:result-message:${ordinal}`);
+            yield* sink.write({
+              events: [
+                {
+                  id: EventId.make(`review:${racing}:run:${ordinal}`),
+                  type: "run.updated",
+                  threadId: childId,
+                  runId,
+                  occurredAt: now,
+                  payload: {
+                    id: runId,
+                    threadId: childId,
+                    ordinal,
+                    providerInstanceId: modelSelection.instanceId,
+                    modelSelection,
+                    providerThreadId: null,
+                    userMessageId: MessageId.make(`review:${racing}:user:${ordinal}`),
+                    rootNodeId: null,
+                    activeAttemptId: null,
+                    status: "completed",
+                    requestedAt: now,
+                    startedAt: now,
+                    completedAt: now,
+                    checkpointId: null,
+                    contextHandoffId: null,
+                  },
+                },
+                {
+                  id: EventId.make(`review:${racing}:message:${ordinal}`),
+                  type: "message.updated",
+                  threadId: childId,
+                  runId,
+                  occurredAt: now,
+                  payload: {
+                    id: messageId,
+                    threadId: childId,
+                    runId,
+                    nodeId: null,
+                    role: "assistant",
+                    text: `Result ${ordinal}`,
+                    attachments: [],
+                    streaming: false,
+                    createdBy: "agent",
+                    creationSource: "provider",
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                },
+                {
+                  id: EventId.make(`review:${racing}:item:${ordinal}`),
+                  type: "turn-item.updated",
+                  threadId: childId,
+                  runId,
+                  occurredAt: now,
+                  payload: {
+                    id: TurnItemId.make(`review:${racing}:item:${ordinal}`),
+                    threadId: childId,
+                    runId,
+                    nodeId: null,
+                    providerThreadId: null,
+                    providerTurnId: null,
+                    nativeItemRef: null,
+                    parentItemId: null,
+                    ordinal,
+                    status: "completed",
+                    title: null,
+                    startedAt: now,
+                    completedAt: now,
+                    updatedAt: now,
+                    type: "assistant_message",
+                    messageId,
+                    text: `Result ${ordinal}`,
+                    streaming: false,
+                  },
+                },
+                {
+                  id: EventId.make(`review:${racing}:transfer:${ordinal}`),
+                  type: "context-transfer.created",
+                  threadId: parentId,
+                  occurredAt: now,
+                  payload: {
+                    id: ContextTransferId.make(`review:${racing}:transfer:${ordinal}`),
+                    type: "subagent_result",
+                    sourceThreadId: childId,
+                    targetThreadId: parentId,
+                    sourcePoint: { threadId: childId, runId },
+                    basePoint: null,
+                    sourceProviderInstanceId: modelSelection.instanceId,
+                    targetProviderInstanceId: modelSelection.instanceId,
+                    targetRunId: parentRunId,
+                    status: "consumed",
+                    resolution: null,
+                    createdBy: "system",
+                    error: null,
+                    createdAt: now,
+                    updatedAt: now,
+                    consumedAt: now,
+                  },
+                },
+                {
+                  id: EventId.make(`review:${racing}:task-delivery:${ordinal}`),
+                  type: "subagent.updated",
+                  threadId: parentId,
+                  occurredAt: now,
+                  payload: {
+                    ...originalTask,
+                    childThreadId: childId,
+                    completionDelivery: { state: "claimed", observedByRunId: null },
+                  },
+                },
+              ],
+            });
+          });
+        yield* addResult(1);
+        const dependencies = Layer.mergeAll(
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: orchestrator.getThreadRecords,
+            getProjectThreadRecords: ({ threadId }, fields, filter) =>
+              orchestrator.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
+            dispatch: orchestrator.dispatch,
+            getTimelinePage: (threadId, options) =>
+              Effect.gen(function* () {
+                const page = yield* orchestrator.getTimelinePage(threadId, options);
+                // A newer result arrives after this page was captured. The client
+                // will receive only Result 1, but the acknowledgment preflight sees 2.
+                if (racing) yield* addResult(2).pipe(Effect.orDie);
+                return page;
+              }),
+          }),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            list: () => Effect.succeed([]),
+          }),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        );
+        const result = yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          return yield* service.readThread(
+            {
+              environmentId: EnvironmentId.make(`review:${racing}:env`),
+              threadId: parentId,
+              providerInstanceId: modelSelection.instanceId,
+              providerSessionId: `review:${racing}:session`,
+              capabilities: new Set(["orchestration"]),
+              issuedAt: 1,
+            },
+            { threadId: childId },
+          );
+        }).pipe(
+          Effect.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(dependencies),
+              Layer.provide(PlatformTestLayer),
+            ),
+          ),
+        );
+        assert.deepEqual(
+          result.items.map((item) => item.text),
+          ["Result 1"],
+        );
+        const final = yield* orchestrator.getThreadProjection(parentId);
+        assert.equal(
+          final.subagents[0]?.completionDelivery?.state,
+          racing ? "claimed" : "acknowledged",
+          "Result 2 was never returned to the reader",
+        );
+      }),
+  );
+
   it.effect("an older result acknowledgement does not consume a follow-up delivery", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

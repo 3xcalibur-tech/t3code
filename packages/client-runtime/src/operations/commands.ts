@@ -775,7 +775,10 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   let runId = input.runId ?? (input.turnId as RunId | undefined);
   let parentProjection: OrchestrationV2ThreadProjection | undefined;
   if (runId === undefined) {
-    const projection = yield* getProjection(input.threadId);
+    const projection = yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
+      threadId: input.threadId,
+      includeInterruptTargets: true,
+    });
     parentProjection = projection;
     runId = projection.runs.findLast(
       (run) =>
@@ -805,6 +808,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   // parent's background work, without asking callers to supply the roster.
   const resumedChildThreadIds =
     parentProjection !== undefined &&
+    parentProjection.childInterruptTargets === undefined &&
     !parentProjection.runs.some((run) =>
       ["preparing", "starting", "running"].includes(run.status),
     ) &&
@@ -819,6 +823,33 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
             : [],
         )
       : [];
+  if (
+    parentProjection !== undefined &&
+    !parentProjection.runs.some((run) => ["preparing", "starting", "running"].includes(run.status))
+  ) {
+    for (const target of parentProjection.childInterruptTargets ?? []) {
+      const commandId = CommandId.make(
+        `${yield* allocateCommandId(input)}:child:${target.threadId}:${target.runId}`,
+      );
+      const result = yield* dispatch(
+        target.action === "interrupt"
+          ? {
+              type: "run.interrupt",
+              commandId,
+              threadId: target.threadId,
+              runId: target.runId,
+              holdQueue: true,
+            }
+          : {
+              type: "queued-run.cancel",
+              commandId,
+              threadId: target.threadId,
+              runId: target.runId,
+            },
+      );
+      childSequence = result.sequence;
+    }
+  }
   for (const childThreadId of new Set(resumedChildThreadIds)) {
     const child = yield* getProjection(childThreadId);
     if (

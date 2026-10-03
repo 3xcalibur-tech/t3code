@@ -17,6 +17,7 @@ import type {
 import { copySorted } from "@t3tools/shared/Array";
 
 import {
+  activeSubagentThreadStatus,
   isActiveSubagentStatus,
   isTerminalSubagentStatus,
   withSubagentThreadActivity,
@@ -67,7 +68,11 @@ export function deriveThreadTurnSubagents(
         subagent,
         subagent.childThreadId === null ? undefined : children?.get(subagent.childThreadId),
       );
-      return subagent.runId === runId || live !== subagent ? [live] : [];
+      return subagent.runId === runId ||
+        (subagent.childThreadId !== null &&
+          activeSubagentThreadStatus(children?.get(subagent.childThreadId)) !== null)
+        ? [live]
+        : [];
     }),
     (left, right) => orderKey(left) - orderKey(right) || left.id.localeCompare(right.id),
   );

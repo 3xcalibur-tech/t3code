@@ -1858,6 +1858,9 @@ const makeWsRpcLayer = (
             threadManagement
               .getThreadSnapshotWindow(input.threadId, {
                 rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+                ...(input.includeInterruptTargets === undefined
+                  ? {}
+                  : { includeInterruptTargets: input.includeInterruptTargets }),
               })
               .pipe(
                 Effect.map((snapshot) =>

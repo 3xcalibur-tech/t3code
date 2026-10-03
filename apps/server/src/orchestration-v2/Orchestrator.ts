@@ -4400,6 +4400,109 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         }
       }
+      // Capture ownership at request time. A later Stop/archive must still
+      // dispose this run's delivery, while a fresh request can use a new cohort.
+      const existingRequest = projection.runs.find(
+        (run) => run.userMessageId === command.messageId,
+      );
+      let delegatedTaskParentRunId = existingRequest?.delegatedTaskParentRunId;
+      const childOrigin = projection.thread.forkedFrom;
+      const parentThreadId = projection.thread.lineage.parentThreadId;
+      if (
+        existingRequest === undefined &&
+        dispatchMode.type !== "steer_active" &&
+        parentThreadId !== null &&
+        projection.thread.lineage.relationshipToParent === "subagent" &&
+        childOrigin?.type === "node" &&
+        command.notification?.source.kind !== "monitor"
+      ) {
+        const pendingTask = (yield* Ref.get(events)).findLast(
+          (event) =>
+            event.type === "subagent.updated" &&
+            event.threadId === parentThreadId &&
+            event.payload.id === childOrigin.nodeId &&
+            event.payload.origin === "app_owned" &&
+            event.payload.childThreadId === command.threadId,
+        );
+        if (pendingTask?.type === "subagent.updated") {
+          delegatedTaskParentRunId = pendingTask.payload.runId ?? undefined;
+        } else {
+          const parent = yield* mapDispatchError(command)(
+            projectionStore.getThreadRecords(parentThreadId, ["runs", "subagents"]),
+          );
+          const task = parent.subagents.find(
+            (task) =>
+              task.id === childOrigin.nodeId &&
+              task.origin === "app_owned" &&
+              task.childThreadId === command.threadId,
+          );
+          if (task !== undefined) {
+            const latestRun = parent.runs.at(-1);
+            const wake =
+              latestRun === undefined
+                ? undefined
+                : (yield* mapDispatchError(command)(
+                    projectionStore.getThreadRecords(parentThreadId, ["messages"], {
+                      messageIds: [latestRun.userMessageId],
+                    }),
+                  )).messages[0];
+            const originalParentRun = parent.runs.find((run) => run.id === task.runId);
+            delegatedTaskParentRunId =
+              originalParentRun?.delegatedCompletion?.disposition === undefined ||
+              originalParentRun.delegatedCompletion.disposition === "open"
+                ? (task.runId ?? undefined)
+                : (wake?.delegatedCompletion?.parentRunId ??
+                  latestRun?.id ??
+                  task.runId ??
+                  undefined);
+            const owningRun = parent.runs.find((run) => run.id === delegatedTaskParentRunId);
+            if (
+              owningRun !== undefined &&
+              owningRun.id !== task.runId &&
+              (owningRun.delegatedCompletion === undefined ||
+                owningRun.delegatedCompletion.disposition === "open")
+            ) {
+              const now = yield* DateTime.now;
+              if (owningRun.delegatedCompletion === undefined) {
+                yield* emit(
+                  events,
+                  command,
+                )({
+                  type: "run.updated",
+                  threadId: parentThreadId,
+                  runId: owningRun.id,
+                  occurredAt: now,
+                  payload: {
+                    ...owningRun,
+                    delegatedCompletion: { disposition: "open", nextGeneration: 1, delivery: null },
+                  },
+                });
+              }
+              yield* emit(
+                events,
+                command,
+              )({
+                type: "subagent.updated",
+                threadId: parentThreadId,
+                runId: owningRun.id,
+                nodeId: task.id,
+                occurredAt: now,
+                payload: {
+                  ...task,
+                  runId: owningRun.id,
+                  status: "pending",
+                  result: null,
+                  resultRunId: undefined,
+                  completedAt: null,
+                  startedAt: now,
+                  updatedAt: now,
+                  completionDelivery: { state: "pending", observedByRunId: null },
+                },
+              });
+            }
+          }
+        }
+      }
       const dispatchText =
         delegatedCompletion === undefined
           ? command.text
@@ -4593,6 +4696,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ),
               );
         const run: OrchestrationV2Run = {
+          ...(delegatedTaskParentRunId === undefined ? {} : { delegatedTaskParentRunId }),
           id: runId,
           threadId: command.threadId,
           ordinal,
@@ -4943,6 +5047,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   mapDispatchError(command),
                 );
         const run: OrchestrationV2Run = {
+          ...(delegatedTaskParentRunId === undefined ? {} : { delegatedTaskParentRunId }),
           id: runId,
           threadId: command.threadId,
           ordinal,
@@ -5631,6 +5736,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
       const run: OrchestrationV2Run = {
+        ...(delegatedTaskParentRunId === undefined ? {} : { delegatedTaskParentRunId }),
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -8491,7 +8597,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
    * other (stale policy on the terminal row, or a terminal row regressed to
    * running).
    */
-  const finalizeAppOwnedSubagent = (childThreadId: ThreadId, terminalRunId: RunId) =>
+  const finalizeAppOwnedSubagent = (
+    childThreadId: ThreadId,
+    terminalRunId: RunId,
+    recovering = false,
+  ) =>
     Effect.gen(function* () {
       const childControls = yield* projectionStore.getThreadRecords(
         childThreadId,
@@ -8577,40 +8687,59 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
       const now = yield* DateTime.now;
       const result = subagentResultForRun(childProjection, childRun);
-      const parentRun =
-        task.runId === null
-          ? undefined
-          : parentProjection.runs.find((candidate) => candidate.id === task.runId);
+      const deliveryParentRunId = childRun.delegatedTaskParentRunId ?? task.runId;
+      const parentRun = parentProjection.runs.find((run) => run.id === deliveryParentRunId);
       const parentNode = parentProjection.nodes.find((candidate) => candidate.id === task.id);
       const parentTurnItem = parentProjection.turnItems.find(
         (candidate) => candidate.type === "subagent" && candidate.subagentId === task.id,
       );
-      // Keep the original task result and history. A new child run only
-      // reopens completion delivery for its own result.
-      const updatedTask: OrchestrationV2Subagent = isFollowUp
-        ? {
-            ...task,
-            // Follow-ups return through notifications even when the original
-            // delegation returned through a blocking wait tool call.
-            completionWake: "always",
-            completionDelivery: { state: "pending", observedByRunId: null },
-            updatedAt: now,
-          }
+      // The task tracks the latest outcome; its original node and timeline
+      // item retain the result of the initial delegation.
+      const newerResultExists =
+        resultTransfers.some((transfer) =>
+          childControls.runs.some(
+            (run) => run.id === transfer.sourcePoint.runId && run.ordinal > childRun.ordinal,
+          ),
+        ) ||
+        childControls.runs.some(
+          (run) =>
+            run.ordinal > childRun.ordinal &&
+            run.delegatedTaskParentRunId !== undefined &&
+            run.delegatedTaskParentRunId !== deliveryParentRunId,
+        );
+      const deliverFollowUp =
+        isFollowUp &&
+        !newerResultExists &&
+        (!recovering || childRun.delegatedTaskParentRunId !== undefined);
+      const updatedTask: OrchestrationV2Subagent = newerResultExists
+        ? task
         : {
             ...task,
             providerThreadId: childRun.providerThreadId,
+            resultRunId: childRun.id,
             status: terminalStatus,
             result: result.text,
-            completedAt: now,
+            startedAt: childRun.startedAt ?? childRun.requestedAt,
+            completedAt: childRun.completedAt ?? now,
             updatedAt: now,
+            ...(deliverFollowUp
+              ? {
+                  runId: deliveryParentRunId,
+                  completionWake: "always" as const,
+                  completionDelivery: { state: "pending" as const, observedByRunId: null },
+                }
+              : {}),
           };
-      const completionPlan = yield* planDelegatedCompletionDelivery({
-        parentProjection,
-        parentRun,
-        task: updatedTask,
-        updatedTask,
-        now,
-      });
+      const completionPlan =
+        isFollowUp && !deliverFollowUp
+          ? { task: updatedTask, parentRun: undefined, message: undefined, offer: false }
+          : yield* planDelegatedCompletionDelivery({
+              parentProjection,
+              parentRun,
+              task: updatedTask,
+              updatedTask,
+              now,
+            });
       const resultTransferId = yield* idAllocator.allocate.contextTransfer({
         sourceThreadId: childThreadId,
         targetThreadId: parentThreadId,
@@ -8689,7 +8818,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         {
           type: "subagent.updated",
           threadId: parentThreadId,
-          ...(task.runId === null ? {} : { runId: task.runId }),
+          ...(completionPlan.task.runId === null ? {} : { runId: completionPlan.task.runId }),
           nodeId: task.id,
           driver: task.driver,
           occurredAt: now,
@@ -9499,7 +9628,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    Effect.gen(function* () {
+      const dispatch = threadDispatch.withLock(
+        commandThreadId(command),
+        dispatchWithReceiptEffect(command),
+      );
+      if (command.type !== "message.dispatch" && command.type !== "queue.resume")
+        return yield* dispatch;
+      const parentId = yield* appOwnedSubagentParentThreadId(commandThreadId(command)).pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: commandThreadId(command), cause }),
+        ),
+      );
+      // Follow-up intake can rebind delivery, using the same parent-first order
+      // as delegation and child completion.
+      return yield* parentId === undefined ? dispatch : threadDispatch.withLock(parentId, dispatch);
+    });
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
@@ -9612,7 +9756,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     !deliveredRunIds.has(run.id) &&
                     !(run.ordinal === 1 && deliveredRunIds.has(undefined))
                   ) {
-                    yield* finalizeAppOwnedSubagent(threadId, run.id);
+                    yield* finalizeAppOwnedSubagent(threadId, run.id, true);
                   }
                 }
               }),

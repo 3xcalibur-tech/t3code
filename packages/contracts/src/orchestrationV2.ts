@@ -542,6 +542,8 @@ export const OrchestrationV2Run = Schema.Struct({
     }),
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
+  /** Parent cohort authorized when app-owned child work was requested. */
+  delegatedTaskParentRunId: Schema.optional(RunId),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -633,6 +635,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // blocking tool call). Absent on legacy records; treated as settled_only.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
+  /** Child run whose terminal status and result this task currently records. */
+  resultRunId: Schema.optional(RunId),
   status: Schema.Literals([
     "idle",
     "pending",
@@ -1620,6 +1624,16 @@ export type OrchestrationV2DomainEvent = typeof OrchestrationV2DomainEvent.Type;
 
 export const OrchestrationV2ThreadProjection = Schema.Struct({
   thread: OrchestrationV2AppThread,
+  /** Requested by Stop; derived from current child work, never persisted. */
+  childInterruptTargets: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        threadId: ThreadId,
+        runId: RunId,
+        action: Schema.Literals(["interrupt", "cancel"]),
+      }),
+    ),
+  ),
   runs: Schema.Array(OrchestrationV2Run),
   attempts: Schema.Array(OrchestrationV2RunAttempt),
   nodes: Schema.Array(OrchestrationV2ExecutionNode),
@@ -2964,6 +2978,7 @@ export type OrchestrationV2DispatchCommandResult = typeof OrchestrationV2Dispatc
 
 export const OrchestrationV2GetThreadProjectionInput = Schema.Struct({
   threadId: ThreadId,
+  includeInterruptTargets: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2GetThreadProjectionInput =
   typeof OrchestrationV2GetThreadProjectionInput.Type;

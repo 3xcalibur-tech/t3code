@@ -283,7 +283,7 @@ export interface ProjectionRecordFilter {
 }
 export type ProjectionRecordField = Exclude<
   keyof OrchestrationV2ThreadProjection,
-  "thread" | "updatedAt" | "visibleTurnItems"
+  "thread" | "updatedAt" | "visibleTurnItems" | "childInterruptTargets"
 >;
 export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
   OrchestrationV2ThreadProjection,
@@ -458,6 +458,7 @@ export interface ProjectionStoreV2Shape {
     options: {
       /** Row fallback for histories without turn starts. */
       readonly rowLimit: number;
+      readonly includeInterruptTargets?: boolean;
       /** User-turn window, with extra anchors for the inclusive cursor and has-more check. */
       readonly userTurnLimit?: number | undefined;
       readonly anchorItemId?: TurnItemId | undefined;
@@ -1301,6 +1302,35 @@ function buildVisibleTurnItems(input: {
     },
     ...local,
   ]);
+}
+
+function childInterruptTargets(
+  child: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "providerThreads" | "turnItems">,
+): NonNullable<OrchestrationV2ThreadProjection["childInterruptTargets"]> {
+  const activeRun = child.runs.findLast((run) =>
+    ["preparing", "starting", "running", "waiting"].includes(run.status),
+  );
+  const latestRun = child.runs.at(-1);
+  const run =
+    activeRun ??
+    (derivePendingBackgroundWork({
+      latestRun,
+      providerThreads: child.providerThreads,
+      turnItems: child.turnItems,
+      activeProviderThreadId: child.thread.activeProviderThreadId,
+      runs: child.runs,
+    }).length > 0
+      ? latestRun
+      : undefined);
+  return run !== undefined
+    ? [{ threadId: child.thread.id, runId: run.id, action: "interrupt" as const }]
+    : child.runs
+        .filter((run) => run.status === "queued")
+        .map((run) => ({
+          threadId: child.thread.id,
+          runId: run.id,
+          action: "cancel" as const,
+        }));
 }
 
 export function threadShellFromProjection(
@@ -4721,6 +4751,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
         );
 
+    const getChildInterruptTargets = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        // Filter by current work before decoding controls. An idle child's
+        // transcript and historical runs never enter this read.
+        const candidates = yield* sql<{ readonly thread_id: string }>`
+        SELECT DISTINCT child.thread_id
+        FROM orchestration_v2_projection_subagents task
+        JOIN orchestration_v2_projection_threads child ON child.thread_id = task.child_thread_id
+        WHERE task.thread_id = ${threadId} AND task.origin = 'app_owned'
+          AND child.archived_at IS NULL AND child.deleted_at IS NULL
+          AND json_extract(child.payload_json, '$.lineage.parentThreadId') = ${threadId}
+          AND json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+          AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
+          AND json_extract(child.payload_json, '$.forkedFrom.nodeId') = task.subagent_id
+          AND (
+            EXISTS (SELECT 1 FROM orchestration_v2_projection_runs run
+              WHERE run.thread_id = child.thread_id AND run.status IN ('queued','preparing','starting','running','waiting'))
+            OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_threads provider
+              WHERE provider.thread_id = child.thread_id AND
+                CASE WHEN json_valid(provider.payload_json) THEN json_array_length(provider.payload_json, '$.pendingBackgroundTasks') > 0 ELSE 0 END)
+            OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items item
+              WHERE item.thread_id = child.thread_id AND item.status IN ('pending','running','waiting')
+                AND item.type IN ('command_execution','dynamic_tool','subagent'))
+          )
+      `;
+        const targets = yield* Effect.forEach(candidates, (row) =>
+          getThreadRecords(ThreadId.make(row.thread_id), ["runs", "providerThreads", "turnItems"], {
+            turnItemStatuses: ["pending", "running", "waiting"],
+            turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          }).pipe(Effect.map(childInterruptTargets)),
+        );
+        return targets.flat();
+      });
+
     const getThreadSnapshotWindow: ProjectionStoreV2Shape["getThreadSnapshotWindow"] = (
       threadId,
       options,
@@ -4743,7 +4807,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       `).map((row) => ThreadId.make(row.thread_id))[0] ??
                       threadId,
                   };
-            const projection = yield* readProjection(threadId, new Set(), {
+            const storedProjection = yield* readProjection(threadId, new Set(), {
               rowLimit: options.rowLimit,
               userTurnLimit: options.userTurnLimit,
               ...(historyAnchor?.threadId === threadId
@@ -4751,6 +4815,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 : {}),
               ...(historyAnchor === undefined ? {} : { historyAnchor }),
             });
+            const projection =
+              options.includeInterruptTargets === true
+                ? {
+                    ...storedProjection,
+                    childInterruptTargets: yield* getChildInterruptTargets(threadId),
+                  }
+                : storedProjection;
             const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
               SELECT MAX(sequence) AS snapshot_sequence
               FROM orchestration_events
@@ -6055,37 +6126,61 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         ),
       getThreadSnapshotWindow: (threadId, options) =>
         service.getThreadSnapshot(threadId).pipe(
-          Effect.map((snapshot) => {
-            const anchorIndex =
-              options.anchorItemId === undefined
-                ? snapshot.projection.visibleTurnItems.length
-                : snapshot.projection.visibleTurnItems.findIndex(
-                    (row) => row.sourceItemId === options.anchorItemId,
-                  ) + 1;
-            const candidates = snapshot.projection.visibleTurnItems.slice(0, anchorIndex);
-            const turnAnchors =
-              options.userTurnLimit === undefined
-                ? []
-                : candidates.flatMap((row, index) =>
-                    isThreadHistoryTurnStart(row.item) ? [index] : [],
-                  );
-            const rawStart = turnAnchors.at(-(THREAD_HISTORY_MAX_RAW_TURNS + 2)) ?? 0;
-            const anchors = turnAnchors.filter(
-              (index) => index >= rawStart && isThreadHistoryUserTurn(candidates[index]!.item),
-            );
-            const anchorLimit = (options.userTurnLimit ?? 0) + 2;
-            const start =
-              turnAnchors.length > 0
-                ? anchors.length < anchorLimit
-                  ? rawStart
-                  : anchors.at(-anchorLimit)!
-                : Math.max(0, anchorIndex - options.rowLimit);
-            const visibleTurnItems = candidates.slice(start);
-            return {
-              ...snapshot,
-              projection: { ...snapshot.projection, visibleTurnItems },
-            };
-          }),
+          Effect.flatMap((snapshot) =>
+            Effect.gen(function* () {
+              const anchorIndex =
+                options.anchorItemId === undefined
+                  ? snapshot.projection.visibleTurnItems.length
+                  : snapshot.projection.visibleTurnItems.findIndex(
+                      (row) => row.sourceItemId === options.anchorItemId,
+                    ) + 1;
+              const candidates = snapshot.projection.visibleTurnItems.slice(0, anchorIndex);
+              const turnAnchors =
+                options.userTurnLimit === undefined
+                  ? []
+                  : candidates.flatMap((row, index) =>
+                      isThreadHistoryTurnStart(row.item) ? [index] : [],
+                    );
+              const rawStart = turnAnchors.at(-(THREAD_HISTORY_MAX_RAW_TURNS + 2)) ?? 0;
+              const anchors = turnAnchors.filter(
+                (index) => index >= rawStart && isThreadHistoryUserTurn(candidates[index]!.item),
+              );
+              const anchorLimit = (options.userTurnLimit ?? 0) + 2;
+              const start =
+                turnAnchors.length > 0
+                  ? anchors.length < anchorLimit
+                    ? rawStart
+                    : anchors.at(-anchorLimit)!
+                  : Math.max(0, anchorIndex - options.rowLimit);
+              const visibleTurnItems = candidates.slice(start);
+              const childTargets =
+                options.includeInterruptTargets === true
+                  ? [...(yield* Ref.get(replayState)).projections.values()].flatMap((child) => {
+                      const task = snapshot.projection.subagents.find(
+                        (task) =>
+                          task.origin === "app_owned" && task.childThreadId === child.thread.id,
+                      );
+                      return task !== undefined &&
+                        child.thread.archivedAt === null &&
+                        child.thread.deletedAt === null &&
+                        child.thread.lineage.parentThreadId === threadId &&
+                        child.thread.lineage.relationshipToParent === "subagent" &&
+                        child.thread.forkedFrom?.type === "node" &&
+                        child.thread.forkedFrom.nodeId === task.id
+                        ? childInterruptTargets(child)
+                        : [];
+                    })
+                  : undefined;
+              return {
+                ...snapshot,
+                projection: {
+                  ...snapshot.projection,
+                  visibleTurnItems,
+                  ...(childTargets === undefined ? {} : { childInterruptTargets: childTargets }),
+                },
+              };
+            }),
+          ),
         ),
     };
 

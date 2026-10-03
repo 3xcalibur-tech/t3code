@@ -62,6 +62,7 @@ import {
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2TurnInput,
 } from "../orchestration-v2/ProviderAdapter.ts";
+import { makeProviderFailure } from "../orchestration-v2/ProviderFailure.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "../orchestration-v2/ProviderContinuationRequests.ts";
 import { checkpointWorkspace } from "../orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
@@ -178,6 +179,9 @@ function makeDeterministicAdapter(input: {
   readonly capabilities: OrchestrationV2ProviderCapabilities;
   readonly capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>;
   readonly shouldComplete: (turn: ProviderAdapterV2TurnInput) => boolean;
+  readonly terminalStatus?: (
+    turn: ProviderAdapterV2TurnInput,
+  ) => "completed" | "failed" | "cancelled" | "interrupted";
   readonly terminalGate?: (turn: ProviderAdapterV2TurnInput) => Deferred.Deferred<void> | undefined;
   readonly response: (turn: ProviderAdapterV2TurnInput) => string;
 }): ProviderAdapterV2Shape {
@@ -288,6 +292,7 @@ function makeDeterministicAdapter(input: {
                 return;
               }
               const response = input.response(turnInput);
+              const terminalStatus = input.terminalStatus?.(turnInput) ?? "completed";
               yield* publish([
                 {
                   type: "provider_turn.updated",
@@ -303,7 +308,7 @@ function makeDeterministicAdapter(input: {
                       strength: "strong",
                     },
                     ordinal: turnInput.runOrdinal,
-                    status: "completed",
+                    status: input.terminalStatus?.(turnInput) ?? "completed",
                     startedAt: eventTime,
                     completedAt: eventTime,
                   },
@@ -342,8 +347,13 @@ function makeDeterministicAdapter(input: {
                   providerThreadId: turnInput.providerThread.id,
                   providerTurnId,
                   runOrdinal: turnInput.runOrdinal,
-                  status: "completed",
-                  failure: null,
+                  ...(terminalStatus === "failed"
+                    ? {
+                        status: "failed" as const,
+                        failure: makeProviderFailure({}),
+                        failureItemOrdinal: 2,
+                      }
+                    : { status: terminalStatus, failure: null }),
                   threadDisposition: "reusable",
                 },
               ]);
@@ -1620,9 +1630,9 @@ describe("orchestrator MCP toolkit", () => {
               delegatedStatusAfterFollowupCall.structuredContent,
             ).pipe(Effect.orDie);
             expect(delegatedStatusAfterFollowup).toMatchObject({
-              childRunId: delegated.childRunId,
+              childRunId: childFollowup.runId,
               status: "completed",
-              summary: delegatedResult,
+              summary: "Claude completed: Confirm the delegated API boundary remains inspected.",
               hasPendingChildRuns: false,
               latestTerminalRunId: childFollowup.runId,
               latestTerminalStatus: "completed",
@@ -1649,9 +1659,9 @@ describe("orchestrator MCP toolkit", () => {
               delegatedStatusDuringFollowupCall.structuredContent,
             ).pipe(Effect.orDie);
             expect(delegatedStatusDuringFollowup).toMatchObject({
-              childRunId: delegated.childRunId,
-              status: "completed",
-              summary: delegatedResult,
+              childRunId: activeChildFollowup.runId,
+              status: "running",
+              summary: null,
               hasPendingChildRuns: true,
               latestTerminalRunId: childFollowup.runId,
               latestTerminalStatus: "completed",
@@ -1729,9 +1739,9 @@ describe("orchestrator MCP toolkit", () => {
               delegatedStatusAfterCleanupCall.structuredContent,
             ).pipe(Effect.orDie);
             expect(delegatedStatusAfterCleanup).toMatchObject({
-              childRunId: delegated.childRunId,
-              status: "completed",
-              summary: delegatedResult,
+              childRunId: activeChildFollowup.runId,
+              status: "interrupted",
+              summary: expect.any(String),
               hasPendingChildRuns: false,
               latestTerminalRunId: activeChildFollowup.runId,
               latestTerminalStatus: "interrupted",
@@ -3803,10 +3813,10 @@ describe("orchestrator MCP toolkit", () => {
             pendingStatusCall.structuredContent,
           ).pipe(Effect.orDie);
           expect(pendingStatus).toMatchObject({
-            childRunId: delegated.childRunId,
-            status: "completed",
-            summary: delegatedResult,
-            resultContextTransferId: delegated.resultContextTransferId,
+            childRunId: runningFollowup.runId,
+            status: "running",
+            summary: null,
+            resultContextTransferId: null,
             hasPendingChildRuns: true,
             latestTerminalRunId: delegated.childRunId,
             latestTerminalStatus: "completed",
@@ -3886,10 +3896,10 @@ describe("orchestrator MCP toolkit", () => {
             finalStatusCall.structuredContent,
           ).pipe(Effect.orDie);
           expect(finalStatus).toMatchObject({
-            childRunId: delegated.childRunId,
+            childRunId: queuedFollowup.runId,
             status: "completed",
-            summary: delegatedResult,
-            resultContextTransferId: delegated.resultContextTransferId,
+            summary: queuedFollowupResult,
+            resultContextTransferId: expect.any(String),
             hasPendingChildRuns: false,
             latestTerminalRunId: queuedFollowup.runId,
             latestTerminalStatus: "completed",
@@ -3901,12 +3911,39 @@ describe("orchestrator MCP toolkit", () => {
     ),
   );
   it.live.each([
-    { completionWake: "always", delayedDelivery: false },
-    { completionWake: "settled_only", delayedDelivery: false },
-    { completionWake: "always", delayedDelivery: true },
+    {
+      completionWake: "always",
+      delayedDelivery: false,
+      closedCohort: false,
+      followupStatus: "completed" as const,
+    },
+    {
+      completionWake: "settled_only",
+      delayedDelivery: false,
+      closedCohort: false,
+      followupStatus: "completed" as const,
+    },
+    {
+      completionWake: "always",
+      delayedDelivery: true,
+      closedCohort: false,
+      followupStatus: "completed" as const,
+    },
+    {
+      completionWake: "always",
+      delayedDelivery: false,
+      closedCohort: true,
+      followupStatus: "completed" as const,
+    },
+    ...(["failed", "cancelled", "interrupted"] as const).map((followupStatus) => ({
+      completionWake: "always" as const,
+      delayedDelivery: false,
+      closedCohort: false,
+      followupStatus,
+    })),
   ] as const)(
-    "wakes the parent after an original $completionWake delegation with delayed delivery $delayedDelivery",
-    ({ completionWake, delayedDelivery }) =>
+    "wakes the parent after an original $completionWake delegation with delayed delivery $delayedDelivery and closed cohort $closedCohort, follow-up $followupStatus",
+    ({ completionWake, delayedDelivery, closedCohort, followupStatus }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* checkpointWorkspace("parent-wake-followup-comparison");
@@ -3917,6 +3954,7 @@ describe("orchestrator MCP toolkit", () => {
           const foregroundGate = yield* Deferred.make<void>();
           const selectionEntered = yield* Deferred.make<void>();
           const selectionGate = yield* Deferred.make<void>();
+          const followupGate = yield* Deferred.make<void>();
           const foregroundPrompt = "Hold the parent while its child follow-up completes.";
           const initialPrompt = "Original delegated task for follow-up comparison.";
           const controlPrompt = "Control delegated task without follow-ups.";
@@ -3935,6 +3973,8 @@ describe("orchestrator MCP toolkit", () => {
                 },
                 capturedTurns,
                 shouldComplete: () => true,
+                terminalStatus: (turn) =>
+                  turn.message.text.startsWith(followupPrompt) ? followupStatus : "completed",
                 terminalGate: (turn) =>
                   turn.message.text === parentPrompt
                     ? parentGate
@@ -3944,7 +3984,9 @@ describe("orchestrator MCP toolkit", () => {
                         ? controlGate
                         : turn.message.text === foregroundPrompt
                           ? foregroundGate
-                          : undefined,
+                          : delayedDelivery && turn.message.text.startsWith(followupPrompt)
+                            ? followupGate
+                            : undefined,
                 response: (turn) => `Result: ${turn.message.text}`,
               }),
               planSelectionTransition: ({ target }) =>
@@ -4074,6 +4116,18 @@ describe("orchestrator MCP toolkit", () => {
                 transfer.sourceThreadId === worker.childThreadId,
             );
             expect(initialTransfers).toHaveLength(1);
+            if (closedCohort) {
+              yield* orchestrator.dispatch({
+                type: "thread.archive",
+                threadId: parentThreadId,
+                commandId: CommandId.make("wake-comparison:archive"),
+              });
+              yield* orchestrator.dispatch({
+                type: "thread.unarchive",
+                threadId: parentThreadId,
+                commandId: CommandId.make("wake-comparison:unarchive"),
+              });
+            }
             const foregroundSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
             yield* orchestrator.dispatch({
               type: "message.dispatch",
@@ -4093,22 +4147,6 @@ describe("orchestrator MCP toolkit", () => {
               (event) =>
                 event.type === "provider-turn.updated" && event.payload.status === "running",
             );
-            // A slow provider selection holds the actual parent dispatch lock.
-            // Both child runs finish before their result handlers acquire it.
-            const selectionFiber = delayedDelivery
-              ? yield* orchestrator
-                  .dispatch({
-                    type: "thread.model-selection.set",
-                    commandId: CommandId.make("wake-comparison:slow-selection"),
-                    threadId: parentThreadId,
-                    modelSelection: {
-                      ...codexSelection,
-                      model: "gpt-5.4-next",
-                    },
-                  })
-                  .pipe(Effect.forkChild)
-              : undefined;
-            if (delayedDelivery) yield* Deferred.await(selectionEntered);
             const followupRunIds: RunId[] = [];
             for (let index = 0; index < (delayedDelivery ? 2 : 1); index++) {
               const childSequence = yield* orchestrator.getThreadEventSequence(
@@ -4126,18 +4164,67 @@ describe("orchestrator MCP toolkit", () => {
                 modelSelection: codexSelection,
                 dispatchMode: { type: "start_immediately" },
               });
+              if (closedCohort) {
+                const child = yield* orchestrator.getThreadProjection(worker.childThreadId!);
+                const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+                const owner = parent.runs.find(
+                  (run) => run.userMessageId === MessageId.make("wake-comparison:foreground"),
+                )!;
+                const task = parent.subagents.find((task) => task.id === worker.id)!;
+                expect(child.runs.at(-1)?.delegatedTaskParentRunId).toBe(owner.id);
+                expect(task.runId).toBe(owner.id);
+                expect(owner.delegatedCompletion?.disposition).toBe("open");
+                expect(
+                  parent.runs.find((run) => run.id === parentRun.id)?.delegatedCompletion
+                    ?.disposition,
+                ).toBe("disposed");
+              }
+              // Intake takes the parent lock too. Hold it only after the
+              // child's request commits, so its terminal delivery queues behind it.
+              const selectionFiber =
+                delayedDelivery && index === 0
+                  ? yield* orchestrator
+                      .dispatch({
+                        type: "thread.model-selection.set",
+                        commandId: CommandId.make("wake-comparison:slow-selection"),
+                        threadId: parentThreadId,
+                        modelSelection: { ...codexSelection, model: "gpt-5.4-next" },
+                      })
+                      .pipe(Effect.forkChild)
+                  : undefined;
+              if (selectionFiber !== undefined) {
+                yield* Deferred.await(selectionEntered);
+                yield* Deferred.succeed(followupGate, undefined);
+              }
               const followupTerminal = yield* awaitEvent(
                 worker.childThreadId!,
                 childSequence,
-                (event) => event.type === "run.updated" && event.payload.status === "completed",
+                (event) => event.type === "run.updated" && event.payload.status === followupStatus,
               );
               if (followupTerminal.event.type !== "run.updated")
                 throw new Error("Missing follow-up run.");
               followupRunIds.push(followupTerminal.event.payload.id);
+              if (selectionFiber !== undefined) {
+                yield* Deferred.succeed(selectionGate, undefined);
+                yield* Fiber.join(selectionFiber);
+              }
             }
-            if (selectionFiber !== undefined) {
-              yield* Deferred.succeed(selectionGate, undefined);
-              yield* Fiber.join(selectionFiber);
+            if (closedCohort) {
+              yield* awaitEvent(
+                parentThreadId,
+                foregroundSequence,
+                (event) =>
+                  event.type === "context-transfer.created" &&
+                  event.payload.sourceThreadId === worker.childThreadId &&
+                  event.payload.sourcePoint.runId === followupRunIds[0],
+              );
+              const afterFollowup = yield* orchestrator.getThreadProjection(parentThreadId);
+              const workerTask = afterFollowup.subagents.find((task) => task.id === worker.id)!;
+              expect(
+                workerTask.completionDelivery?.state,
+                "An explicitly requested follow-up must be returned after reopening its parent",
+              ).toBe("claimed");
+              return;
             }
             // This later independent completion is a barrier on the sequential
             // terminal reactor and continuation worker, so absence needs no sleep.
@@ -4211,10 +4298,14 @@ describe("orchestrator MCP toolkit", () => {
             const originalTask = initialParent.subagents.find((task) => task.id === worker.id)!;
             const finalTask = finalParent.subagents.find((task) => task.id === worker.id)!;
             expect(finalTask).toMatchObject({
-              result: originalTask.result,
-              status: originalTask.status,
-              completedAt: originalTask.completedAt,
+              resultRunId: followupRunIds.at(-1),
+              result:
+                followupStatus === "failed"
+                  ? "Provider turn failed."
+                  : `Result: ${followupPrompt} ${followupRunIds.length - 1}`,
+              status: followupStatus,
             });
+            expect(finalTask.result).not.toBe(originalTask.result);
             expect(
               finalParent.turnItems.find(
                 (item) => item.type === "subagent" && item.subagentId === worker.id,
