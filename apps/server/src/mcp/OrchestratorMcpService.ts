@@ -52,6 +52,7 @@ import {
   type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
+import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -412,7 +413,10 @@ function latestTerminalResultRun(
         run.status !== "rolled_back" &&
         (run.id === delegatedRun?.id || run.startedAt !== null),
     )
-    .toSorted((left, right) => right.ordinal - left.ordinal)[0];
+    .reduce<OrchestrationV2Run | undefined>(
+      (latest, run) => (latest === undefined || runRanAfter(run, latest) ? run : latest),
+      undefined,
+    );
 }
 
 function canExposeTaskRunResult(run: OrchestrationV2Run | undefined): run is OrchestrationV2Run {
@@ -1062,9 +1066,22 @@ const make = Effect.gen(function* () {
         childControls.runs.findLast((run) => run.status === "queued" && run.queueHeld !== true) ??
         progress.resultRun ??
         childRun;
-      const workState = progress.state;
-      const status =
-        workState === "waiting_for_children" ? ("waiting" as const) : taskStatusForRun(currentRun);
+      // A restart-cut run is not a final result while its continuation is pending.
+      const heldForRestart =
+        progress.state === "result_available" &&
+        !(
+          task.result !== null &&
+          (task.resultRunId === undefined || task.resultRunId === currentRun?.id)
+        ) &&
+        (yield* threadManagement
+          .delegatedTaskResultPending(task.childThreadId)
+          .pipe(Effect.mapError(threadManagementFailure)));
+      const workState = heldForRestart ? "working" : progress.state;
+      const status = heldForRestart
+        ? ("running" as const)
+        : workState === "waiting_for_children"
+          ? ("waiting" as const)
+          : taskStatusForRun(currentRun);
       const derivedResult =
         currentRun !== undefined && isTerminalTaskStatus(status)
           ? currentRun.id === task.resultRunId && task.result !== null

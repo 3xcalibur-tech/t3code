@@ -249,6 +249,7 @@ it.effect.each([
         );
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
+          yield* orchestrator.recoverDelegatedTasks;
           const parent = yield* orchestrator.getThreadProjection(parentId);
           assert.equal(
             parent.subagents[0]?.completionDelivery?.state,
