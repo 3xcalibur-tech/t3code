@@ -160,7 +160,8 @@ it("does not commit running state when inherited background routing cannot be re
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
-it("names a temporary worktree branch from the first run's message", async () => {
+// The thread's first run was a /compact, so this is the first prompt to reach the provider.
+it("names a temporary worktree branch from the first run that reaches the provider", async () => {
   const threadId = ThreadId.make("thread_provider_turn_start_branch_name");
   const runId = RunId.make("run_provider_turn_start_branch_name");
   const messageId = MessageId.make("message_provider_turn_start_branch_name");
@@ -183,7 +184,7 @@ it("names a temporary worktree branch from the first run's message", async () =>
         activeAttemptId: attemptId,
         providerThreadId,
         userMessageId: messageId,
-        ordinal: 1,
+        ordinal: 2,
       },
     ],
     nodes: [{ id: rootNodeId, checkpointScopeId }],

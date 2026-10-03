@@ -511,21 +511,20 @@ export const layer: Layer.Layer<
           }
         }
       }
-      // The first run names a temporary worktree branch from its message, for
-      // threads launched without one. It runs in the background so name
-      // generation never delays the turn.
-      if (run.ordinal === 1) {
-        yield* branchRename
-          .rename({
-            threadId: projection.thread.id,
-            projectId: projection.thread.projectId,
-            commandId: CommandId.make(run.id),
-            branch,
-            worktreePath,
-            message,
-          })
-          .pipe(Effect.forkIn(backgroundScope));
-      }
+      // A run that reaches the provider names a still-temporary worktree branch
+      // from its message, for threads launched without one. Commands handled
+      // above, such as /compact, return first and never name it. The service attempts
+      // each thread once, in the background so naming never delays the turn.
+      yield* branchRename
+        .rename({
+          threadId: projection.thread.id,
+          projectId: projection.thread.projectId,
+          commandId: CommandId.make(run.id),
+          branch,
+          worktreePath,
+          message,
+        })
+        .pipe(Effect.forkIn(backgroundScope));
       const selectInheritedBackgroundItems = (
         current: ProjectionStore.ProjectionRuntimeRecoveryState,
       ): ReturnType<typeof RunExecutionService.selectInheritedBackgroundTurnItems> =>
