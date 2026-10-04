@@ -100,7 +100,11 @@ function raisedHandWhileSnoozed(shell: OrchestrationV2ThreadShell) {
   const completedAt = shell.latestRunCompletedAt ?? null;
   const snoozedAt = shell.snoozedAt ?? null;
   if (snoozedAt === null) return shell.status === "failed";
-  return completedAt !== null && DateTime.isGreaterThan(completedAt, snoozedAt);
+  return (
+    (shell.status === "completed" || shell.status === "failed") &&
+    completedAt !== null &&
+    DateTime.isGreaterThan(completedAt, snoozedAt)
+  );
 }
 
 /** Why a thread needs attention, if it does. unread mirrors the client's hasUnseenCompletion. */
