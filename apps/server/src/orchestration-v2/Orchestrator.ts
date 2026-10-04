@@ -8980,7 +8980,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       // The task tracks the latest outcome; its original node and timeline
       // item retain the result of the initial delegation.
-      const newerResultExists =
+      const recoveryProgress =
+        options?.recovering === true ? delegatedTaskProgress(childControls) : undefined;
+      const preserveCurrentTask =
+        (recoveryProgress !== undefined &&
+          (recoveryProgress.state !== "result_available" ||
+            recoveryProgress.resultRun?.id !== childRun.id)) ||
         resultTransfers.some((transfer) =>
           childControls.runs.some(
             (run) => run.id === transfer.sourcePoint.runId && run.ordinal > childRun.ordinal,
@@ -8994,9 +8999,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       const deliverFollowUp =
         isFollowUp &&
-        !newerResultExists &&
+        !preserveCurrentTask &&
         (options?.recovering !== true || childRun.delegatedTaskParentRunId !== undefined);
-      const updatedTask: OrchestrationV2Subagent = newerResultExists
+      const updatedTask: OrchestrationV2Subagent = preserveCurrentTask
         ? task
         : {
             ...task,
@@ -9016,7 +9021,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : {}),
           };
       const completionPlan =
-        isFollowUp && !deliverFollowUp
+        preserveCurrentTask || (isFollowUp && !deliverFollowUp)
           ? { task: updatedTask, parentRun: undefined, message: undefined, offer: false }
           : yield* planDelegatedCompletionDelivery({
               parentProjection,
@@ -9926,6 +9931,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (command.type !== "message.dispatch" && command.type !== "queue.resume")
         return yield* dispatch;
       const parentId = yield* appOwnedSubagentParentThreadId(commandThreadId(command)).pipe(
+        // Missing threads must reach dispatch's rejection receipt handling.
+        Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(undefined)),
         Effect.mapError(
           (cause) => new OrchestratorProjectionError({ threadId: commandThreadId(command), cause }),
         ),

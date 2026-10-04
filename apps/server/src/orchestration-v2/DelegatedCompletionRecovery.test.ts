@@ -23,13 +23,15 @@ import * as ProviderContinuationRequests from "./ProviderContinuationRequests.ts
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
 it.effect.each([
-  { oldFollowup: false, tracked: false, stopped: false },
-  { oldFollowup: true, tracked: false, stopped: false },
-  { oldFollowup: true, tracked: true, stopped: false },
-  { oldFollowup: true, tracked: true, stopped: true },
+  { oldFollowup: false, tracked: false, stopped: false, active: false },
+  { oldFollowup: true, tracked: false, stopped: false, active: false },
+  { oldFollowup: true, tracked: true, stopped: false, active: false },
+  { oldFollowup: true, tracked: true, stopped: true, active: false },
+  { oldFollowup: true, tracked: true, stopped: false, active: true },
+  { oldFollowup: false, tracked: true, stopped: false, active: true },
 ])(
   "startup backfills historical results without waking parents, %s",
-  ({ oldFollowup, tracked, stopped }) =>
+  ({ oldFollowup, tracked, stopped, active }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const databaseContext = yield* Layer.build(SqlitePersistenceMemory);
@@ -164,9 +166,12 @@ it.effect.each([
             title: null,
             model: null,
             completionWake: "always",
-            completionDelivery: { state: "acknowledged", observedByRunId: parentRunId },
-            status: "completed",
-            result: "Old success",
+            completionDelivery: {
+              state: active ? "pending" : "acknowledged",
+              observedByRunId: active ? null : parentRunId,
+            },
+            status: active ? "running" : "completed",
+            result: active ? null : "Old success",
             startedAt: now,
             completedAt: now,
             updatedAt: now,
@@ -208,30 +213,47 @@ it.effect.each([
             },
           });
         }
-        yield* store.apply({
-          id: EventId.make("review:startup:transfer"),
-          type: "context-transfer.created",
-          threadId: parentId,
-          occurredAt: now,
-          payload: {
-            id: ContextTransferId.make("review:startup:transfer"),
-            type: "subagent_result",
-            sourceThreadId: childId,
-            targetThreadId: parentId,
-            sourcePoint: { threadId: childId, runId: originalId },
-            basePoint: null,
-            sourceProviderInstanceId: providerId,
-            targetProviderInstanceId: providerId,
-            targetRunId: parentRunId,
-            status: "consumed",
-            resolution: null,
-            createdBy: "system",
-            error: null,
-            createdAt: now,
-            updatedAt: now,
-            consumedAt: now,
-          },
-        });
+        if (active) {
+          const id = RunId.make("review:startup:active-followup");
+          yield* store.apply({
+            id: EventId.make("review:startup:active-run"),
+            type: "run.updated",
+            threadId: childId,
+            runId: id,
+            occurredAt: now,
+            payload: {
+              ...run(childId, id, oldFollowup ? 3 : 2),
+              delegatedTaskParentRunId: parentRunId,
+              status: "running",
+              completedAt: null,
+            },
+          });
+        }
+        if (!active || oldFollowup)
+          yield* store.apply({
+            id: EventId.make("review:startup:transfer"),
+            type: "context-transfer.created",
+            threadId: parentId,
+            occurredAt: now,
+            payload: {
+              id: ContextTransferId.make("review:startup:transfer"),
+              type: "subagent_result",
+              sourceThreadId: childId,
+              targetThreadId: parentId,
+              sourcePoint: { threadId: childId, runId: originalId },
+              basePoint: null,
+              sourceProviderInstanceId: providerId,
+              targetProviderInstanceId: providerId,
+              targetRunId: parentRunId,
+              status: "consumed",
+              resolution: null,
+              createdBy: "system",
+              error: null,
+              createdAt: now,
+              updatedAt: now,
+              consumedAt: now,
+            },
+          });
         const offers = yield* Ref.make<
           ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
         >([]);
@@ -253,10 +275,14 @@ it.effect.each([
           const parent = yield* orchestrator.getThreadProjection(parentId);
           assert.equal(
             parent.subagents[0]?.completionDelivery?.state,
-            tracked ? (stopped ? "disposed" : "claimed") : "acknowledged",
+            active ? "pending" : tracked ? (stopped ? "disposed" : "claimed") : "acknowledged",
           );
+          if (active) {
+            assert.equal(parent.subagents[0]?.status, "running");
+            assert.isNull(parent.subagents[0]?.result);
+          }
           const offered = yield* Ref.get(offers);
-          if (tracked && !stopped) assert.isAbove(offered.length, 0);
+          if (tracked && !stopped && !active) assert.isAbove(offered.length, 0);
           else assert.lengthOf(offered, 0);
           assert.lengthOf(parent.contextTransfers, oldFollowup ? 2 : 1);
         }).pipe(Effect.provide(layer));
