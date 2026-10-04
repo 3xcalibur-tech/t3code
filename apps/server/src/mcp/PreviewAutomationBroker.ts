@@ -667,10 +667,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         (current) =>
           Array.from(current.clients.values())
             .filter((host) => host.environmentId === environmentId)
-            .sort(
-              (left, right) =>
-                Number(right.focused) - Number(left.focused) || right.focusOrder - left.focusOrder,
-            )[0]?.clientId,
+            .sort((left, right) => right.focusOrder - left.focusOrder)[0]?.clientId,
       ),
     );
 

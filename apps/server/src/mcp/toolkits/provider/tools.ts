@@ -84,7 +84,7 @@ const shared = {
 
 const ProviderStatusTool = Tool.make("t3_provider_status", {
   ...shared,
-  description: `Read each provider instance's health as the Settings providers page shows it: enabled, installed, version and latest version, status, auth state, and subscription rate-limit windows (usedPercent, resetsAt) so you can pick a provider with quota. Models are in orchestrator_capabilities. Snapshots come from the server's periodic checks (see checkedAt); t3_provider_refresh re-probes. Pass instanceId for one instance. Pass usage {sinceDay, untilDay (YYYY-MM-DD, inclusive), timeZone (IANA)} to add token and API-equivalent cost totals per provider and model from local transcripts, at most ${MAX_USAGE_ROWS} rows by cost.`,
+  description: `Read each provider instance's health as the Settings providers page shows it: enabled, installed, version and latest version, status, auth state, and subscription rate-limit windows (usedPercent, resetsAt) so you can pick a provider with quota. Models are in orchestrator_capabilities. Snapshots come from the server's periodic checks (see checkedAt); t3_provider_refresh re-probes. Pass instanceId for one instance. Pass usage {sinceDay, untilDay (YYYY-MM-DD, inclusive), timeZone (IANA)} to add token and API-equivalent cost totals per provider and model from local transcripts, at most ${MAX_USAGE_ROWS} rows by cost. Needs a full-access/default caller, since provider messages can carry configured URLs and paths.`,
   parameters: Schema.Struct({
     instanceId: Schema.optional(ProviderInstanceId),
     usage: Schema.optional(

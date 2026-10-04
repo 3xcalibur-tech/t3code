@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
 import * as UsageLimitSources from "../../../usage/UsageLimitSources.ts";
 import * as UsageService from "../../../usage/UsageService.ts";
-import { readCaller, readFullAccessCaller, unavailable } from "../../threadAccess.ts";
+import { readFullAccessCaller, unavailable } from "../../threadAccess.ts";
 import { MAX_USAGE_ROWS, ProviderToolkit } from "./tools.ts";
 
 function usageLimits(limits: ServerProviderUsageLimits) {
@@ -149,7 +149,10 @@ function usageTotals(summary: UsageSummary) {
 export const ProviderHandlersLive = ProviderToolkit.toLayer({
   t3_provider_status: ({ instanceId, usage }) =>
     Effect.gen(function* () {
-      yield* readCaller();
+      // Provider messages can carry configured URLs and executable paths.
+      yield* readFullAccessCaller(
+        "Provider status requires a live full-access/default thread or a full-access client.",
+      );
       const registry = yield* ProviderRegistry.ProviderRegistry;
       const result = yield* snapshot(yield* registry.getProviders, instanceId);
       if (usage === undefined) return result;

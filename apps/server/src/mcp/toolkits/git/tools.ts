@@ -21,7 +21,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 export const MAX_STATUS_FILES = 200;
 
 const GitStatusTool = Tool.make("t3_git_status", {
-  description: `Read the git status of a thread's checkout (its worktree, else the project folder; omit threadId for this thread), as the branch toolbar shows it: current branch, upstream, ahead/behind counts, the open pull request for the branch, and uncommitted files with line counts (first ${MAX_STATUS_FILES}, filesTruncated when cut). Remote counts come from the app's status cache; the first read of a checkout fetches its upstream, as the branch toolbar does. Use t3_worktree_list to list branches and t3_thread_diff for patches.`,
+  description: `Read the git status of a thread's checkout (its worktree, else the project folder; omit threadId for this thread), as the branch toolbar shows it: current branch, upstream, ahead/behind counts, the open pull request for the branch, and uncommitted files with line counts (first ${MAX_STATUS_FILES}, filesTruncated when cut). Remote counts come from the app's status cache; the first read of a checkout fetches its upstream, as the branch toolbar does. Use t3_worktree_list to list branches and t3_thread_diff for patches. Needs a full-access/default caller.`,
   parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
   success: Schema.Struct({
     threadId: ThreadId,

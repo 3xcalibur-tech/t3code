@@ -40,6 +40,8 @@ const checkoutOf = Effect.fn("mcp.git.checkoutOf")(function* (thread: {
 export const GitToolkitHandlersLive = GitToolkit.toLayer({
   t3_git_status: (input) =>
     Effect.gen(function* () {
+      // A cold status cache fetches, which runs git and its credential helpers on the host.
+      yield* readFullAccessCaller("Git status requires a live full-access/default caller.");
       const {
         projection: { thread },
       } = yield* readThread(input.threadId);

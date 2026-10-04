@@ -590,11 +590,18 @@ const make = Effect.gen(function* () {
             // Hosts address reviewers by their own ids (GitLab a numeric id, Bitbucket a uuid), so
             // a login is matched against the candidates the reviewer menu would offer. A host with
             // no candidate list (Azure DevOps) takes the name as given, as the page does.
-            const { capabilities } = yield* service.detail(ref).pipe(Effect.mapError(hostFailure));
-            const candidates = capabilities.reviewers.listCandidates
-              ? (yield* service.reviewerCandidates(ref).pipe(Effect.mapError(hostFailure)))
-                  .candidates
+            const { capabilities, provider } = yield* service
+              .detail(ref)
+              .pipe(Effect.mapError(hostFailure));
+            const list = capabilities.reviewers.listCandidates
+              ? yield* service.reviewerCandidates(ref).pipe(Effect.mapError(hostFailure))
               : undefined;
+            const candidates = list?.candidates;
+            // GitHub and Forgejo take logins and team slugs as given; the candidate list also omits
+            // teams not yet requested. Other hosts want their own ids, which a truncated list may
+            // not reach, so an unmatched name passes through only when the list is incomplete.
+            const passUnmatched =
+              provider === "github" || provider === "forgejo" || list?.truncated === true;
             const reviewers = [];
             for (const reviewer of named) {
               if (candidates === undefined) {
@@ -607,10 +614,16 @@ const make = Effect.gen(function* () {
                   (reviewer.kind === undefined || candidate.kind === reviewer.kind) &&
                   (candidate.id.toLowerCase() === name || candidate.login.toLowerCase() === name),
               );
+              if (match !== undefined) {
+                reviewers.push({ id: match.id, kind: match.kind });
+                continue;
+              }
               // An unmatched name would be silently ignored by hosts that want their own ids.
-              if (match === undefined)
-                return yield* invalid(`${reviewer.id} is not a reviewer this host offers.`);
-              reviewers.push({ id: match.id, kind: match.kind });
+              if (!passUnmatched)
+                return yield* invalid(
+                  `${reviewer.id} is not a reviewer this host offers; pass the host's reviewer id.`,
+                );
+              reviewers.push({ id: reviewer.id, kind: reviewer.kind ?? ("user" as const) });
             }
             yield* service
               .requestReviewers({
