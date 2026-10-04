@@ -58,6 +58,10 @@ import { ClientToolkitHandlersLive } from "./toolkits/client/handlers.ts";
 import { ClientToolkit } from "./toolkits/client/tools.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
+import * as ThreadTerminals from "../terminal/ThreadTerminals.ts";
+import * as ThreadOrdering from "../orchestration-v2/ThreadOrdering.ts";
+import * as GitThreadService from "../git/GitThreadService.ts";
+import * as AgentSettings from "../settings/AgentSettings.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -680,6 +684,7 @@ export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(Orchestrato
 
 export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
   Layer.provide(ThreadToolkitHandlersLive),
+  Layer.provide(ThreadOrdering.layer),
 );
 
 const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
@@ -693,10 +698,12 @@ const ReviewToolkitRegistrationLive = McpServer.toolkit(ReviewToolkit).pipe(
 
 const GitToolkitRegistrationLive = McpServer.toolkit(GitToolkit).pipe(
   Layer.provide(GitToolkitHandlersLive),
+  Layer.provide(GitThreadService.layer),
 );
 
 const TerminalToolkitRegistrationLive = McpServer.toolkit(TerminalToolkit).pipe(
   Layer.provide(TerminalToolkitHandlersLive),
+  Layer.provide(ThreadTerminals.layer),
 );
 
 const ProviderRegistrationLive = McpServer.toolkit(ProviderToolkit).pipe(
@@ -714,6 +721,7 @@ const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit
 const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
   Layer.provide(EnvironmentHandlersLive),
   Layer.provide(ThreadCommandExecutor.layer),
+  Layer.provide(AgentSettings.layer),
 );
 
 const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(

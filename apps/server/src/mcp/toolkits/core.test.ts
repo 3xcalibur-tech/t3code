@@ -20,6 +20,7 @@ import * as ThreadManagement from "../../orchestration-v2/ThreadManagementServic
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/Services/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
+import * as AgentSettings from "../../settings/AgentSettings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
@@ -478,7 +479,7 @@ it.effect("redacts every credential from MCP settings", () =>
       bitbucket: { email: "", accessToken: "secret-token", apiToken: "" },
     } as typeof DEFAULT_SERVER_SETTINGS;
     const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-      yield* EnvironmentHandlers.mcpSettings(settings),
+      yield* AgentSettings.redactSettingsForAgent(settings),
     );
     for (const secret of ["secret-api-key", "secret-password", "secret-env", "secret-token"])
       expect(text).not.toContain(secret);

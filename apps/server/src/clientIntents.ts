@@ -36,7 +36,8 @@ export class ClientIntents extends Context.Service<
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-  const pubsub = yield* PubSub.unbounded<ClientIntent>();
+  // Intents are momentary; a client that stops draining keeps only the latest few.
+  const pubsub = yield* PubSub.sliding<ClientIntent>(8);
   const subscribers = yield* Ref.make(0);
 
   return ClientIntents.of({

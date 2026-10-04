@@ -11,10 +11,9 @@ import {
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import * as Keybindings from "../../../keybindings.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as Settings from "../../../serverSettings.ts";
+import * as AgentSettings from "../../../settings/AgentSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const PreferenceFields = {
@@ -47,9 +46,8 @@ const shared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ServerEnvironment.ServerEnvironment,
-    Settings.ServerSettingsService,
+    AgentSettings.AgentSettings,
     ThreadCommandExecutor.ThreadCommandExecutor,
-    Keybindings.Keybindings,
   ],
 };
 const EnvironmentReadTool = Tool.make("t3_environment_read", {

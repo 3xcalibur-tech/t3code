@@ -7,8 +7,7 @@ import {
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as ProjectService from "../../../project/ProjectService.ts";
-import * as TerminalManager from "../../../terminal/Manager.ts";
+import * as ThreadTerminals from "../../../terminal/ThreadTerminals.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const MAX_OUTPUT_CHARACTERS = 50_000;
@@ -22,8 +21,7 @@ const shared = {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    ProjectService.ProjectService,
-    TerminalManager.TerminalManager,
+    ThreadTerminals.ThreadTerminals,
   ],
 };
 

@@ -7,15 +7,10 @@ import {
   VcsPullResult,
   VcsStatusResult,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
-import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
-import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as GitThreadService from "../../../git/GitThreadService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import * as ProjectService from "../../../project/ProjectService.ts";
-import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
-import * as VcsStatusBroadcaster from "../../../vcs/VcsStatusBroadcaster.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 export const MAX_STATUS_FILES = 200;
@@ -45,8 +40,7 @@ const GitStatusTool = Tool.make("t3_git_status", {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    ProjectService.ProjectService,
-    VcsStatusBroadcaster.VcsStatusBroadcaster,
+    GitThreadService.GitThreadService,
   ],
 })
   .annotate(Tool.Title, "Read git status")
@@ -95,12 +89,7 @@ const GitActionTool = Tool.make("t3_git", {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    ProjectService.ProjectService,
-    GitWorkflowService.GitWorkflowService,
-    VcsStatusBroadcaster.VcsStatusBroadcaster,
-    Orchestrator.OrchestratorV2,
-    PullRequestService.PullRequestService,
-    Crypto.Crypto,
+    GitThreadService.GitThreadService,
   ],
 })
   .annotate(Tool.Title, "Run a git action")
