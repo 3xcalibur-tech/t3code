@@ -46,14 +46,18 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
               }
             }),
           );
-      let preview = yield* readPreview();
+      let preview;
       if (input.file !== undefined && sourceKind !== undefined) {
-        // A renamed file needs its old path, which only the full preview's stats know.
+        // A renamed file needs its old path, which only the full preview's stats know. The lookup
+        // is best effort: a working-tree read must not fail on a branch range it does not need.
+        const full = yield* readPreview().pipe(Effect.orElseSucceed(() => undefined));
         const previousPath =
-          preview.sources
+          full?.sources
             .find((source) => source.kind === sourceKind)
             ?.files?.find((file) => file.path === input.file)?.previousPath ?? null;
         preview = yield* readPreview({ path: input.file, previousPath, sourceKind });
+      } else {
+        preview = yield* readPreview();
       }
       if (preview.sources.length === 0)
         return yield* invalid("The thread's checkout is not a git repository.");
