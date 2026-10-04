@@ -7,6 +7,18 @@ export interface T3McpToolPresentation {
 
 export type T3McpToolSummaryAction =
   | "capabilities"
+  | "folder-browse"
+  | "agent-session-scan"
+  | "agent-session-import"
+  | "terminal-list"
+  | "terminal-read"
+  | "terminal-control"
+  | "git-status"
+  | "git-action"
+  | "pr-read"
+  | "pr-update"
+  | "provider-read"
+  | "provider-refresh"
   | "delegate"
   | "task-status"
   | "task-cancel"
@@ -278,6 +290,39 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_project_update: tool(["Update", "Updating", "Updated", "a project"], "project-update"),
   t3_project_delete: tool(["Delete", "Deleting", "Deleted", "a project"], "project-delete"),
   t3_project_clone: tool(["Clone", "Cloning", "Cloned", "a repository"], "project-clone"),
+  t3_folder_browse: tool(["Browse", "Browsing", "Browsed", "host folders"], "folder-browse"),
+  t3_agent_session_scan: tool(
+    ["Scan", "Scanning", "Scanned", "agent sessions"],
+    "agent-session-scan",
+  ),
+  t3_agent_session_import: tool(
+    ["Import", "Importing", "Imported", "agent sessions"],
+    "agent-session-import",
+  ),
+  t3_terminal_list: tool(["List", "Listing", "Listed", "thread terminals"], "terminal-list"),
+  t3_terminal_read: tool(["Read", "Reading", "Read", "terminal output"], "terminal-read"),
+  t3_terminal_control: tool(
+    ["Control", "Controlling", "Controlled", "a terminal"],
+    "terminal-control",
+  ),
+  t3_git_status: tool(["Check", "Checking", "Checked", "git status"], "git-status"),
+  t3_git: tool(["Run", "Running", "Ran", "a git action"], "git-action"),
+  t3_pull_request_read: tool(
+    ["Read", "Reading", "Read", "a pull request"],
+    "pr-read",
+    "pull-request",
+  ),
+  t3_pull_request_update: tool(
+    ["Update", "Updating", "Updated", "a pull request"],
+    "pr-update",
+    "pull-request",
+  ),
+  t3_provider_status: tool(["Read", "Reading", "Read", "provider status"], "provider-read"),
+  t3_provider_refresh: tool(
+    ["Refresh", "Refreshing", "Refreshed", "providers"],
+    "provider-refresh",
+  ),
+  t3_client_open_thread: tool(["Open", "Opening", "Opened", "a thread in the app"], "thread-read"),
   t3_attachment_prepare_upload: tool(
     ["Prepare", "Preparing", "Prepared", "an attachment upload"],
     "attachment-prepare",

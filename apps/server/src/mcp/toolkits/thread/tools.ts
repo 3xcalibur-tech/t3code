@@ -33,7 +33,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, mark read or unread, toggle auto-settle, or permanently delete a thread. Omit threadId for this thread. snooze requires snoozedUntil. delete cannot be undone and requires a full-access/default caller. Existing thread lifecycle rules apply; this does not schedule a future action.",
+    "Pin, snooze, settle, archive, mark read or unread, toggle auto-settle, reorder, or permanently delete a thread. Omit threadId for this thread. snooze requires snoozedUntil. move_pinned and move_active reorder the thread within its project's pinned or active list, like dragging in the sidebar; they require beforeThreadId (the thread to land above, or null for the end of the list), and the thread must already be in that list. delete cannot be undone and requires a full-access/default caller. Existing thread lifecycle rules apply; this does not schedule a future action.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
@@ -49,9 +49,12 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
       "mark_unread",
       "auto_settle_on",
       "auto_settle_off",
+      "move_pinned",
+      "move_active",
       "delete",
     ]),
     snoozedUntil: Schema.optional(IsoDateTime),
+    beforeThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   }),
   success: OrchestrationV2DispatchCommandResult,
   failure: OrchestratorMcpFailure,

@@ -14,8 +14,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
+import {
+  planPinnedReorder,
+  sortActiveThreadsByOrderKey,
+  sortPinnedThreadsByOrderKey,
+} from "@t3tools/shared/threadOrderKeys";
 
 import {
+  assertTargetWithinLimits,
   newCommandId,
   readCaller,
   readFullAccessCaller,
@@ -127,6 +133,17 @@ function inboxReason(shell: OrchestrationV2ThreadShell, now: DateTime.Utc) {
     : null;
 }
 const inboxReasonOrder = ["pending_request", "error", "unread"] as const;
+/** The sidebar list a thread shows in, with the client's precedence. */
+function sidebarList(shell: OrchestrationV2ThreadShell, now: DateTime.Utc) {
+  if (
+    shell.snoozedUntil != null &&
+    DateTime.isGreaterThan(shell.snoozedUntil, now) &&
+    !raisedHandWhileSnoozed(shell)
+  )
+    return "snoozed";
+  if (shell.settledOverride === "settled") return "settled";
+  return shell.pinnedAt != null ? "pinned" : "active";
+}
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
@@ -431,10 +448,103 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
     })),
   t3_thread_organize: (input) =>
     Effect.gen(function* () {
-      const { threads, projection } = yield* readWritableThread(input.threadId);
+      const { threads, projection, limits } = yield* readWritableThread(input.threadId);
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       let command: OrchestrationV2Command;
       switch (input.action) {
+        case "move_pinned":
+        case "move_active": {
+          const list = input.action === "move_pinned" ? "pinned" : "active";
+          if (input.beforeThreadId === undefined) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `${input.action} requires beforeThreadId (null moves to the end).`,
+            });
+          }
+          const snapshot = yield* threads.getShellSnapshot().pipe(Effect.mapError(unavailable));
+          const now = yield* DateTime.now;
+          // The sidebar's view: this project's visible threads in the list, in client order.
+          const rows = snapshot.threads
+            .filter(
+              (shell) =>
+                shell.projectId === projection.thread.projectId &&
+                shell.archivedAt === null &&
+                shell.deletedAt === null &&
+                shell.lineage.relationshipToParent !== "subagent" &&
+                sidebarList(shell, now) === list,
+            )
+            .map((shell) => ({
+              id: shell.id,
+              createdAt: DateTime.formatIso(shell.createdAt),
+              unsettledAt: shell.unsettledAt == null ? null : DateTime.formatIso(shell.unsettledAt),
+              pinOrderKey: shell.pinOrderKey,
+              activeOrderKey: shell.activeOrderKey,
+            }));
+          const ordered = (
+            list === "pinned"
+              ? sortPinnedThreadsByOrderKey(rows)
+              : sortActiveThreadsByOrderKey(rows)
+          ).map((row) => row.id);
+          const movedId = projection.thread.id;
+          if (!ordered.includes(movedId)) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                list === "pinned"
+                  ? "The thread is not in the pinned list. Pin it first."
+                  : "The thread is not in the active list. Unpin, unsettle, or unsnooze it first.",
+            });
+          }
+          const others = ordered.filter((id) => id !== movedId);
+          const at =
+            input.beforeThreadId === null ? others.length : others.indexOf(input.beforeThreadId);
+          if (at === -1) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `beforeThreadId must be another thread in this project's ${list} list.`,
+            });
+          }
+          const orderedIds = others.toSpliced(at, 0, movedId);
+          if (orderedIds.every((id, index) => id === ordered[index])) {
+            return { sequence: snapshot.snapshotSequence };
+          }
+          // Usually one key for the moved thread. Keyless or corrupt neighbors rewrite the
+          // list once, as a client drag does; keys on rows outside the list stay reserved.
+          const shells = new Map(snapshot.threads.map((shell) => [shell.id, shell]));
+          const assignments = planPinnedReorder({
+            orderedIds,
+            keysById: new Map(
+              snapshot.threads.map((shell) => [
+                shell.id,
+                list === "pinned" ? shell.pinOrderKey : shell.activeOrderKey,
+              ]),
+            ),
+            movedId,
+          });
+          // A rewrite touches neighbors, so each needs to be within the caller's limits too.
+          for (const { id } of assignments) {
+            const shell = shells.get(ThreadId.make(id));
+            if (shell !== undefined && shell.id !== movedId)
+              yield* assertTargetWithinLimits(limits, shell);
+          }
+          let sequence = snapshot.snapshotSequence;
+          for (const { id, orderKey } of assignments) {
+            const reorder = {
+              commandId: yield* newCommandId(),
+              threadId: ThreadId.make(id),
+              orderKey,
+            };
+            const result = yield* threads
+              .dispatch(
+                list === "pinned"
+                  ? { ...reorder, type: "thread.pin.reorder" }
+                  : { ...reorder, type: "thread.active.reorder" },
+              )
+              .pipe(Effect.mapError(unavailable));
+            sequence = result.sequence;
+          }
+          return { sequence };
+        }
         case "snooze":
           if (input.snoozedUntil === undefined) {
             return yield* new OrchestratorMcpFailure({

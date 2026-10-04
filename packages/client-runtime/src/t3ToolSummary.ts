@@ -320,6 +320,46 @@ export function summarizeT3ToolCalls(
         quantity(countEntities(entityIds("cwd")), "repository", "repositories"),
       );
       break;
+    case "folder-browse":
+      label = phrase("Browsed", "browse", `host folders ${times}`);
+      break;
+    case "agent-session-scan":
+      label = phrase("Scanned", "scan", `agent sessions ${times}`);
+      break;
+    case "agent-session-import":
+      label = phrase("Imported", "import", `agent sessions ${times}`);
+      break;
+    case "terminal-list":
+      label = phrase("Listed", "list", `terminals ${times}`);
+      break;
+    case "terminal-read":
+      label = phrase("Read", "read", `terminal output ${times}`);
+      break;
+    case "terminal-control":
+      label = phrase(
+        "Controlled",
+        "control",
+        quantity(countEntities(entityIds("terminalId")), "terminal"),
+      );
+      break;
+    case "git-status":
+      label = phrase("Checked", "check", `git status ${times}`);
+      break;
+    case "git-action":
+      label = phrase("Ran", "run", quantity(selected.length, "git action"));
+      break;
+    case "pr-read":
+      label = phrase("Read", "read", quantity(selected.length, "pull request"));
+      break;
+    case "pr-update":
+      label = phrase("Updated", "update", quantity(selected.length, "pull request"));
+      break;
+    case "provider-read":
+      label = phrase("Checked", "check", `provider status ${times}`);
+      break;
+    case "provider-refresh":
+      label = phrase("Refreshed", "refresh", `providers ${times}`);
+      break;
     case "environment-read":
       label = phrase("Checked", "check", `environment preferences ${times}`);
       break;

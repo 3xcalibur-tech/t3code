@@ -48,6 +48,16 @@ import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { ReviewToolkitHandlersLive } from "./toolkits/review/handlers.ts";
 import { ReviewToolkit } from "./toolkits/review/tools.ts";
+import { GitToolkitHandlersLive } from "./toolkits/git/handlers.ts";
+import { GitToolkit } from "./toolkits/git/tools.ts";
+import { TerminalToolkitHandlersLive } from "./toolkits/terminal/handlers.ts";
+import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
+import { ProviderHandlersLive } from "./toolkits/provider/handlers.ts";
+import { ProviderToolkit } from "./toolkits/provider/tools.ts";
+import { ClientToolkitHandlersLive } from "./toolkits/client/handlers.ts";
+import { ClientToolkit } from "./toolkits/client/tools.ts";
+import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -681,16 +691,34 @@ const ReviewToolkitRegistrationLive = McpServer.toolkit(ReviewToolkit).pipe(
   Layer.provide(ReviewToolkitHandlersLive),
 );
 
+const GitToolkitRegistrationLive = McpServer.toolkit(GitToolkit).pipe(
+  Layer.provide(GitToolkitHandlersLive),
+);
+
+const TerminalToolkitRegistrationLive = McpServer.toolkit(TerminalToolkit).pipe(
+  Layer.provide(TerminalToolkitHandlersLive),
+);
+
+const ProviderRegistrationLive = McpServer.toolkit(ProviderToolkit).pipe(
+  Layer.provide(ProviderHandlersLive),
+);
+
+const ClientToolkitRegistrationLive = McpServer.toolkit(ClientToolkit).pipe(
+  Layer.provide(ClientToolkitHandlersLive),
+);
+
 const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
   Layer.provide(PreviewControlsHandlersLive),
 );
 
 const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
   Layer.provide(EnvironmentHandlersLive),
+  Layer.provide(ThreadCommandExecutor.layer),
 );
 
 const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(
   Layer.provide(ProjectHandlersLive),
+  Layer.provide(AgentSessionScanner.layer),
 );
 
 const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
@@ -731,6 +759,10 @@ export const layer = Layer.mergeAll(
   PreviewControlsRegistrationLive,
   WorktreeToolkitRegistrationLive,
   ReviewToolkitRegistrationLive,
+  GitToolkitRegistrationLive,
+  TerminalToolkitRegistrationLive,
+  ProviderRegistrationLive,
+  ClientToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
