@@ -23,7 +23,7 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
       const review = yield* Review.ReviewService;
       // A file request reads a single source; branch-range covers committed and uncommitted work.
       const sourceKind = input.source ?? (input.file === undefined ? undefined : "branch-range");
-      const readPreview = (file?: ReviewDiffPreviewInput["file"], baseRef = input.baseRef) =>
+      const readPreview = (baseRef: string | undefined, file?: ReviewDiffPreviewInput["file"]) =>
         review
           .getDiffPreview({
             cwd: thread.worktreePath ?? project.value.workspaceRoot,
@@ -50,18 +50,15 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
       if (input.file !== undefined && sourceKind !== undefined) {
         // A renamed file needs its old path, which only the full preview's stats know. The lookup
         // is best effort: a working-tree read must not fail on a branch range it does not need.
-        const full = yield* readPreview().pipe(Effect.orElseSucceed(() => undefined));
+        const full = yield* readPreview(input.baseRef).pipe(Effect.orElseSucceed(() => undefined));
         const previousPath =
           full?.sources
             .find((source) => source.kind === sourceKind)
             ?.files?.find((file) => file.path === input.file)?.previousPath ?? null;
-        preview = yield* readPreview({ path: input.file, previousPath, sourceKind });
+        preview = yield* readPreview(input.baseRef, { path: input.file, previousPath, sourceKind });
       } else {
         // The working tree needs no base, so a baseRef the branch range can't use is not passed.
-        preview = yield* readPreview(
-          undefined,
-          sourceKind === "working-tree" ? undefined : input.baseRef,
-        );
+        preview = yield* readPreview(sourceKind === "working-tree" ? undefined : input.baseRef);
       }
       if (preview.sources.length === 0)
         return yield* invalid("The thread's checkout is not a git repository.");
