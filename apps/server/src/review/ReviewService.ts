@@ -167,7 +167,16 @@ export const make = Effect.gen(function* () {
       preview = yield* readPreview(input.baseRef, { path: input.file, previousPath, sourceKind });
     } else {
       // The working tree needs no base, so a baseRef the branch range can't use is not passed.
-      preview = yield* readPreview(sourceKind === "working-tree" ? undefined : input.baseRef);
+      preview = yield* readPreview(sourceKind === "working-tree" ? undefined : input.baseRef).pipe(
+        Effect.catchTags({
+          GitCommandError: (error) =>
+            // An orphan branch can have a HEAD without sharing history with the default base.
+            sourceKind === "working-tree" &&
+            error.operation === "GitVcsDriver.resolveReviewMergeBase"
+              ? readPreview("HEAD")
+              : Effect.fail(error),
+        }),
+      );
     }
     if (preview.sources.length === 0) {
       return yield* new ReviewRepositoryNotFoundError({ cwd: input.cwd });
