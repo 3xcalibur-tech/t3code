@@ -132,7 +132,8 @@ const keybindingFailure = () =>
     code: "orchestration_error",
     message: "The keybindings file could not be read or written.",
   });
-// Mirrors the Settings UI's when text so a listed rule can be removed by the same text.
+// The Settings UI's when text; the keybindings service matches when by meaning, so a listed
+// rule can be removed by the same text.
 function whenText(node: KeybindingWhenNode): string {
   const wrap = (child: KeybindingWhenNode) =>
     child.type === "identifier" || child.type === "not" || child.type === node.type
@@ -164,16 +165,6 @@ function keybindingTexts(rules: ResolvedKeybindingsConfig) {
       : [];
   });
 }
-
-type RuleText = ReturnType<typeof keybindingTexts>[number];
-const sameRuleTexts = (left: ReadonlyArray<RuleText>, right: ReadonlyArray<RuleText>) =>
-  left.length === right.length &&
-  left.every(
-    (rule, index) =>
-      rule.key === right[index]?.key &&
-      rule.command === right[index]?.command &&
-      rule.when === right[index]?.when,
-  );
 
 /**
  * Enable/disable or replace custom models on one instance. An explicit instance entry is
@@ -329,11 +320,6 @@ export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
               : settings.updateProviderInstance(instanceChange.mutation, patch)
           ).pipe(Effect.mapError(unavailable));
         const keybindingService = yield* Keybindings.Keybindings;
-        // Removal matches stored when text exactly, so a rule that matched nothing is reported.
-        const before =
-          action === "remove"
-            ? yield* keybindingService.loadConfigState.pipe(Effect.mapError(keybindingFailure))
-            : undefined;
         const keybindings =
           keybindingInput === undefined
             ? undefined
@@ -342,12 +328,6 @@ export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
                   ? keybindingService.upsertKeybindingRule(keybindingInput)
                   : keybindingService.removeKeybindingRule(keybindingInput)
               ).pipe(Effect.mapError(keybindingFailure));
-        if (
-          before !== undefined &&
-          keybindings !== undefined &&
-          sameRuleTexts(keybindingTexts(before.keybindings), keybindingTexts(keybindings))
-        )
-          return yield* invalid("No custom keybinding matched that key, command, and when text.");
         return {
           ...preferences(next),
           updated: [
