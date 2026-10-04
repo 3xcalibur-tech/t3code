@@ -303,10 +303,11 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
           code: "invalid_request",
           message: "That decision was not offered for this approval.",
         });
-      // Approving lets the caller run commands in the target thread.
-      if (approval)
+      // Approving lets the caller run commands in the target thread; declining or cancelling
+      // only stops one, which any caller that can reach the thread may do.
+      if (approval && input.decision !== "decline" && input.decision !== "cancel")
         yield* readFullAccessCaller(
-          "Responding to an approval requires a live full-access/default thread or a full-access client.",
+          "Approving requires a live full-access/default thread or a full-access client.",
         );
       const result = yield* threads
         .dispatch({

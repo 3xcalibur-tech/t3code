@@ -183,7 +183,7 @@ const PendingRequestReadTool = Tool.make("t3_pending_request_read", {
 const PendingRequestRespondTool = Tool.make("t3_pending_request_respond", {
   ...commandTool,
   description:
-    "Respond to a pending request using the existing runtime response command: answers for a user question, decision for an approval (one of the options from t3_pending_request_read, else cancel, decline, acceptForSession, or accept). Approving requires a full-access/default caller.",
+    "Respond to a pending request using the existing runtime response command: answers for a user question, decision for an approval (one of the options from t3_pending_request_read, else cancel, decline, acceptForSession, or accept). Approving requires a full-access/default caller; declining or cancelling does not.",
   parameters: Schema.Struct({
     ...requestTarget,
     answers: Schema.optional(ProviderUserInputAnswers),
