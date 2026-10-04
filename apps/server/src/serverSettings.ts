@@ -11,6 +11,7 @@
  * @module ServerSettings
  */
 import {
+  type CustomModelSetting,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -239,6 +240,70 @@ function ensureProviderInstanceMutationAllowed(
   return Effect.void;
 }
 
+export class ProviderInstanceConfigNotObjectError extends Schema.TaggedError<ProviderInstanceConfigNotObjectError>()(
+  "ProviderInstanceConfigNotObjectError",
+  { instanceId: ProviderInstanceId },
+) {
+  override get message(): string {
+    return "This instance's config is not an object; change its models in the Settings UI.";
+  }
+}
+
+export class ProviderInstanceNotFoundError extends Schema.TaggedError<ProviderInstanceNotFoundError>()(
+  "ProviderInstanceNotFoundError",
+  { instanceId: ProviderInstanceId },
+) {
+  override get message(): string {
+    return "The provider instance was not found.";
+  }
+}
+
+export interface ProviderInstancePreferences {
+  readonly instanceId: ProviderInstanceId;
+  readonly enabled?: boolean | undefined;
+  readonly customModels?: ReadonlyArray<CustomModelSetting> | undefined;
+}
+
+/** Merge agent-editable fields into the latest instance while the settings write lock is held. */
+const applyProviderInstancePreferences = Effect.fnUntraced(function* (
+  current: ServerSettings,
+  change: ProviderInstancePreferences,
+  patch: ServerSettingsPatch,
+) {
+  const enabled = change.enabled === undefined ? {} : { enabled: change.enabled };
+  const instance = current.providerInstances[change.instanceId];
+  if (instance !== undefined) {
+    const config = instance.config;
+    const objectConfig =
+      config !== null && typeof config === "object" && !Array.isArray(config) ? config : undefined;
+    if (change.customModels !== undefined && objectConfig === undefined)
+      return yield* new ProviderInstanceConfigNotObjectError({ instanceId: change.instanceId });
+    return applyProviderInstanceMutation(applyServerSettingsPatch(current, patch), {
+      operation: "upsert",
+      instanceId: change.instanceId,
+      instance: {
+        ...instance,
+        ...enabled,
+        ...(change.customModels === undefined
+          ? {}
+          : { config: { ...objectConfig, customModels: change.customModels } }),
+      },
+    });
+  }
+  if (Object.hasOwn(current.providers, change.instanceId)) {
+    const fields = {
+      ...enabled,
+      ...(change.customModels === undefined ? {} : { customModels: change.customModels }),
+    };
+    // Every built-in driver accepts these two preference fields.
+    return applyServerSettingsPatch(current, {
+      ...patch,
+      providers: { [change.instanceId]: fields },
+    } as ServerSettingsPatch);
+  }
+  return yield* new ProviderInstanceNotFoundError({ instanceId: change.instanceId });
+});
+
 export class ServerSettingsService extends Context.Service<
   ServerSettingsService,
   {
@@ -261,6 +326,15 @@ export class ServerSettingsService extends Context.Service<
       mutation: ProviderInstanceMutation,
       patch?: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
+    /** Change one instance's enabled flag or models without replacing its other current fields. */
+    readonly updateProviderInstancePreferences: (
+      change: ProviderInstancePreferences,
+      patch?: ServerSettingsPatch,
+    ) => Effect.Effect<
+      ServerSettings,
+      ServerSettingsError | ProviderInstanceConfigNotObjectError | ProviderInstanceNotFoundError
+    >;
 
     /** Run an effect against a settings snapshot while settings writes are paused. */
     readonly withSettingsSnapshot: <A, E, R>(
@@ -300,9 +374,9 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
     const writeSemaphore = yield* Semaphore.make(1);
     const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
 
-    const updateTestSettings = (
-      update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
-    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    const updateTestSettings = <E>(
+      update: (current: ServerSettings) => Effect.Effect<ServerSettings, E>,
+    ): Effect.Effect<ServerSettings, ServerSettingsError | E> =>
       writeSemaphore.withPermits(1)(
         Ref.get(currentSettingsRef).pipe(
           Effect.flatMap(update),
@@ -332,6 +406,8 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
             return applyProviderInstanceMutation(patched, mutation);
           }),
         ),
+      updateProviderInstancePreferences: (change, patch = {}) =>
+        updateTestSettings((current) => applyProviderInstancePreferences(current, change, patch)),
       withSettingsSnapshot: (use) =>
         writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
       streamChanges: Stream.empty,
@@ -1129,9 +1205,9 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const updateAndPersistSettings = (
-    update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
-  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+  const updateAndPersistSettings = <E>(
+    update: (current: ServerSettings) => Effect.Effect<ServerSettings, E>,
+  ): Effect.Effect<ServerSettings, ServerSettingsError | E> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
@@ -1259,6 +1335,10 @@ const make = Effect.gen(function* () {
           const patched = applyServerSettingsPatch(current, patch);
           return applyProviderInstanceMutation(patched, mutation);
         }),
+      ),
+    updateProviderInstancePreferences: (change, patch = {}) =>
+      updateAndPersistSettings((current) =>
+        applyProviderInstancePreferences(current, change, patch),
       ),
     withSettingsSnapshot,
     get streamChanges() {

@@ -349,6 +349,7 @@ function makeMutableServerSettingsService(
           yield* PubSub.publish(changes, next);
           return next;
         }),
+      updateProviderInstancePreferences: () => Effect.die("Unexpected provider preferences"),
       updateProviderInstance: (mutation, patch = {}) =>
         Effect.gen(function* () {
           const current = yield* Ref.get(settingsRef);

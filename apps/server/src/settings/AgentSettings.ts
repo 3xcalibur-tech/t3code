@@ -8,11 +8,8 @@
  * @module AgentSettings
  */
 import {
-  type CustomModelSetting,
   type KeybindingsConfigError,
   type KeybindingWhenNode,
-  ProviderInstanceId,
-  type ProviderInstanceMutation,
   type ResolvedKeybindingsConfig,
   ServerRemoveKeybindingInput,
   ServerSettings,
@@ -68,24 +65,6 @@ export class ConflictingProviderChangeError extends Schema.TaggedError<Conflicti
   }
 }
 
-export class ProviderInstanceConfigNotObjectError extends Schema.TaggedError<ProviderInstanceConfigNotObjectError>()(
-  "ProviderInstanceConfigNotObjectError",
-  { instanceId: ProviderInstanceId },
-) {
-  override get message(): string {
-    return "This instance's config is not an object; change its models in the Settings UI.";
-  }
-}
-
-export class ProviderInstanceNotFoundError extends Schema.TaggedError<ProviderInstanceNotFoundError>()(
-  "ProviderInstanceNotFoundError",
-  { instanceId: ProviderInstanceId },
-) {
-  override get message(): string {
-    return "The provider instance was not found.";
-  }
-}
-
 export class MixedSettingsAndKeybindingError extends Schema.TaggedError<MixedSettingsAndKeybindingError>()(
   "MixedSettingsAndKeybindingError",
   {},
@@ -131,13 +110,7 @@ export class AgentSettings extends Context.Service<
     readonly update: (change: {
       readonly fields: ServerSettingsPatch;
       readonly settings?: unknown;
-      readonly providerInstance?:
-        | {
-            readonly instanceId: ProviderInstanceId;
-            readonly enabled?: boolean | undefined;
-            readonly customModels?: ReadonlyArray<CustomModelSetting> | undefined;
-          }
-        | undefined;
+      readonly providerInstance?: Settings.ProviderInstancePreferences | undefined;
       readonly keybinding?:
         | (KeybindingTarget & {
             readonly action: "upsert" | "remove";
@@ -155,8 +128,8 @@ export class AgentSettings extends Context.Service<
       | CredentialSettingsRejectedError
       | DuplicatedPreferenceFieldsError
       | ConflictingProviderChangeError
-      | ProviderInstanceConfigNotObjectError
-      | ProviderInstanceNotFoundError
+      | Settings.ProviderInstanceConfigNotObjectError
+      | Settings.ProviderInstanceNotFoundError
       | MixedSettingsAndKeybindingError
       | ServerSettingsError
       | KeybindingsConfigError
@@ -201,7 +174,8 @@ export const redactSettingsForAgent = (settings: ServerSettings) =>
 function withoutUrlCredentials(value: string) {
   if (!URL.canParse(value)) return value;
   const url = new URL(value);
-  if (url.username === "" && url.password === "" && url.search === "") return value;
+  if (url.username === "" && url.password === "" && url.search === "" && url.hash === "")
+    return value;
   return `${url.origin}${url.pathname}`;
 }
 // Includes Cursor's legacy endpoint, which predates the Url naming convention.
@@ -312,59 +286,6 @@ function keybindingTexts(rules: ResolvedKeybindingsConfig): ReadonlyArray<Keybin
   });
 }
 
-/**
- * Enable/disable or replace custom models on one instance. An explicit instance entry is
- * upserted whole, as the Settings UI does; a built-in default instance lives in `providers`.
- */
-interface InstanceChange {
-  readonly mutation?: ProviderInstanceMutation;
-  readonly patch: ServerSettingsPatch;
-}
-function providerInstanceChange(
-  current: ServerSettings,
-  change: {
-    readonly instanceId: ProviderInstanceId;
-    readonly enabled?: boolean | undefined;
-    readonly customModels?: ReadonlyArray<CustomModelSetting> | undefined;
-  },
-): Effect.Effect<
-  InstanceChange,
-  ProviderInstanceConfigNotObjectError | ProviderInstanceNotFoundError
-> {
-  const enabled = change.enabled === undefined ? {} : { enabled: change.enabled };
-  const instance = current.providerInstances[change.instanceId];
-  if (instance !== undefined) {
-    if (change.customModels !== undefined && !isRecord(instance.config))
-      return Effect.fail(
-        new ProviderInstanceConfigNotObjectError({ instanceId: change.instanceId }),
-      );
-    const config = isRecord(instance.config) ? instance.config : {};
-    const mutation: ProviderInstanceMutation = {
-      operation: "upsert",
-      instanceId: change.instanceId,
-      instance: {
-        ...instance,
-        ...enabled,
-        ...(change.customModels === undefined
-          ? {}
-          : { config: { ...config, customModels: change.customModels } }),
-      },
-    };
-    return Effect.succeed({ mutation, patch: {} });
-  }
-  if (Object.hasOwn(current.providers, change.instanceId)) {
-    const fields = {
-      ...enabled,
-      ...(change.customModels === undefined ? {} : { customModels: change.customModels }),
-    };
-    // Every legacy driver patch takes enabled and customModels.
-    return Effect.succeed({
-      patch: { providers: { [change.instanceId]: fields } } as ServerSettingsPatch,
-    });
-  }
-  return Effect.fail(new ProviderInstanceNotFoundError({ instanceId: change.instanceId }));
-}
-
 const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const keybindingService = yield* Keybindings.Keybindings;
@@ -412,28 +333,19 @@ const make = Effect.gen(function* () {
           : action === "remove"
             ? yield* decodeRemove(rule)
             : undefined;
-      const current = yield* settings.getSettings;
-      const instanceChange: InstanceChange =
-        providerInstance === undefined
-          ? { patch: {} }
-          : yield* providerInstanceChange(current, providerInstance);
-      const patch: ServerSettingsPatch = { ...extra, ...instanceChange.patch, ...fields };
+      const patch: ServerSettingsPatch = { ...extra, ...fields };
       // Settings and keybindings persist separately, so one call changes one of them.
       if (
         keybinding !== undefined &&
-        (instanceChange.mutation !== undefined || Object.keys(patch).length > 0)
+        (providerInstance !== undefined || Object.keys(patch).length > 0)
       )
         return yield* new MixedSettingsAndKeybindingError();
 
-      let next = current;
-      if (
-        instanceChange.mutation !== undefined ||
-        Object.keys(patch).length > 0 ||
-        keybinding === undefined
-      )
-        next = yield* instanceChange.mutation === undefined
+      const next = yield* providerInstance !== undefined
+        ? settings.updateProviderInstancePreferences(providerInstance, patch)
+        : keybinding === undefined
           ? settings.updateSettings(patch)
-          : settings.updateProviderInstance(instanceChange.mutation, patch);
+          : settings.getSettings;
       const keybindings =
         keybindingInput === undefined
           ? undefined

@@ -495,7 +495,7 @@ it.effect("redacts every credential from MCP settings", () =>
         ...DEFAULT_SERVER_SETTINGS.observability,
         otlpTracesUrl: "https://user:secret-traces@example.com/v1/traces",
         otlpMetricsUrl: "https://example.com/v1/metrics?token=secret-metrics",
-        otlpLogsUrl: "https://user:secret-logs@example.com/v1/logs",
+        otlpLogsUrl: "https://example.com/v1/logs#access_token=secret-logs",
       },
     } as typeof DEFAULT_SERVER_SETTINGS;
     const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
@@ -532,6 +532,7 @@ it.effect("rejects credential-bearing endpoint updates before persisting setting
       { observability: { otlpTracesUrl: "https://example.com/traces?token=secret" } },
       { observability: { otlpMetricsUrl: "https://user:secret@example.com/metrics" } },
       { observability: { otlpLogsUrl: "https://example.com/logs?token=secret" } },
+      { observability: { otlpLogsUrl: "https://example.com/logs#access_token=secret" } },
     ]) {
       const error = yield* settings.update({ fields: {}, settings: patch }).pipe(Effect.flip);
       expect(error._tag).toBe("CredentialSettingsRejectedError");
@@ -542,6 +543,13 @@ it.effect("rejects credential-bearing endpoint updates before persisting setting
       settings: { observability: { otlpTracesUrl: "https://example.com/traces" } },
     });
     expect(updated.next.observability.otlpTracesUrl).toBe("https://example.com/traces");
+    const legacyEndpoint = yield* settings
+      .update({
+        fields: {},
+        settings: { providers: { cursor: { apiEndpoint: "https://user:secret@example.com" } } },
+      })
+      .pipe(Effect.flip);
+    expect(legacyEndpoint._tag).toBe("InvalidPreferencesInputError");
   }).pipe(
     Effect.provide(
       AgentSettings.layer.pipe(
@@ -563,4 +571,57 @@ it.effect("rejects credential-bearing endpoint updates before persisting setting
       ),
     ),
   ),
+);
+
+it.effect(
+  "preserves newer provider metadata when an agent changes preferences from a stale read",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettings.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("opencode_work");
+      const original = yield* service.getSettings;
+      const edited = {
+        driver: ProviderDriverKind.make("opencode"),
+        displayName: "Updated in settings",
+        enabled: true,
+        config: { serverUrl: "https://new.example", customModels: [] },
+        environment: [{ name: "NEW_SETTING", value: "preserved", sensitive: false }],
+      };
+      yield* service.updateProviderInstance({ operation: "upsert", instanceId, instance: edited });
+      const result = yield* Effect.gen(function* () {
+        const agentSettings = yield* AgentSettings.AgentSettings;
+        return yield* agentSettings.update({
+          fields: {},
+          providerInstance: { instanceId, enabled: false },
+        });
+      }).pipe(
+        Effect.provide(
+          AgentSettings.layer.pipe(
+            Layer.provide(
+              Layer.succeed(ServerSettings.ServerSettingsService, {
+                ...service,
+                getSettings: Effect.succeed(original),
+              }),
+            ),
+            Layer.provide(Layer.mock(Keybindings.Keybindings)({})),
+          ),
+        ),
+      );
+      expect(result.next.providerInstances[instanceId]).toMatchObject({
+        ...edited,
+        enabled: false,
+      });
+    }).pipe(
+      Effect.provide(
+        ServerSettings.layerTest({
+          providerInstances: {
+            [ProviderInstanceId.make("opencode_work")]: {
+              driver: ProviderDriverKind.make("opencode"),
+              enabled: true,
+              config: { serverUrl: "https://old.example", customModels: [] },
+            },
+          },
+        }),
+      ),
+    ),
 );
