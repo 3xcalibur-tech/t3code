@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -9,24 +8,20 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
-import * as HttpClientRequest from "effect/http/HttpClientRequest";
-import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { RelayApi } from "@t3tools/contracts/relay";
 
 import * as RelayConfiguration from "../Config.ts";
-import { validateManagedEndpoint, withoutRedirects } from "../environments/EnvironmentConnector.ts";
+import { validateManagedEndpoint } from "../environments/EnvironmentConnector.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "../environments/ManagedEndpointAllocations.ts";
-import * as HookMailbox from "./HookMailbox.ts";
+import * as HookInbox from "./HookInbox.ts";
+import { sendUpstream, TUNNEL_OFFLINE_STATUS } from "./upstream.ts";
 
 export const RELAY_HOOK_PATH_PREFIX = "/v1/hooks/";
-/** Set by the relay on every forward; the environment uses it as the delivery id. */
-export const RELAY_DELIVERY_ID_HEADER = "x-t3-relay-delivery-id";
 export const RELAY_HOOK_MAX_BODY_BYTES = 1_048_576;
-export const RELAY_HOOK_UPSTREAM_TIMEOUT_MS = 8_000;
 export const RELAY_HOOK_RATE_LIMIT = { limit: 60, periodSeconds: 60 } as const;
 
 const DROPPED_REQUEST_HEADERS = new Set([
@@ -43,10 +38,6 @@ const DROPPED_REQUEST_HEADERS = new Set([
   "x-t3-relay-delivery-id",
 ]);
 const DROPPED_REQUEST_HEADER_PREFIXES = ["proxy-", "cf-", "x-forwarded-"];
-// Cloudflare answers 530 when the tunnel for a hostname has no connected origin.
-const TUNNEL_OFFLINE_STATUS = 530;
-/** The environment answers with a small JSON status; anything past this is cut off. */
-const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export const isRelayHookPath = (url: string): boolean => url.startsWith(RELAY_HOOK_PATH_PREFIX);
 
@@ -103,7 +94,6 @@ export class HookForwarder extends Context.Service<
 >()("t3code-relay/hooks/HookForwarder") {}
 
 class HookBodyTooLarge extends Schema.TaggedError<HookBodyTooLarge>()("HookBodyTooLarge", {}) {}
-class ResponseTooLarge extends Schema.TaggedError<ResponseTooLarge>()("ResponseTooLarge", {}) {}
 
 const errorResponse = (status: number, error: string, headers?: Record<string, string>) =>
   HttpServerResponse.jsonUnsafe({ error }, { status, ...(headers ? { headers } : {}) });
@@ -163,20 +153,18 @@ function forwardedHeaders(headers: Readonly<Record<string, string>>): Record<str
 const hasNoBody = (request: HttpServerRequest.HttpServerRequest) =>
   request.source instanceof Request && request.source.body === null;
 
-/** Collects a byte stream, failing with `tooLarge` once it passes `maxBytes` rather than buffering it all. */
-const collectCapped = <E, R, E2>(
-  stream: Stream.Stream<Uint8Array, E, R>,
-  maxBytes: number,
-  tooLarge: () => E2,
-) =>
+const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.suspend(() => {
+    if (hasNoBody(request)) {
+      return Effect.succeed(new Uint8Array(0));
+    }
     const chunks: Array<Uint8Array> = [];
     let total = 0;
-    return stream.pipe(
+    return request.stream.pipe(
       Stream.runForEach((chunk) => {
         total += chunk.length;
-        if (total > maxBytes) {
-          return Effect.fail(tooLarge());
+        if (total > RELAY_HOOK_MAX_BODY_BYTES) {
+          return Effect.fail(new HookBodyTooLarge());
         }
         chunks.push(chunk);
         return Effect.void;
@@ -193,19 +181,30 @@ const collectCapped = <E, R, E2>(
     );
   });
 
-const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
-  hasNoBody(request)
-    ? Effect.succeed(new Uint8Array(0))
-    : collectCapped(request.stream, RELAY_HOOK_MAX_BODY_BYTES, () => new HookBodyTooLarge());
-
-const readCappedResponse = (response: HttpClientResponse.HttpClientResponse) =>
-  collectCapped(response.stream, MAX_RESPONSE_BYTES, () => new ResponseTooLarge()).pipe(
-    // A response without a body, such as a redirect, has no stream at all.
-    Effect.catchIf(
-      (error) => error._tag === "HttpClientError" && error.reason._tag === "EmptyBodyError",
-      () => Effect.succeed(new Uint8Array(0)),
-    ),
-  );
+/**
+ * The environment's ready managed endpoint, across every user that linked it,
+ * with whether it opted in to holding webhooks while offline.
+ */
+export const resolveHookEndpoint = Effect.fn("relay.hooks.resolve_endpoint")(function* (
+  environmentId: string,
+) {
+  const links = yield* EnvironmentLinks.EnvironmentLinks;
+  const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
+  const settings = yield* RelayConfiguration.RelayConfiguration;
+  const candidates = yield* links.findActiveManagedForEnvironment({ environmentId });
+  for (const link of candidates) {
+    const allocation = yield* allocations.get({ userId: link.userId, environmentId });
+    const result = validateManagedEndpoint({
+      link,
+      allocation,
+      baseDomain: settings.managedEndpointBaseDomain,
+    });
+    if (Result.isSuccess(result)) {
+      return { ...result.success, holdWhileOffline: link.holdWebhooksWhileOffline };
+    }
+  }
+  return null;
+});
 
 const make = Effect.gen(function* () {
   const links = yield* EnvironmentLinks.EnvironmentLinks;
@@ -213,26 +212,8 @@ const make = Effect.gen(function* () {
   const settings = yield* RelayConfiguration.RelayConfiguration;
   const httpClient = yield* HttpClient.HttpClient;
   const rateLimiter = yield* HookRateLimiter;
-  const mailbox = yield* HookMailbox.HookMailbox;
+  const inbox = yield* HookInbox.HookInbox;
   const crypto = yield* Crypto.Crypto;
-
-  const resolveEndpoint = Effect.fn("relay.hooks.resolve_endpoint")(function* (
-    environmentId: string,
-  ) {
-    const candidates = yield* links.findActiveManagedForEnvironment({ environmentId });
-    for (const link of candidates) {
-      const allocation = yield* allocations.get({ userId: link.userId, environmentId });
-      const result = validateManagedEndpoint({
-        link,
-        allocation,
-        baseDomain: settings.managedEndpointBaseDomain,
-      });
-      if (Result.isSuccess(result)) {
-        return { ...result.success, holdWhileOffline: link.holdWebhooksWhileOffline };
-      }
-    }
-    return null;
-  });
 
   const handle = Effect.fn("relay.hooks.forward")(function* (
     request: HttpServerRequest.HttpServerRequest,
@@ -259,7 +240,10 @@ const make = Effect.gen(function* () {
       return errorResponse(413, "payload_too_large");
     }
 
-    const endpoint = yield* resolveEndpoint(parsed.environmentId).pipe(
+    const endpoint = yield* resolveHookEndpoint(parsed.environmentId).pipe(
+      Effect.provideService(EnvironmentLinks.EnvironmentLinks, links),
+      Effect.provideService(ManagedEndpointAllocations.ManagedEndpointAllocations, allocations),
+      Effect.provideService(RelayConfiguration.RelayConfiguration, settings),
       Effect.catch((error) =>
         Effect.logWarning("Failed to resolve hook endpoint", {
           environmentId: parsed.environmentId,
@@ -285,15 +269,16 @@ const make = Effect.gen(function* () {
       return errorResponse(400, "invalid_body");
     }
 
-    const baseUrl = endpoint.httpBaseUrl.endsWith("/")
-      ? endpoint.httpBaseUrl
-      : `${endpoint.httpBaseUrl}/`;
-    // One id per attempt, so a request that reached the environment before a
-    // timeout and is later replayed from the mailbox dispatches only once.
-    const deliveryId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-    const headers: Record<string, string> = {
-      ...forwardedHeaders(request.headers),
-      [RELAY_DELIVERY_ID_HEADER]: deliveryId,
+    // One id per request, so a request that reached the environment before a
+    // timeout and is later delivered from the inbox runs only once.
+    const hook = {
+      id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+      method: request.method,
+      rawHookId: parsed.rawHookId,
+      rawToken: parsed.rawToken,
+      query: parsed.search.replace(/^\?/, ""),
+      headers: forwardedHeaders(request.headers),
+      body: body.success,
     };
     // Held only for environments that opted in; otherwise the relay is a plain proxy.
     const holdOrFail = (status: 503 | 504, error: string) =>
@@ -302,17 +287,11 @@ const make = Effect.gen(function* () {
           yield* outcome(error);
           return errorResponse(status, error);
         }
-        const stored = yield* mailbox
-          .enqueue({
-            id: deliveryId,
+        const stored = yield* inbox
+          .hold({
             environmentId: parsed.environmentId,
-            receivedAt: DateTime.formatIso(yield* DateTime.now),
-            method: request.method,
-            rawHookId: parsed.rawHookId,
-            rawToken: parsed.rawToken,
-            query: parsed.search.replace(/^\?/, ""),
-            headers: forwardedHeaders(request.headers),
-            body: body.success,
+            baseUrl: endpoint.httpBaseUrl,
+            hook: { ...hook, receivedAt: DateTime.formatIso(yield* DateTime.now) },
           })
           .pipe(
             Effect.catch((cause) =>
@@ -327,37 +306,15 @@ const make = Effect.gen(function* () {
           return errorResponse(status, error);
         }
         if (!stored) {
-          yield* outcome("mailbox_full");
-          return errorResponse(503, "mailbox_full");
+          yield* outcome("inbox_full");
+          return errorResponse(503, "inbox_full");
         }
         yield* outcome("held");
         return HttpServerResponse.jsonUnsafe({ queued: true }, { status: 202 });
       });
-    let upstreamRequest = HttpClientRequest.make(
-      request.method as "GET" | "POST" | "PUT" | "PATCH",
-    )(`${baseUrl}api/hooks/${parsed.rawHookId}/${parsed.rawToken}${parsed.search}`, { headers });
-    if (request.method !== "GET") {
-      upstreamRequest = HttpClientRequest.bodyUint8Array(
-        upstreamRequest,
-        body.success,
-        headers["content-type"],
-      );
-    }
 
-    const upstream = yield* httpClient.execute(upstreamRequest).pipe(
-      Effect.flatMap((response) =>
-        readCappedResponse(response).pipe(
-          Effect.map((body) => ({
-            status: response.status,
-            contentType: response.headers["content-type"],
-            body,
-          })),
-        ),
-      ),
-      withoutRedirects,
-      // The client span would record url.full, which carries the token.
-      Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-      Effect.timeoutOption(Duration.millis(RELAY_HOOK_UPSTREAM_TIMEOUT_MS)),
+    const upstream = yield* sendUpstream(endpoint.httpBaseUrl, hook).pipe(
+      Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.result,
     );
     if (Result.isFailure(upstream)) {
