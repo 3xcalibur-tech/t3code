@@ -80,8 +80,6 @@ interface ClientConnection {
   readonly focused: boolean;
   readonly liveTabs: NonNullable<PreviewAutomationHostFocus["liveTabs"]>;
   readonly focusOrder: number;
-  /** Sequence of the last focus report, kept across reconnects; 0 until one arrives. */
-  readonly focusedOrder: number;
   readonly queue: Queue.Queue<PreviewAutomationStreamEvent, Cause.Done>;
 }
 
@@ -128,6 +126,8 @@ interface BrokerState {
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly requestSequence: number;
   readonly focusSequence: number;
+  /** Sequence of each client's last focus report, kept across disconnects. */
+  readonly focusedOrders: ReadonlyMap<string, number>;
 }
 
 const removeConnectionFromState = (
@@ -330,6 +330,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     pending: new Map(),
     requestSequence: 0,
     focusSequence: 0,
+    focusedOrders: new Map(),
   });
 
   const closeConnection = Effect.fn("PreviewAutomationBroker.closeConnection")(function* (
@@ -386,7 +387,6 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       focused: false,
       liveTabs: [],
       focusOrder: 0,
-      focusedOrder: 0,
       queue,
     };
     const registration = yield* SynchronizedRef.modify(state, (current) => {
@@ -396,11 +396,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         : { state: current, disconnected: [] };
       const clients = new Map(removed.state.clients);
       const focusSequence = removed.state.focusSequence + 1;
-      const registeredConnection = {
-        ...connection,
-        focusOrder: focusSequence,
-        focusedOrder: previousConnection?.focusedOrder ?? 0,
-      };
+      const registeredConnection = { ...connection, focusOrder: focusSequence };
       clients.set(clientId, registeredConnection);
       return [
         {
@@ -448,9 +444,11 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         focused: host.focused,
         liveTabs: host.liveTabs ?? currentHost.liveTabs,
         focusOrder: host.focused ? focusSequence : currentHost.focusOrder,
-        focusedOrder: host.focused ? focusSequence : currentHost.focusedOrder,
       });
-      return { ...current, clients, focusSequence };
+      const focusedOrders = host.focused
+        ? new Map(current.focusedOrders).set(host.clientId, focusSequence)
+        : current.focusedOrders;
+      return { ...current, clients, focusSequence, focusedOrders };
     });
   });
 
@@ -678,7 +676,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             // Real focus first; connection order only breaks ties, e.g. before anyone focused.
             .sort(
               (left, right) =>
-                right.focusedOrder - left.focusedOrder || right.focusOrder - left.focusOrder,
+                (current.focusedOrders.get(right.clientId) ?? 0) -
+                  (current.focusedOrders.get(left.clientId) ?? 0) ||
+                right.focusOrder - left.focusOrder,
             )[0]?.clientId,
       ),
     );

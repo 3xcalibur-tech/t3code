@@ -103,9 +103,24 @@ function isSameWhen(left: string | undefined, right: string | undefined): boolea
   if (left === undefined || right === undefined) return false;
   const leftAst = parseKeybindingWhenExpression(left);
   const rightAst = parseKeybindingWhenExpression(right);
-  return (
-    leftAst !== null && rightAst !== null && encodeWhenAst(leftAst) === encodeWhenAst(rightAst)
-  );
+  return leftAst !== null && rightAst !== null && whenKey(leftAst) === whenKey(rightAst);
+}
+
+// Flattens chains of the same operator, since `a && (b && c)` and `a && b && c` mean the same.
+function whenKey(node: KeybindingWhenNode): string {
+  const operands = (child: KeybindingWhenNode): ReadonlyArray<string> =>
+    child.type === node.type && (child.type === "and" || child.type === "or")
+      ? [...operands(child.left), ...operands(child.right)]
+      : [whenKey(child)];
+  switch (node.type) {
+    case "identifier":
+      return node.name;
+    case "not":
+      return `!(${whenKey(node.node)})`;
+    case "and":
+    case "or":
+      return `${node.type}(${[...operands(node.left), ...operands(node.right)].join(",")})`;
+  }
 }
 
 function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
