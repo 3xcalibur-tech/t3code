@@ -163,6 +163,7 @@ const PendingRequestListTool = Tool.make("t3_pending_request_list", {
     "List pending user questions (kind user_input) and approval requests in a thread. Omit threadId for this thread.",
   parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
   success: Schema.Struct({
+    requestIds: Schema.Array(RuntimeRequestId),
     requests: Schema.Array(
       Schema.Struct({ requestId: RuntimeRequestId, kind: pendingRequestKind }),
     ),
@@ -280,7 +281,7 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
 const InboxTool = Tool.make("t3_inbox", {
   ...commandTool,
   description:
-    "List active threads that need attention: pending requests first, then failed runs, then unread completed work, newest first. Limited to one project (projectId, else the calling thread's project); a caller outside a T3 thread that omits projectId sees every project. Settled threads only appear for pending requests.",
+    "List active threads that need attention: pending requests first, then failed runs, then unread completed work, newest first. Limited to one project (projectId, else the calling thread's project); a caller outside a T3 thread that omits projectId sees every project. Settled and snoozed threads only appear for pending requests.",
   parameters: Schema.Struct({
     projectId: Schema.optional(ProjectId),
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),

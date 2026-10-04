@@ -95,10 +95,24 @@ const readPendingRequest = Effect.fn("mcp.readPendingRequest")(function* (
   return { ...context, request, item };
 });
 
+/** Mirrors the client's early wake: a fresh completion or failure after the snooze. */
+function raisedHandWhileSnoozed(shell: OrchestrationV2ThreadShell) {
+  const completedAt = shell.latestRunCompletedAt ?? null;
+  const snoozedAt = shell.snoozedAt ?? null;
+  if (snoozedAt === null) return shell.status === "failed";
+  return completedAt !== null && DateTime.isGreaterThan(completedAt, snoozedAt);
+}
+
 /** Why a thread needs attention, if it does. unread mirrors the client's hasUnseenCompletion. */
-function inboxReason(shell: OrchestrationV2ThreadShell) {
+function inboxReason(shell: OrchestrationV2ThreadShell, now: DateTime.Utc) {
   if (shell.pendingRuntimeRequest !== null) return "pending_request" as const;
   if (shell.settledOverride === "settled") return null;
+  if (
+    shell.snoozedUntil != null &&
+    DateTime.isGreaterThan(shell.snoozedUntil, now) &&
+    !raisedHandWhileSnoozed(shell)
+  )
+    return null;
   if (shell.status === "failed") return "error" as const;
   const completedAt = shell.latestRunCompletedAt ?? null;
   const visitedAt = shell.lastVisitedAt ?? null;
@@ -231,10 +245,15 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
   t3_pending_request_list: (input) =>
     Effect.gen(function* () {
       const { projection } = yield* readThread(input.threadId, ["runtimeRequests"]);
+      const requests = projection.runtimeRequests
+        .filter(isPendingRequest)
+        .map((request) => ({ requestId: request.id, kind: request.kind }));
       return {
-        requests: projection.runtimeRequests
-          .filter(isPendingRequest)
-          .map((request) => ({ requestId: request.id, kind: request.kind })),
+        // The original output: user questions only.
+        requestIds: requests
+          .filter((request) => request.kind === "user_input")
+          .map((request) => request.requestId),
+        requests,
       };
     }),
   t3_pending_request_read: (input) =>
@@ -321,11 +340,12 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
       // a thread sees every project.
       const projectId = input.projectId ?? caller?.projectId;
       const snapshot = yield* threads.getShellSnapshot().pipe(Effect.mapError(unavailable));
+      const now = yield* DateTime.now;
       const items = snapshot.threads
         .flatMap((shell) => {
           if (shell.archivedAt !== null || shell.deletedAt !== null) return [];
           if (projectId !== undefined && shell.projectId !== projectId) return [];
-          const reason = inboxReason(shell);
+          const reason = inboxReason(shell, now);
           return reason === null ? [] : [{ shell, reason }];
         })
         .toSorted(

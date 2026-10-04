@@ -1,4 +1,4 @@
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { OrchestratorMcpFailure, type ReviewDiffPreviewInput } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Project from "../../../project/ProjectService.ts";
@@ -23,30 +23,38 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
       const review = yield* Review.ReviewService;
       // A file request reads a single source; branch-range covers committed and uncommitted work.
       const sourceKind = input.source ?? (input.file === undefined ? undefined : "branch-range");
-      const preview = yield* review
-        .getDiffPreview({
-          cwd: thread.worktreePath ?? project.value.workspaceRoot,
-          ...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
-          ...(input.file === undefined || sourceKind === undefined
-            ? {}
-            : { file: { path: input.file, previousPath: null, sourceKind } }),
-        })
-        .pipe(
-          Effect.mapError((error) => {
-            switch (error._tag) {
-              case "VcsRepositoryDetectionError":
-              case "VcsUnsupportedOperationError":
-                return invalid(error.detail);
-              // A baseRef with no common commit with HEAD is the caller's mistake.
-              case "GitCommandError":
-                return error.operation === "GitVcsDriver.resolveReviewMergeBase"
-                  ? invalid(error.detail)
-                  : unavailable();
-              default:
-                return unavailable();
-            }
-          }),
-        );
+      const readPreview = (file?: ReviewDiffPreviewInput["file"]) =>
+        review
+          .getDiffPreview({
+            cwd: thread.worktreePath ?? project.value.workspaceRoot,
+            ...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
+            ...(file === undefined ? {} : { file }),
+          })
+          .pipe(
+            Effect.mapError((error) => {
+              switch (error._tag) {
+                case "VcsRepositoryDetectionError":
+                case "VcsUnsupportedOperationError":
+                  return invalid(error.detail);
+                // A baseRef with no common commit with HEAD is the caller's mistake.
+                case "GitCommandError":
+                  return error.operation === "GitVcsDriver.resolveReviewMergeBase"
+                    ? invalid(error.detail)
+                    : unavailable();
+                default:
+                  return unavailable();
+              }
+            }),
+          );
+      let preview = yield* readPreview();
+      if (input.file !== undefined && sourceKind !== undefined) {
+        // A renamed file needs its old path, which only the full preview's stats know.
+        const previousPath =
+          preview.sources
+            .find((source) => source.kind === sourceKind)
+            ?.files?.find((file) => file.path === input.file)?.previousPath ?? null;
+        preview = yield* readPreview({ path: input.file, previousPath, sourceKind });
+      }
       if (preview.sources.length === 0)
         return yield* invalid("The thread's checkout is not a git repository.");
       const maxCharacters = input.maxCharacters ?? DEFAULT_DIFF_CHARACTERS;
