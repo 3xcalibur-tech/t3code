@@ -225,16 +225,17 @@ const make = Effect.gen(function* () {
   });
 
   // `git worktree add` needs a commit to start from. True when neither HEAD
-  // nor the base ref has one and no origin fetch could bring the base ref.
+  // nor the base ref has one and origin does not have the base ref either.
   const hasNothingToCheckOut = Effect.fn("ThreadLaunchService.hasNothingToCheckOut")(function* (
     cwd: string,
     strategy: Extract<ThreadLaunchWorkspaceStrategy, { readonly type: "worktree" }>,
   ) {
     if (yield* git.hasCommit({ cwd, refName: "HEAD" })) return false;
     if (yield* git.hasCommit({ cwd, refName: strategy.baseRef })) return false;
-    return !(
-      strategy.startFromOrigin === true && (yield* git.remoteExists({ cwd, remoteName: "origin" }))
-    );
+    const remote = { cwd, remoteName: "origin", refName: strategy.baseRef };
+    if (strategy.startFromOrigin !== true || !(yield* git.remoteExists(remote))) return true;
+    yield* git.fetchRemote(remote);
+    return !(yield* git.remoteBranchExists(remote));
   });
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (

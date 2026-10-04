@@ -100,6 +100,7 @@ interface HarnessOptions {
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchRemote?: GitWorkflow.GitWorkflowService["Service"]["fetchRemote"];
   readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
+  readonly remoteBranchExists?: GitWorkflow.GitWorkflowService["Service"]["remoteBranchExists"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
@@ -170,7 +171,7 @@ function makeHarness(options: HarnessOptions = {}) {
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(true)),
       remoteExists: () => Effect.succeed(true),
-      remoteBranchExists: () => Effect.succeed(true),
+      remoteBranchExists: options.remoteBranchExists ?? (() => Effect.succeed(true)),
       removeWorktree,
       resolveRemoteTrackingCommit: () =>
         Effect.succeed({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
@@ -1112,9 +1113,15 @@ it.effect("names the worktree itself when the client provides no branch", () =>
   }),
 );
 
-it.effect("runs in the project folder when the repository has no commits", () =>
+it.effect.each([
+  { name: "without origin", startFromOrigin: false, originHasBase: true },
+  { name: "whose origin has no base branch", startFromOrigin: true, originHasBase: false },
+])("runs in the project folder for a repository with no commits $name", (testCase) =>
   Effect.gen(function* () {
-    const harness = makeHarness({ hasCommit: () => Effect.succeed(false) });
+    const harness = makeHarness({
+      hasCommit: () => Effect.succeed(false),
+      remoteBranchExists: () => Effect.succeed(testCase.originHasBase),
+    });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       const threads = yield* ThreadManagement.ThreadManagementService;
@@ -1123,7 +1130,11 @@ it.effect("runs in the project folder when the repository has no commits", () =>
           command: "command:launch:empty-repo",
           thread: "thread:launch:empty-repo",
           message: "Build the feature",
-          workspace: { type: "worktree", baseRef: "main" },
+          workspace: {
+            type: "worktree",
+            baseRef: "main",
+            startFromOrigin: testCase.startFromOrigin,
+          },
         }),
       );
       yield* waitUntil(() =>
