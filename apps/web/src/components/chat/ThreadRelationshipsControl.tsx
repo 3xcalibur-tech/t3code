@@ -8,6 +8,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import {
   projectedSubagentsToRuntime,
   withSubagentThreadActivity,
+  type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import {
@@ -26,6 +27,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-workflows";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import { groupBy } from "effect/Array";
+import * as DateTime from "effect/DateTime";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowRightIcon,
@@ -165,6 +167,29 @@ function relationshipThreadTitle(input: {
   return formatSubagentDisplayTitle(input.title);
 }
 
+/**
+ * Native subagent rows follow live child activity while retaining the provider's
+ * settled result once that activity ends.
+ */
+function liveSubagent<Agent extends RuntimeSubagent>(
+  agent: Agent | undefined,
+  childThread: OrchestrationV2ThreadShell | null | undefined,
+): Agent | undefined {
+  const liveStatus = childThread?.activityRunStatus;
+  if (!agent || !liveStatus) return agent;
+  const startedAt = childThread.activityRunStartedAt;
+  return {
+    ...agent,
+    status: liveStatus === "running" || liveStatus === "waiting" ? liveStatus : "pending",
+    startedAt: startedAt ? DateTime.formatIso(startedAt) : null,
+    completedAt: null,
+    // The settled task's output belongs to its first run, not this one.
+    progress: null,
+    result: null,
+    error: null,
+  };
+}
+
 export function ThreadRelationshipsPanel(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
@@ -195,12 +220,17 @@ export function ThreadRelationshipsPanel(props: {
           .map((subagent) => [
             subagent.childThreadId,
             {
-              ...projectedSubagentsToRuntime([
-                withSubagentThreadActivity(
-                  subagent,
-                  graph.nodes.get(subagent.childThreadId!)?.thread ?? undefined,
-                ),
-              ])[0]!,
+              ...(subagent.origin === "app_owned"
+                ? projectedSubagentsToRuntime([
+                    withSubagentThreadActivity(
+                      subagent,
+                      graph.nodes.get(subagent.childThreadId!)?.thread ?? undefined,
+                    ),
+                  ])[0]!
+                : liveSubagent(
+                    projectedSubagentsToRuntime([subagent])[0]!,
+                    graph.nodes.get(subagent.childThreadId!)?.thread,
+                  )!),
               driver: subagent.driver,
               providerInstanceId: subagent.providerInstanceId,
             },
@@ -247,13 +277,11 @@ export function ThreadRelationshipsPanel(props: {
     { id: "active", label: null, rows: active, expanded: true },
     { id: "previous", label: "Previous agents", rows: previous, expanded: false },
   ];
+  // Subagents without a child thread yet have no row, so count them separately.
   const runningCount =
-    projection?.subagents.filter(
-      (agent) =>
-        (agent.childThreadId === null
-          ? agent.status
-          : (subagentsByThreadId.get(agent.childThreadId)?.status ?? agent.status)) === "running",
-    ).length ?? active.filter(({ edge }) => edge.status === "running").length;
+    (projection?.subagents.filter(
+      (agent) => agent.childThreadId === null && agent.status === "running",
+    ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
 
   if (relationshipRows.length === 0 && runningCount === 0) {
     return null;
@@ -363,6 +391,7 @@ export function ThreadRelationshipsPanel(props: {
                   title={threadTitle}
                   model={agent.model}
                   provider={provider}
+                  providers={providers}
                   driver={providerDriver}
                   elapsed={<AgentElapsed agent={agent} />}
                   status={agent.status}
