@@ -176,6 +176,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
+import { groupedAfterFirst } from "./streamGrouping.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
@@ -1024,8 +1025,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
     const toShellStream = <E, R>(stream: Stream.Stream<ShellApplicationEvent, E, R>) =>
       stream.pipe(
-        Stream.groupedWithin(512, Duration.millis(50)),
-        Stream.mapEffect((events) => projectShellItems(Array.from(events))),
+        groupedAfterFirst(512, Duration.millis(50)),
+        Stream.mapEffect((events) => projectShellItems(events)),
         Stream.flatMap(Stream.fromIterable),
       );
 
@@ -1041,7 +1042,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 
     const enrichmentRefreshes = Stream.fromSubscription(enrichmentChanges).pipe(
       Stream.filter((change) => change.repositoryIdentityResolved),
-      Stream.groupedWithin(64, Duration.millis(25)),
+      groupedAfterFirst(64, Duration.millis(25)),
       // Build the refresh from the identities the changes carry. Re-enriching
       // every project here re-requested each expired root, whose resolution
       // published again, so one expiry kept every subscriber reloading every
@@ -1754,10 +1755,10 @@ const makeWsRpcLayer = (
         const live = threadManagement
           .streamStoredEventsFrom({ afterSequence: snapshot.snapshotSequence })
           .pipe(
-            Stream.groupedWithin(512, Duration.millis(50)),
+            groupedAfterFirst(512, Duration.millis(50)),
             Stream.mapEffect((events) =>
               Effect.forEach(
-                coalesceStoredThreadEvents(Array.from(events)),
+                coalesceStoredThreadEvents(events),
                 (stored) =>
                   threadManagement
                     .getThreadShell(stored.event.threadId)
