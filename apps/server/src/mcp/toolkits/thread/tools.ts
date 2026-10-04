@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as ThreadOrdering from "../../../orchestration-v2/ThreadOrdering.ts";
+import * as ThreadInbox from "../../../orchestration-v2/ThreadInbox.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -305,6 +306,7 @@ const InboxTool = Tool.make("t3_inbox", {
       }),
     ),
   }),
+  dependencies: [...commandTool.dependencies, ThreadInbox.ThreadInbox],
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);

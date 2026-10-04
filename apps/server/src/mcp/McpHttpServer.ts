@@ -62,6 +62,7 @@ import * as ThreadTerminals from "../terminal/ThreadTerminals.ts";
 import * as ThreadOrdering from "../orchestration-v2/ThreadOrdering.ts";
 import * as GitThreadService from "../git/GitThreadService.ts";
 import * as AgentSettings from "../settings/AgentSettings.ts";
+import * as ThreadInbox from "../orchestration-v2/ThreadInbox.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -685,6 +686,7 @@ export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(Orchestrato
 export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
   Layer.provide(ThreadToolkitHandlersLive),
   Layer.provide(ThreadOrdering.layer),
+  Layer.provide(ThreadInbox.layer),
 );
 
 const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(

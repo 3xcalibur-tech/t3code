@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
+import { raisedHandWhileSnoozed } from "./ThreadInbox.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
 export const ThreadOrderList = Schema.Literals(["pinned", "active"]);
@@ -74,19 +75,6 @@ export class ThreadOrdering extends Context.Service<
     >;
   }
 >()("t3/orchestration-v2/ThreadOrdering") {}
-
-/** Mirrors the client's early wake: a pending request, or a fresh completion or failure after the snooze. */
-function raisedHandWhileSnoozed(shell: OrchestrationV2ThreadShell) {
-  if (shell.pendingRuntimeRequest !== null) return true;
-  const completedAt = shell.latestRunCompletedAt ?? null;
-  const snoozedAt = shell.snoozedAt ?? null;
-  if (snoozedAt === null) return shell.status === "failed";
-  return (
-    (shell.status === "completed" || shell.status === "failed") &&
-    completedAt !== null &&
-    DateTime.isGreaterThan(completedAt, snoozedAt)
-  );
-}
 
 /** The sidebar list a thread shows in, with the client's precedence. */
 function sidebarList(shell: OrchestrationV2ThreadShell, now: DateTime.Utc) {
