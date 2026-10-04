@@ -123,10 +123,20 @@ function whenKey(node: KeybindingWhenNode): string {
   }
 }
 
+// Shortcut spellings compare by meaning too, so "cmd+k" and "meta+k" name the same rule.
+function isSameKey(left: string, right: string): boolean {
+  if (left === right) return true;
+  const leftShortcut = parseKeybindingShortcut(left);
+  const rightShortcut = parseKeybindingShortcut(right);
+  if (leftShortcut === null || rightShortcut === null) return false;
+  const encoded = encodeShortcut(leftShortcut);
+  return encoded !== null && encoded === encodeShortcut(rightShortcut);
+}
+
 function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): boolean {
   return (
     left.command === right.command &&
-    left.key === right.key &&
+    isSameKey(left.key, right.key) &&
     isSameWhen(left.when ?? undefined, right.when ?? undefined)
   );
 }
