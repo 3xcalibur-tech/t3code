@@ -75,6 +75,13 @@ export const mcpSettings = (settings: ServerSettings) =>
     })),
     Effect.mapError(unavailable),
   );
+// A server URL can carry credentials in its userinfo or query; only the origin and path are kept.
+function withoutUrlCredentials(value: string) {
+  if (!URL.canParse(value)) return value;
+  const url = new URL(value);
+  if (url.username === "" && url.password === "" && url.search === "") return value;
+  return `${url.origin}${url.pathname}`;
+}
 function redactSecretFields(config: unknown) {
   if (!isRecord(config)) return config;
   return Object.fromEntries(
@@ -82,7 +89,9 @@ function redactSecretFields(config: unknown) {
       key,
       PLAINTEXT_SECRET_KEYS.has(key) && typeof field === "string" && field.length > 0
         ? SECRET_MARKER
-        : field,
+        : typeof field === "string" && key.endsWith("Url")
+          ? withoutUrlCredentials(field)
+          : field,
     ]),
   );
 }

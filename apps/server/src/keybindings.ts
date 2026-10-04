@@ -106,7 +106,8 @@ function isSameWhen(left: string | undefined, right: string | undefined): boolea
   return leftAst !== null && rightAst !== null && whenKey(leftAst) === whenKey(rightAst);
 }
 
-// Flattens chains of the same operator, since `a && (b && c)` and `a && b && c` mean the same.
+// Flattens and sorts chains of the same operator, since `a && (b && c)`, `a && b && c`, and
+// `c && b && a` mean the same.
 function whenKey(node: KeybindingWhenNode): string {
   const operands = (child: KeybindingWhenNode): ReadonlyArray<string> =>
     child.type === node.type && (child.type === "and" || child.type === "or")
@@ -119,7 +120,7 @@ function whenKey(node: KeybindingWhenNode): string {
       return `!(${whenKey(node.node)})`;
     case "and":
     case "or":
-      return `${node.type}(${[...operands(node.left), ...operands(node.right)].join(",")})`;
+      return `${node.type}(${[...operands(node.left), ...operands(node.right)].sort().join(",")})`;
   }
 }
 
