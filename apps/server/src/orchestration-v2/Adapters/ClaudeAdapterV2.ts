@@ -948,6 +948,8 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
   "mcp__t3-code__t3_terminal_read",
   "mcp__t3-code__t3_git_status",
   "mcp__t3-code__t3_provider_status",
+  "mcp__t3-code__t3_pull_request_read",
+  "mcp__t3-code__list_thread_pull_requests",
   "mcp__t3-code__t3_preview_list",
   "mcp__t3-code__t3_environment_read",
   "mcp__t3-code__t3_queue_list",

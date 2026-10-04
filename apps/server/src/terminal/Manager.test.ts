@@ -9,6 +9,7 @@ import {
   type TerminalRestartInput,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProjectId,
   ServerSettingsError,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
@@ -42,6 +43,8 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
+import * as ThreadTerminals from "./ThreadTerminals.ts";
+import * as Project from "../project/ProjectService.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -460,6 +463,41 @@ it.layer(
       assert.equal(snapshot.snapshot.threadId, "thread-1");
       assert.equal(snapshot.snapshot.terminalId, DEFAULT_TERMINAL_ID);
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
+  it.effect("allocates separate shells for concurrent agent opens and reuses an explicit id", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, baseDir } = yield* createManager();
+      yield* Effect.gen(function* () {
+        const terminals = yield* ThreadTerminals.ThreadTerminals;
+        const input = {
+          threadId: "thread-1",
+          projectId: ProjectId.make("project-1"),
+          worktreePath: null,
+        };
+        const [first, second] = yield* Effect.all([terminals.open(input), terminals.open(input)], {
+          concurrency: "unbounded",
+        });
+        expect(first.terminalId).not.toBe(second.terminalId);
+        expect(first.alreadyRunning).toBe(false);
+        expect(second.alreadyRunning).toBe(false);
+        const reused = yield* terminals.open({ ...input, terminalId: first.terminalId });
+        expect(reused.alreadyRunning).toBe(true);
+        expect(ptyAdapter.spawnInputs).toHaveLength(2);
+      }).pipe(
+        Effect.provide(
+          ThreadTerminals.layer.pipe(
+            Layer.provide(Layer.succeed(TerminalManager.TerminalManager, manager)),
+            Layer.provide(
+              Layer.mock(Project.ProjectService)({
+                getById: () =>
+                  Effect.yieldNow.pipe(Effect.as(Option.some({ workspaceRoot: baseDir } as never))),
+              }),
+            ),
+          ),
+        ),
+      );
     }),
   );
 

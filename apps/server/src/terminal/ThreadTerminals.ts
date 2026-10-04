@@ -23,6 +23,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as NodeUtil from "node:util";
 import * as Project from "../project/ProjectService.ts";
+import { makeKeyedSerialExecutor } from "../orchestration-v2/KeyedSerialExecutor.ts";
 import * as TerminalManager from "./Manager.ts";
 
 const DEFAULT_OUTPUT_CHARACTERS = 10_000;
@@ -124,6 +125,7 @@ function plainText(history: string) {
 const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const projects = yield* Project.ProjectService;
+  const opens = yield* makeKeyedSerialExecutor<string>();
 
   /** The thread's terminals from the metadata snapshot the terminal panel starts from. */
   const list: ThreadTerminals["Service"]["list"] = Effect.fn("ThreadTerminals.list")(
@@ -221,6 +223,7 @@ const make = Effect.gen(function* () {
       });
       return { terminalId, status: snapshot.status, alreadyRunning };
     },
+    (effect, input) => opens.withLock(input.threadId, effect),
   );
 
   const write: ThreadTerminals["Service"]["write"] = Effect.fn("ThreadTerminals.write")(
