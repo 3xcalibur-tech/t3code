@@ -593,15 +593,18 @@ const make = Effect.gen(function* () {
             const { capabilities, provider } = yield* service
               .detail(ref)
               .pipe(Effect.mapError(hostFailure));
-            const list = capabilities.reviewers.listCandidates
-              ? yield* service.reviewerCandidates(ref).pipe(Effect.mapError(hostFailure))
+            const candidates = capabilities.reviewers.listCandidates
+              ? (yield* service.reviewerCandidates(ref).pipe(Effect.mapError(hostFailure)))
+                  .candidates
               : undefined;
-            const candidates = list?.candidates;
             // GitHub and Forgejo take logins and team slugs as given; the candidate list also omits
-            // teams not yet requested. Other hosts want their own ids, which a truncated list may
-            // not reach, so an unmatched name passes through only when the list is incomplete.
-            const passUnmatched =
-              provider === "github" || provider === "forgejo" || list?.truncated === true;
+            // teams not yet requested. GitLab and Bitbucket silently skip anything but their own
+            // ids (a numeric id, an account uuid), so only those pass when unmatched.
+            const passesUnmatched = (id: string) =>
+              provider === "github" ||
+              provider === "forgejo" ||
+              (provider === "gitlab" && /^\d+$/.test(id)) ||
+              (provider === "bitbucket" && /^\{?[0-9a-f-]{36}\}?$/i.test(id));
             const reviewers = [];
             for (const reviewer of named) {
               if (candidates === undefined) {
@@ -619,9 +622,9 @@ const make = Effect.gen(function* () {
                 continue;
               }
               // An unmatched name would be silently ignored by hosts that want their own ids.
-              if (!passUnmatched)
+              if (!passesUnmatched(reviewer.id))
                 return yield* invalid(
-                  `${reviewer.id} is not a reviewer this host offers; pass the host's reviewer id.`,
+                  `${reviewer.id} is not among the reviewers this host listed; pass its reviewer id (GitLab: numeric user id, Bitbucket: account uuid).`,
                 );
               reviewers.push({ id: reviewer.id, kind: reviewer.kind ?? ("user" as const) });
             }
