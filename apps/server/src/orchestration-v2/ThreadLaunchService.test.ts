@@ -99,6 +99,7 @@ interface HarnessOptions {
   readonly managedFolders?: Layer.Layer<ManagedProjectFolders.ManagedProjectFolders>;
   readonly createWorktree?: GitWorkflow.GitWorkflowService["Service"]["createWorktree"];
   readonly fetchRemote?: GitWorkflow.GitWorkflowService["Service"]["fetchRemote"];
+  readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
@@ -167,6 +168,7 @@ function makeHarness(options: HarnessOptions = {}) {
       createWorktree,
       renameBranch,
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
+      hasCommit: options.hasCommit ?? (() => Effect.succeed(true)),
       remoteExists: () => Effect.succeed(true),
       remoteBranchExists: () => Effect.succeed(true),
       removeWorktree,
@@ -1106,6 +1108,53 @@ it.effect("names the worktree itself when the client provides no branch", () =>
           .getThreadProjection(launched.threadId)
           .pipe(Effect.map((projection) => projection.thread.branch === "generated-branch")),
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("runs in the project folder when the repository has no commits", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ hasCommit: () => Effect.succeed(false) });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:empty-repo",
+          thread: "thread:launch:empty-repo",
+          message: "Build the feature",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(Effect.map((projection) => projection.runs[0]?.status === "starting")),
+      );
+      const { thread } = yield* threads.getThreadProjection(launched.threadId);
+      assert.isNull(thread.worktreePath);
+      assert.isNull(thread.branch);
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.equal(harness.runSetup.mock.calls[0]?.[0]?.worktreePath, project.workspaceRoot);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("still checks out from origin when only the local repository has no commits", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({ hasCommit: () => Effect.succeed(false) });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.launch(
+        launchInput({
+          command: "command:launch:empty-repo-origin",
+          thread: "thread:launch:empty-repo-origin",
+          message: "Build the feature",
+          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+        }),
+      );
+      yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 1));
+      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.refName, "remote-main-sha");
     }).pipe(Effect.provide(harness.layer));
   }),
 );

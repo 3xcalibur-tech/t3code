@@ -224,21 +224,45 @@ const make = Effect.gen(function* () {
     }
   });
 
+  // `git worktree add` needs a commit to start from. True when neither HEAD
+  // nor the base ref has one and no origin fetch could bring the base ref.
+  const hasNothingToCheckOut = Effect.fn("ThreadLaunchService.hasNothingToCheckOut")(function* (
+    cwd: string,
+    strategy: Extract<ThreadLaunchWorkspaceStrategy, { readonly type: "worktree" }>,
+  ) {
+    if (yield* git.hasCommit({ cwd, refName: "HEAD" })) return false;
+    if (yield* git.hasCommit({ cwd, refName: strategy.baseRef })) return false;
+    return !(
+      strategy.startFromOrigin === true && (yield* git.remoteExists({ cwd, remoteName: "origin" }))
+    );
+  });
+
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
-    input: PreparationInput,
+    requested: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
   ) {
-    const project = yield* projects.getById(input.projectId).pipe(
-      Effect.mapError(mapError(input, "resolve-project", threadId)),
+    const project = yield* projects.getById(requested.projectId).pipe(
+      Effect.mapError(mapError(requested, "resolve-project", threadId)),
       Effect.flatMap(
         Option.match({
           onNone: () =>
-            Effect.fail(mapError(input, "resolve-project", threadId)("Project no longer exists.")),
+            Effect.fail(
+              mapError(requested, "resolve-project", threadId)("Project no longer exists."),
+            ),
           onSome: Effect.succeed,
         }),
       ),
     );
+    // A repository with no commits yet runs the thread in its project folder,
+    // as a non-Git project does: a worktree of it would be empty.
+    const input: PreparationInput =
+      requested.workspaceStrategy.type === "worktree" &&
+      (yield* hasNothingToCheckOut(project.workspaceRoot, requested.workspaceStrategy).pipe(
+        Effect.mapError(mapError(requested, "provision-worktree", threadId)),
+      ))
+        ? { ...requested, workspaceStrategy: { type: "root" } }
+        : requested;
 
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
