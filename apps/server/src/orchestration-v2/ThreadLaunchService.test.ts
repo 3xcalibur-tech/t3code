@@ -1147,8 +1147,15 @@ it.effect.each([
       assert.isNull(thread.branch);
       assert.equal(harness.createWorktree.mock.calls.length, 0);
       assert.equal(harness.runSetup.mock.calls[0]?.[0]?.worktreePath, project.workspaceRoot);
-      assert.isNull(
-        yield* (yield* WorktreeSetupTracker.WorktreeSetupTracker).get(launched.threadId),
+      const setup = yield* (yield* WorktreeSetupTracker.WorktreeSetupTracker).get(
+        launched.threadId,
+      );
+      assert.deepInclude(
+        setup?.stages.find((stage) => stage.id === "checkout"),
+        {
+          status: "skipped",
+          detail: "no commits yet, using project folder",
+        },
       );
     }).pipe(Effect.provide(harness.layer));
   }),

@@ -365,14 +365,20 @@ const make = Effect.gen(function* () {
         if (startFromOrigin) yield* setupTracker.stageStatus(threadId, "fetch", "done");
         // `git worktree add` needs a commit to start from. A repository with
         // none yet runs the thread in its project folder, as a non-Git project
-        // does: a worktree of it would be empty anyway.
+        // does: a worktree of it would be empty anyway. The setup card stays
+        // and says why.
         const hasCommit = (refName: string) =>
           git
             .hasCommit({ cwd: project.workspaceRoot, refName })
             .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         if (!(yield* hasCommit(startRef)) && !(yield* hasCommit("HEAD"))) {
           branch = null;
-          yield* setupTracker.discard(threadId);
+          yield* setupTracker.stageStatus(
+            threadId,
+            "checkout",
+            "skipped",
+            "no commits yet, using project folder",
+          );
         } else {
           yield* setupTracker.stageStatus(threadId, "checkout", "running");
           const worktree = yield* git

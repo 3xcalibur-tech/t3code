@@ -74,8 +74,6 @@ export class WorktreeSetupTracker extends Context.Service<
      * late cancel cannot roll back a thread whose agent has already started.
      */
     readonly markUncancellable: (threadId: ThreadId) => Effect.Effect<void>;
-    /** Drops a running setup at once, for a launch that no longer prepares a worktree. */
-    readonly discard: (threadId: ThreadId) => Effect.Effect<void>;
     /**
      * Interrupts the running bootstrap and waits for it to unwind, so the
      * caller's dispatch has already failed and rolled back when this returns.
@@ -307,9 +305,6 @@ export const make = Effect.gen(function* () {
       return next;
     });
 
-  const discard: WorktreeSetupTracker["Service"]["discard"] = (threadId) =>
-    clearRetention(threadId).pipe(Effect.andThen(remove(threadId)));
-
   const cancel: WorktreeSetupTracker["Service"]["cancel"] = (threadId) =>
     Effect.gen(function* () {
       const current = yield* Ref.get(setups);
@@ -362,7 +357,6 @@ export const make = Effect.gen(function* () {
     appendTail,
     finish,
     markUncancellable,
-    discard,
     cancel,
     get,
     stream,
