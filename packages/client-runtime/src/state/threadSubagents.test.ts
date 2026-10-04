@@ -190,11 +190,19 @@ describe("delegated child follow-ups", () => {
   it("includes a resumed agent from an earlier parent run and removes it after it settles", () => {
     const projection = {
       runs: [finishedRun, run("run-2", "running")],
-      subagents: [completed, subagent({ id: "current", runId: RunId.make("run-2") })],
+      subagents: [
+        completed,
+        subagent({
+          id: "current",
+          runId: RunId.make("run-2"),
+          startedAt: at("2026-06-20T00:01:00Z"),
+        }),
+      ],
     };
     const children = new Map<ThreadId, OrchestrationV2ThreadShell>([[child.id, child]]);
     const live = deriveThreadTurnSubagents(projection, children);
-    expect(live?.subagents.map((agent) => agent.id)).toEqual(["current", "finished"]);
+    expect(live?.subagents.map((agent) => agent.id)).toEqual(["finished", "current"]);
+    expect(live?.subagents[0]?.startedAt).toEqual(child.activityRunStartedAt);
     expect(live?.liveCount).toBe(2);
     children.set(child.id, { ...child, status: "completed", activityRunStatus: null });
     expect(

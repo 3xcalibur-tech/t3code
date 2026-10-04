@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
   type OrchestrationV2DomainEvent,
@@ -60,6 +61,8 @@ const targets = Effect.gen(function* () {
     ...Array.from({ length: 100 }, (_, index) => `idle:${index}`),
     "active",
     "queued",
+    "node-owned-background",
+    "subagent-owned-background",
     "archived",
     "deleted",
     "native",
@@ -115,18 +118,88 @@ const targets = Effect.gen(function* () {
         userMessageId: MessageId.make(`interrupt:user:${suffix}`),
         rootNodeId: null,
         activeAttemptId: null,
-        status: suffix.startsWith("idle:")
-          ? "completed"
-          : suffix === "queued"
-            ? "queued"
-            : "running",
+        status:
+          suffix.startsWith("idle:") || suffix.endsWith("-owned-background")
+            ? "completed"
+            : suffix === "queued"
+              ? "queued"
+              : "running",
         requestedAt: now,
         startedAt: now,
-        completedAt: suffix.startsWith("idle:") ? now : null,
+        completedAt:
+          suffix.startsWith("idle:") || suffix.endsWith("-owned-background") ? now : null,
         checkpointId: null,
         contextHandoffId: null,
       },
     });
+    if (suffix.endsWith("-owned-background")) {
+      const ownerNodeId = NodeId.make(`interrupt:background-owner:${suffix}`);
+      const providerThreadId = ProviderThreadId.make(`interrupt:background-provider:${suffix}`);
+      yield* apply({
+        type: "node.updated",
+        threadId: childId,
+        runId,
+        payload: {
+          id: ownerNodeId,
+          threadId: childId,
+          runId,
+          parentNodeId: null,
+          rootNodeId: ownerNodeId,
+          kind: "root_turn",
+          status: "completed",
+          countsForRun: true,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+      yield* apply({
+        type: "provider-thread.updated",
+        threadId: childId,
+        payload: {
+          id: providerThreadId,
+          appThreadId: null,
+          ownerNodeId: suffix === "node-owned-background" ? ownerNodeId : null,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: modelSelection.instanceId,
+          providerSessionId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          pendingBackgroundTasks: [{ taskId: "background-command", kind: "command" }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      if (suffix === "subagent-owned-background") {
+        const parent = yield* store.getThreadRecords(parentId, ["subagents"]);
+        const task = parent.subagents.find((task) => task.childThreadId === childId)!;
+        yield* apply({
+          type: "subagent.updated",
+          threadId: childId,
+          payload: {
+            ...task,
+            id: NodeId.make("interrupt:native-background-task"),
+            threadId: childId,
+            parentNodeId: ownerNodeId,
+            origin: "provider_native",
+            providerThreadId,
+            childThreadId: null,
+            status: "running",
+            result: null,
+            completedAt: null,
+          },
+        });
+      }
+    }
   }
   const normal = yield* store.getThreadSnapshotWindow(parentId, { rowLimit: 10 });
   assert.isUndefined(normal.projection.childInterruptTargets);
@@ -145,9 +218,19 @@ const targets = Effect.gen(function* () {
         action: "interrupt",
       },
       {
+        threadId: ThreadId.make("interrupt:node-owned-background"),
+        runId: RunId.make("interrupt:run:node-owned-background"),
+        action: "interrupt",
+      },
+      {
         threadId: ThreadId.make("interrupt:queued"),
         runId: RunId.make("interrupt:run:queued"),
         action: "cancel",
+      },
+      {
+        threadId: ThreadId.make("interrupt:subagent-owned-background"),
+        runId: RunId.make("interrupt:run:subagent-owned-background"),
+        action: "interrupt",
       },
     ],
   );

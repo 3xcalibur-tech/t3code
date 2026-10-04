@@ -4828,7 +4828,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             EXISTS (SELECT 1 FROM orchestration_v2_projection_runs run
               WHERE run.thread_id = child.thread_id AND run.status IN ('queued','preparing','starting','running','waiting'))
             OR EXISTS (SELECT 1 FROM orchestration_v2_projection_provider_threads provider
-              WHERE provider.thread_id = child.thread_id AND
+              WHERE (provider.thread_id = child.thread_id
+                OR provider.owner_node_id IN (
+                  SELECT node_id FROM orchestration_v2_projection_nodes
+                  WHERE thread_id = child.thread_id
+                )
+                OR provider.provider_thread_id IN (
+                  SELECT provider_thread_id FROM orchestration_v2_projection_subagents
+                  WHERE thread_id = child.thread_id AND provider_thread_id IS NOT NULL
+                )) AND
                 CASE WHEN json_valid(provider.payload_json) THEN json_array_length(provider.payload_json, '$.pendingBackgroundTasks') > 0 ELSE 0 END)
             OR EXISTS (SELECT 1 FROM orchestration_v2_projection_turn_items item
               WHERE item.thread_id = child.thread_id AND item.status IN ('pending','running','waiting')

@@ -63,18 +63,18 @@ export function deriveThreadTurnSubagents(
   );
   const runId = activeRun?.id ?? latestUpdated.runId;
   const subagents = copySorted(
-    projection.subagents.flatMap((subagent) => {
-      const live = withSubagentThreadActivity(
-        subagent,
-        subagent.childThreadId === null ? undefined : children?.get(subagent.childThreadId),
-      );
-      return subagent.runId === runId ||
+    projection.subagents.filter(
+      (subagent) =>
+        subagent.runId === runId ||
         (subagent.childThreadId !== null &&
-          activeSubagentThreadStatus(children?.get(subagent.childThreadId)) !== null)
-        ? [live]
-        : [];
-    }),
+          activeSubagentThreadStatus(children?.get(subagent.childThreadId)) !== null),
+    ),
     (left, right) => orderKey(left) - orderKey(right) || left.id.localeCompare(right.id),
+  ).map((subagent) =>
+    withSubagentThreadActivity(
+      subagent,
+      subagent.childThreadId === null ? undefined : children?.get(subagent.childThreadId),
+    ),
   );
   if (subagents.length === 0) return null;
 

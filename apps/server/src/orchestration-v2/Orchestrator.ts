@@ -1898,15 +1898,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           transfer.sourceThreadId === task.childThreadId &&
           transfer.targetThreadId === command.parentThreadId,
       );
-      const latestResultTransfer = resultTransfers.at(-1);
+      const currentResultRunId = task.resultRunId ?? resultTransfers.at(-1)?.sourcePoint.runId;
       if (
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
           (command.resultRunId === undefined
             ? // Older callers can acknowledge the original result, but cannot
               // identify which follow-up they read.
               resultTransfers.length > 1
-            : latestResultTransfer?.sourcePoint.runId !== undefined &&
-              latestResultTransfer.sourcePoint.runId !== command.resultRunId)) ||
+            : currentResultRunId !== undefined && currentResultRunId !== command.resultRunId)) ||
         task.completionDelivery?.state === state ||
         (command.type === "delegated_task.completion-delivery.acknowledge" &&
           task.completionDelivery?.state === "disposed")
@@ -10040,7 +10039,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandThreadId(command),
         dispatchWithReceiptEffect(command),
       );
-      if (command.type !== "message.dispatch" && command.type !== "queue.resume")
+      if (
+        command.type !== "message.dispatch" &&
+        command.type !== "queue.resume" &&
+        command.type !== "runtime-request.respond" &&
+        command.type !== "thread.pull-request-watch.sync"
+      )
         return yield* dispatch;
       const parentId = yield* appOwnedSubagentParentThreadId(commandThreadId(command)).pipe(
         // Missing threads must reach dispatch's rejection receipt handling.
