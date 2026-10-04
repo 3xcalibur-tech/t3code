@@ -79,6 +79,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import {
+  clientRuntimeModeCeiling,
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
@@ -898,7 +899,7 @@ const make = Effect.gen(function* () {
         return {
           parent: undefined,
           limits: {
-            runtimeMode: scope.client?.runtimeModeCeiling ?? "approval-required",
+            runtimeMode: clientRuntimeModeCeiling(scope.client),
             interactionMode: "default",
           } satisfies { runtimeMode: RuntimeMode; interactionMode: ProviderInteractionMode },
         } as const;

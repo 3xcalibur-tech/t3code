@@ -1,4 +1,9 @@
-import type { ProviderInteractionMode, RuntimeMode, ThreadId } from "@t3tools/contracts";
+import {
+  OrchestratorMcpFailure,
+  type ProviderInteractionMode,
+  type RuntimeMode,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
@@ -42,8 +47,24 @@ const declared = { [AccessDeclared]: true } as const;
 const declare = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   Object.assign(handle, declared);
 
-/** The caller of a tool that changes something. */
-const writingCaller = loadCaller().pipe(Effect.tap(assertLiveCaller));
+/**
+ * The caller of a tool that changes something. A client approved for
+ * read-only access changes nothing.
+ */
+const writingCaller = McpInvocationContext.McpInvocationContext.pipe(
+  Effect.flatMap((scope) =>
+    scope.client?.access === "read-only"
+      ? Effect.fail(
+          new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message:
+              "This tool changes the environment, and this MCP client was approved for read-only access.",
+          }),
+        )
+      : loadCaller(),
+  ),
+  Effect.tap(assertLiveCaller),
+);
 
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
