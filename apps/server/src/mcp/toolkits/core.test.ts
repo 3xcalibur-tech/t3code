@@ -21,6 +21,8 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/Services/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as AgentSettings from "../../settings/AgentSettings.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as Keybindings from "../../keybindings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
@@ -468,6 +470,10 @@ it.effect("redacts every credential from MCP settings", () =>
       providers: {
         ...DEFAULT_SERVER_SETTINGS.providers,
         antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, apiKey: "secret-api-key" },
+        cursor: {
+          ...DEFAULT_SERVER_SETTINGS.providers.cursor,
+          apiEndpoint: "https://user:secret-cursor@example.com/api?token=secret-cursor-query",
+        },
       },
       providerInstances: {
         [ProviderInstanceId.make("opencode_2")]: {
@@ -506,11 +512,55 @@ it.effect("redacts every credential from MCP settings", () =>
       "secret-traces",
       "secret-metrics",
       "secret-logs",
+      "secret-cursor",
+      "secret-cursor-query",
     ])
       expect(text).not.toContain(secret);
     expect(text).toContain("https://example.com/usage");
     expect(text).toContain("https://example.com/v1/traces");
     expect(text).toContain("https://example.com/v1/metrics");
     expect(text).toContain("https://example.com/v1/logs");
+    expect(text).toContain("https://example.com/api");
   }),
+);
+
+it.effect("rejects credential-bearing endpoint updates before persisting settings", () =>
+  Effect.gen(function* () {
+    const settings = yield* AgentSettings.AgentSettings;
+    for (const patch of [
+      { providers: { opencode: { serverUrl: "https://user:secret@example.com" } } },
+      { observability: { otlpTracesUrl: "https://example.com/traces?token=secret" } },
+      { observability: { otlpMetricsUrl: "https://user:secret@example.com/metrics" } },
+      { observability: { otlpLogsUrl: "https://example.com/logs?token=secret" } },
+    ]) {
+      const error = yield* settings.update({ fields: {}, settings: patch }).pipe(Effect.flip);
+      expect(error._tag).toBe("CredentialSettingsRejectedError");
+      expect(error.message).not.toContain("secret");
+    }
+    const updated = yield* settings.update({
+      fields: {},
+      settings: { observability: { otlpTracesUrl: "https://example.com/traces" } },
+    });
+    expect(updated.next.observability.otlpTracesUrl).toBe("https://example.com/traces");
+  }).pipe(
+    Effect.provide(
+      AgentSettings.layer.pipe(
+        Layer.provide(Layer.mock(Keybindings.Keybindings)({})),
+        Layer.provide(
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            updateSettings: (patch) => {
+              expect(patch).toEqual({
+                observability: { otlpTracesUrl: "https://example.com/traces" },
+              });
+              return Effect.succeed({
+                ...DEFAULT_SERVER_SETTINGS,
+                observability: { ...DEFAULT_SERVER_SETTINGS.observability, ...patch.observability },
+              });
+            },
+          }),
+        ),
+      ),
+    ),
+  ),
 );

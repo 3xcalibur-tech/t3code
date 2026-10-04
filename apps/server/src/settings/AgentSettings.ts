@@ -204,12 +204,14 @@ function withoutUrlCredentials(value: string) {
   if (url.username === "" && url.password === "" && url.search === "") return value;
   return `${url.origin}${url.pathname}`;
 }
-// Strips credentials from every string under a key ending in Url or url, at any depth.
+// Includes Cursor's legacy endpoint, which predates the Url naming convention.
+const isUrlSetting = (key: string) =>
+  key.endsWith("Url") || key.endsWith("url") || key === "apiEndpoint";
 function withoutUrlCredentialsIn(record: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(record).map(([key, field]) => [
       key,
-      typeof field === "string" && (key.endsWith("Url") || key.endsWith("url"))
+      typeof field === "string" && isUrlSetting(key)
         ? withoutUrlCredentials(field)
         : withoutUrlCredentialsDeep(field),
     ]),
@@ -241,12 +243,21 @@ const REJECTED_PATCH_KEYS = [
   "deviceHosts",
 ] as const;
 function rejectedPatchKeys(patch: ServerSettingsPatch) {
+  const endpoints = [
+    ["providers.opencode.serverUrl", patch.providers?.opencode?.serverUrl],
+    ["observability.otlpTracesUrl", patch.observability?.otlpTracesUrl],
+    ["observability.otlpMetricsUrl", patch.observability?.otlpMetricsUrl],
+    ["observability.otlpLogsUrl", patch.observability?.otlpLogsUrl],
+  ] as const;
   return [
     ...REJECTED_PATCH_KEYS.filter((key) => patch[key] !== undefined),
     ...(patch.providers?.antigravity?.apiKey === undefined ? [] : ["providers.antigravity.apiKey"]),
     ...(patch.providers?.opencode?.serverPassword === undefined
       ? []
       : ["providers.opencode.serverPassword"]),
+    ...endpoints.flatMap(([key, value]) =>
+      value !== undefined && withoutUrlCredentials(value) !== value ? [key] : [],
+    ),
   ];
 }
 const strict = { onExcessProperty: "error" } as const;
