@@ -45,7 +45,8 @@ export const GitToolkitHandlersLive = GitToolkit.toLayer({
       } = yield* readThread(input.threadId);
       const cwd = yield* checkoutOf(thread);
       const vcs = yield* VcsStatus.VcsStatusBroadcaster;
-      // Local status is cheap and changes under the agent; remote counts stay as last fetched.
+      // Local status is cheap and changes under the agent; remote counts come from the cache,
+      // which fetches once per checkout like the branch toolbar.
       yield* vcs.refreshLocalStatus(cwd).pipe(Effect.mapError(unavailable));
       const status = yield* vcs.getStatus({ cwd }).pipe(Effect.mapError(unavailable));
       return {

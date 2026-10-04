@@ -40,10 +40,10 @@ const make = Effect.gen(function* () {
   const subscribers = yield* Ref.make(0);
 
   return ClientIntents.of({
-    openThread: ({ environmentId, ...input }) =>
+    openThread: (input) =>
       Effect.gen(function* () {
         const intentId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-        const targetClientId = yield* broker.lastFocusedClientId(environmentId);
+        const targetClientId = yield* broker.lastFocusedClientId(input.environmentId);
         yield* PubSub.publish(pubsub, {
           type: "openThread",
           intentId,

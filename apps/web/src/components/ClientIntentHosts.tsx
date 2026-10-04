@@ -46,7 +46,12 @@ function ClientIntentHost(props: {
   );
   const handledIntentIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (intent === null || handledIntentIdRef.current === intent.intentId) return;
+    if (
+      intent === null ||
+      intent.environmentId !== environmentId ||
+      handledIntentIdRef.current === intent.intentId
+    )
+      return;
     handledIntentIdRef.current = intent.intentId;
     // Every open window receives the intent. The desktop the user focused last moves even
     // while a terminal has focus; otherwise only the window the user is looking at does.

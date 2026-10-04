@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Right-panel surfaces a client can open beside a thread when asked to show it. */
 export const ClientIntentThreadPanel = Schema.Literals(["diff", "files"]);
@@ -15,6 +15,8 @@ export type ClientIntentThreadPanel = typeof ClientIntentThreadPanel.Type;
 export const ClientIntent = Schema.Struct({
   type: Schema.Literal("openThread"),
   intentId: TrimmedNonEmptyString,
+  /** The environment the thread belongs to; a client ignores intents for other environments. */
+  environmentId: EnvironmentId,
   threadId: ThreadId,
   panel: Schema.optional(ClientIntentThreadPanel),
   targetClientId: Schema.optional(TrimmedNonEmptyString),

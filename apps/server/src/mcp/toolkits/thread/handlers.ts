@@ -101,8 +101,9 @@ const readPendingRequest = Effect.fn("mcp.readPendingRequest")(function* (
   return { ...context, request, item };
 });
 
-/** Mirrors the client's early wake: a fresh completion or failure after the snooze. */
+/** Mirrors the client's early wake: a pending request, or a fresh completion or failure after the snooze. */
 function raisedHandWhileSnoozed(shell: OrchestrationV2ThreadShell) {
+  if (shell.pendingRuntimeRequest !== null) return true;
   const completedAt = shell.latestRunCompletedAt ?? null;
   const snoozedAt = shell.snoozedAt ?? null;
   if (snoozedAt === null) return shell.status === "failed";

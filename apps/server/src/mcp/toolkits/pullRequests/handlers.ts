@@ -588,21 +588,30 @@ const make = Effect.gen(function* () {
           case "unrequest_reviewers": {
             const named = yield* required(input.reviewers, "reviewers");
             // Hosts address reviewers by their own ids (GitLab a numeric id, Bitbucket a uuid), so
-            // a login is matched against the candidates the reviewer menu would offer.
-            const { candidates } = yield* service
-              .reviewerCandidates(ref)
-              .pipe(Effect.mapError(hostFailure));
-            const reviewers = named.map((reviewer) => {
+            // a login is matched against the candidates the reviewer menu would offer. A host with
+            // no candidate list (Azure DevOps) takes the name as given, as the page does.
+            const { capabilities } = yield* service.detail(ref).pipe(Effect.mapError(hostFailure));
+            const candidates = capabilities.reviewers.listCandidates
+              ? (yield* service.reviewerCandidates(ref).pipe(Effect.mapError(hostFailure)))
+                  .candidates
+              : undefined;
+            const reviewers = [];
+            for (const reviewer of named) {
+              if (candidates === undefined) {
+                reviewers.push({ id: reviewer.id, kind: reviewer.kind ?? ("user" as const) });
+                continue;
+              }
               const name = reviewer.id.toLowerCase();
               const match = candidates.find(
                 (candidate) =>
                   (reviewer.kind === undefined || candidate.kind === reviewer.kind) &&
                   (candidate.id.toLowerCase() === name || candidate.login.toLowerCase() === name),
               );
-              return match === undefined
-                ? { id: reviewer.id, kind: reviewer.kind ?? ("user" as const) }
-                : { id: match.id, kind: match.kind };
-            });
+              // An unmatched name would be silently ignored by hosts that want their own ids.
+              if (match === undefined)
+                return yield* invalid(`${reviewer.id} is not a reviewer this host offers.`);
+              reviewers.push({ id: match.id, kind: match.kind });
+            }
             yield* service
               .requestReviewers({
                 ...ref,

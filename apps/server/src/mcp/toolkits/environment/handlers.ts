@@ -59,9 +59,17 @@ export const mcpSettings = (settings: ServerSettings) =>
     Effect.map((encoded) => ({
       ...encoded,
       providers: mapRecord(encoded.providers, redactSecretFields),
+      // Instance configs are opaque driver data that can nest credentials anywhere; only the
+      // custom models this tool can change are returned.
       providerInstances: mapRecord(encoded.providerInstances, (instance) =>
         isRecord(instance) && "config" in instance
-          ? { ...instance, config: redactSecretFields(instance.config) }
+          ? {
+              ...instance,
+              config:
+                isRecord(instance.config) && Array.isArray(instance.config.customModels)
+                  ? { customModels: instance.config.customModels }
+                  : {},
+            }
           : instance,
       ),
     })),
@@ -176,6 +184,10 @@ function providerInstanceChange(
   const enabled = change.enabled === undefined ? {} : { enabled: change.enabled };
   const instance = current.providerInstances[change.instanceId];
   if (instance !== undefined) {
+    if (change.customModels !== undefined && !isRecord(instance.config))
+      return Effect.fail(
+        invalid("This instance's config is not an object; change its models in the Settings UI."),
+      );
     const config = isRecord(instance.config) ? instance.config : {};
     const mutation: ProviderInstanceMutation = {
       operation: "upsert",
@@ -288,6 +300,12 @@ export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
             ? { patch: {} }
             : yield* providerInstanceChange(current, providerInstance);
         const patch: ServerSettingsPatch = { ...extra, ...instanceChange.patch, ...fields };
+        // Settings and keybindings persist separately, so one call changes one of them.
+        if (
+          keybinding !== undefined &&
+          (instanceChange.mutation !== undefined || Object.keys(patch).length > 0)
+        )
+          return yield* invalid("Change settings and a keybinding in separate calls.");
 
         let next = current;
         if (
