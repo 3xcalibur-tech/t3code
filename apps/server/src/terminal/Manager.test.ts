@@ -1036,7 +1036,7 @@ it.layer(
     }),
   );
 
-  it.effect("ignores trailing writes after terminal exit", () =>
+  it.effect("ignores trailing writes after terminal exit unless a running shell is required", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
       yield* manager.open(openInput());
@@ -1050,6 +1050,20 @@ it.layer(
         threadId: "thread-1",
         terminalId: DEFAULT_TERMINAL_ID,
         data: "\r",
+      });
+      expect(process.writes).toEqual([]);
+      const error = yield* Effect.flip(
+        manager.write({
+          threadId: "thread-1",
+          terminalId: DEFAULT_TERMINAL_ID,
+          data: "echo must-not-succeed\r",
+          requireRunning: true,
+        }),
+      );
+      expect(error).toMatchObject({
+        _tag: "TerminalNotRunningError",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
       });
       expect(process.writes).toEqual([]);
     }),

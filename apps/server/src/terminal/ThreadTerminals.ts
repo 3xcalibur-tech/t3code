@@ -10,7 +10,6 @@ import {
   type ProjectId,
   type TerminalAttachInput,
   type TerminalError,
-  TerminalNotRunningError,
   type TerminalSessionSnapshot,
   TerminalSessionLookupError,
   type TerminalSummary,
@@ -226,18 +225,10 @@ const make = Effect.gen(function* () {
 
   const write: ThreadTerminals["Service"]["write"] = Effect.fn("ThreadTerminals.write")(
     function* (input) {
-      const terminal = yield* find(input.threadId, input.terminalId);
-      // A write to an exited shell is dropped without an error, so check first.
-      if (terminal.status !== "running") {
-        return yield* new TerminalNotRunningError({
-          threadId: input.threadId,
-          terminalId: terminal.terminalId,
-        });
-      }
+      // Check in the manager so an exit after reading metadata cannot drop input silently.
       yield* terminals.write({
-        threadId: input.threadId,
-        terminalId: terminal.terminalId,
-        data: input.data,
+        ...input,
+        requireRunning: true,
       });
     },
   );

@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -39,29 +40,34 @@ const make = Effect.gen(function* () {
   // Intents are momentary; a client that stops draining keeps only the latest few.
   const pubsub = yield* PubSub.sliding<ClientIntent>(8);
   const subscribers = yield* Ref.make(0);
+  const subscriptionLock = yield* Semaphore.make(1);
 
   return ClientIntents.of({
     openThread: (input) =>
       Effect.gen(function* () {
         const intentId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
         const targetClientId = yield* broker.lastFocusedClientId(input.environmentId);
-        yield* PubSub.publish(pubsub, {
-          type: "openThread",
-          intentId,
-          ...input,
-          ...(targetClientId === undefined ? {} : { targetClientId }),
-        });
-        return (yield* Ref.get(subscribers)) > 0;
+        return yield* subscriptionLock.withPermit(
+          Effect.gen(function* () {
+            yield* PubSub.publish(pubsub, {
+              type: "openThread",
+              intentId,
+              ...input,
+              ...(targetClientId === undefined ? {} : { targetClientId }),
+            });
+            return (yield* Ref.get(subscribers)) > 0;
+          }),
+        );
       }),
     stream: Stream.unwrap(
       Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(pubsub);
         yield* Effect.acquireRelease(
           Ref.update(subscribers, (count) => count + 1),
-          () => Ref.update(subscribers, (count) => count - 1),
+          () => subscriptionLock.withPermit(Ref.update(subscribers, (count) => count - 1)),
         );
         return Stream.fromSubscription(subscription);
-      }),
+      }).pipe(subscriptionLock.withPermit),
     ),
   });
 });

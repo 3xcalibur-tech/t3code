@@ -173,7 +173,9 @@ export class TerminalManager extends Context.Service<
     /**
      * Write input bytes to a terminal session.
      */
-    readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
+    readonly write: (
+      input: TerminalWriteInput & { readonly requireRunning?: boolean },
+    ) => Effect.Effect<void, TerminalError>;
 
     /**
      * Resize the PTY backing a terminal session.
@@ -2950,7 +2952,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     const session = yield* requireSession(input.threadId, terminalId);
     const process = session.process;
     if (!process || session.status !== "running") {
-      if (session.status === "exited") return;
+      if (session.status === "exited" && !input.requireRunning) return;
       return yield* new TerminalNotRunningError({
         threadId: input.threadId,
         terminalId,

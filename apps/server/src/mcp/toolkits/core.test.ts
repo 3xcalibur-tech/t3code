@@ -477,11 +477,40 @@ it.effect("redacts every credential from MCP settings", () =>
         },
       },
       bitbucket: { email: "", accessToken: "secret-token", apiToken: "" },
+      usageLimitSources: {
+        proxy: {
+          kind: "cliproxy",
+          url: "https://user:secret-url-password@example.com/usage?key=secret-query",
+          managementKey: "secret-management-key",
+          enabled: true,
+        },
+      },
+      observability: {
+        ...DEFAULT_SERVER_SETTINGS.observability,
+        otlpTracesUrl: "https://user:secret-traces@example.com/v1/traces",
+        otlpMetricsUrl: "https://example.com/v1/metrics?token=secret-metrics",
+        otlpLogsUrl: "https://user:secret-logs@example.com/v1/logs",
+      },
     } as typeof DEFAULT_SERVER_SETTINGS;
     const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
       yield* AgentSettings.redactSettingsForAgent(settings),
     );
-    for (const secret of ["secret-api-key", "secret-password", "secret-env", "secret-token"])
+    for (const secret of [
+      "secret-api-key",
+      "secret-password",
+      "secret-env",
+      "secret-token",
+      "secret-url-password",
+      "secret-query",
+      "secret-management-key",
+      "secret-traces",
+      "secret-metrics",
+      "secret-logs",
+    ])
       expect(text).not.toContain(secret);
+    expect(text).toContain("https://example.com/usage");
+    expect(text).toContain("https://example.com/v1/traces");
+    expect(text).toContain("https://example.com/v1/metrics");
+    expect(text).toContain("https://example.com/v1/logs");
   }),
 );
