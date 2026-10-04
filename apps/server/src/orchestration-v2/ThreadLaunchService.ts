@@ -224,46 +224,21 @@ const make = Effect.gen(function* () {
     }
   });
 
-  // `git worktree add` needs a commit to start from. True when neither HEAD
-  // nor the base ref has one and origin does not have the base ref either.
-  const hasNothingToCheckOut = Effect.fn("ThreadLaunchService.hasNothingToCheckOut")(function* (
-    cwd: string,
-    strategy: Extract<ThreadLaunchWorkspaceStrategy, { readonly type: "worktree" }>,
-  ) {
-    if (yield* git.hasCommit({ cwd, refName: "HEAD" })) return false;
-    if (yield* git.hasCommit({ cwd, refName: strategy.baseRef })) return false;
-    const remote = { cwd, remoteName: "origin", refName: strategy.baseRef };
-    if (strategy.startFromOrigin !== true || !(yield* git.remoteExists(remote))) return true;
-    yield* git.fetchRemote(remote);
-    return !(yield* git.remoteBranchExists(remote));
-  });
-
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
-    requested: PreparationInput,
+    input: PreparationInput,
     threadId: ThreadId,
     runId: RunId | null,
   ) {
-    const project = yield* projects.getById(requested.projectId).pipe(
-      Effect.mapError(mapError(requested, "resolve-project", threadId)),
+    const project = yield* projects.getById(input.projectId).pipe(
+      Effect.mapError(mapError(input, "resolve-project", threadId)),
       Effect.flatMap(
         Option.match({
           onNone: () =>
-            Effect.fail(
-              mapError(requested, "resolve-project", threadId)("Project no longer exists."),
-            ),
+            Effect.fail(mapError(input, "resolve-project", threadId)("Project no longer exists.")),
           onSome: Effect.succeed,
         }),
       ),
     );
-    // A repository with no commits yet runs the thread in its project folder,
-    // as a non-Git project does: a worktree of it would be empty.
-    const input: PreparationInput =
-      requested.workspaceStrategy.type === "worktree" &&
-      (yield* hasNothingToCheckOut(project.workspaceRoot, requested.workspaceStrategy).pipe(
-        Effect.mapError(mapError(requested, "provision-worktree", threadId)),
-      ))
-        ? { ...requested, workspaceStrategy: { type: "root" } }
-        : requested;
 
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
@@ -388,33 +363,49 @@ const make = Effect.gen(function* () {
           }
         }
         if (startFromOrigin) yield* setupTracker.stageStatus(threadId, "fetch", "done");
-        yield* setupTracker.stageStatus(threadId, "checkout", "running");
-        const worktree = yield* git
-          .createWorktree(
-            {
-              cwd: project.workspaceRoot,
-              refName: startRef,
-              newRefName: branch!,
-              baseRefName: input.workspaceStrategy.baseRef,
-              path: null,
-            },
-            {
-              progress: {
-                onWorktreeClaimed: (path) =>
-                  Effect.sync(() => {
-                    createdWorktreePath = path;
-                  }),
-                onCheckoutProgress: (progress) =>
-                  setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+        // `git worktree add` needs a commit to start from. A repository with
+        // none yet runs the thread in its project folder, as a non-Git project
+        // does: a worktree of it would be empty anyway.
+        const hasCommit = (refName: string) =>
+          git
+            .hasCommit({ cwd: project.workspaceRoot, refName })
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        if (!(yield* hasCommit(startRef)) && !(yield* hasCommit("HEAD"))) {
+          branch = null;
+          yield* setupTracker.discard(threadId);
+        } else {
+          yield* setupTracker.stageStatus(threadId, "checkout", "running");
+          const worktree = yield* git
+            .createWorktree(
+              {
+                cwd: project.workspaceRoot,
+                refName: startRef,
+                newRefName: branch!,
+                baseRefName: input.workspaceStrategy.baseRef,
+                path: null,
               },
-            },
-          )
-          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
-        worktreePath = worktree.worktree.path;
-        branch = worktree.worktree.refName;
-        createdWorktreePath = worktreePath;
-        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
-        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+              {
+                progress: {
+                  onWorktreeClaimed: (path) =>
+                    Effect.sync(() => {
+                      createdWorktreePath = path;
+                    }),
+                  onCheckoutProgress: (progress) =>
+                    setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+                },
+              },
+            )
+            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+          worktreePath = worktree.worktree.path;
+          branch = worktree.worktree.refName;
+          createdWorktreePath = worktreePath;
+          yield* setupTracker.update(threadId, (snapshot) => ({
+            ...snapshot,
+            worktreePath,
+            branch,
+          }));
+          yield* setupTracker.stageStatus(threadId, "checkout", "done");
+        }
       }
 
       // A reused worktree is already recorded, and rewriting it could undo

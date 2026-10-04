@@ -1147,13 +1147,23 @@ it.effect.each([
       assert.isNull(thread.branch);
       assert.equal(harness.createWorktree.mock.calls.length, 0);
       assert.equal(harness.runSetup.mock.calls[0]?.[0]?.worktreePath, project.workspaceRoot);
+      assert.isNull(
+        yield* (yield* WorktreeSetupTracker.WorktreeSetupTracker).get(launched.threadId),
+      );
     }).pipe(Effect.provide(harness.layer));
   }),
 );
 
-it.effect("still checks out from origin when only the local repository has no commits", () =>
+it.effect.each([
+  { baseRef: "main", originHasBase: true, startRef: "remote-main-sha" },
+  { baseRef: "origin/main", originHasBase: false, startRef: "origin/main" },
+])("checks out $baseRef fetched from origin when the local repository has no commits", (testCase) =>
   Effect.gen(function* () {
-    const harness = makeHarness({ hasCommit: () => Effect.succeed(false) });
+    // Only what the origin fetch brought resolves to a commit.
+    const harness = makeHarness({
+      hasCommit: ({ refName }) => Effect.succeed(refName === testCase.startRef),
+      remoteBranchExists: () => Effect.succeed(testCase.originHasBase),
+    });
     yield* Effect.gen(function* () {
       const launches = yield* ThreadLaunch.ThreadLaunchService;
       yield* launches.launch(
@@ -1161,11 +1171,11 @@ it.effect("still checks out from origin when only the local repository has no co
           command: "command:launch:empty-repo-origin",
           thread: "thread:launch:empty-repo-origin",
           message: "Build the feature",
-          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
+          workspace: { type: "worktree", baseRef: testCase.baseRef, startFromOrigin: true },
         }),
       );
       yield* waitUntil(() => Effect.sync(() => harness.createWorktree.mock.calls.length === 1));
-      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.refName, "remote-main-sha");
+      assert.equal(harness.createWorktree.mock.calls[0]?.[0]?.refName, testCase.startRef);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
