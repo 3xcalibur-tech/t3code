@@ -23,11 +23,11 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
       const review = yield* Review.ReviewService;
       // A file request reads a single source; branch-range covers committed and uncommitted work.
       const sourceKind = input.source ?? (input.file === undefined ? undefined : "branch-range");
-      const readPreview = (file?: ReviewDiffPreviewInput["file"]) =>
+      const readPreview = (file?: ReviewDiffPreviewInput["file"], baseRef = input.baseRef) =>
         review
           .getDiffPreview({
             cwd: thread.worktreePath ?? project.value.workspaceRoot,
-            ...(input.baseRef === undefined ? {} : { baseRef: input.baseRef }),
+            ...(baseRef === undefined ? {} : { baseRef }),
             ...(file === undefined ? {} : { file }),
           })
           .pipe(
@@ -57,7 +57,11 @@ export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
             ?.files?.find((file) => file.path === input.file)?.previousPath ?? null;
         preview = yield* readPreview({ path: input.file, previousPath, sourceKind });
       } else {
-        preview = yield* readPreview();
+        // The working tree needs no base, so a baseRef the branch range can't use is not passed.
+        preview = yield* readPreview(
+          undefined,
+          sourceKind === "working-tree" ? undefined : input.baseRef,
+        );
       }
       if (preview.sources.length === 0)
         return yield* invalid("The thread's checkout is not a git repository.");
