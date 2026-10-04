@@ -574,14 +574,15 @@ const make = Effect.gen(function* () {
             cancelled ? "cancelled" : "failed",
             cancelled ? null : failureDetail(Cause.squash(cause)),
           );
-          // A cancelled setup leaves nothing behind. A failed one keeps a worktree
-          // the thread recorded, so a retry reuses it, and removes one it never
-          // recorded, which a retry would otherwise duplicate.
+          // A cancelled setup leaves nothing behind, including a script still
+          // running in a worktree or the project folder. A failed one keeps a
+          // worktree the thread recorded, so a retry reuses it, and removes one
+          // it never recorded, which a retry would otherwise duplicate.
+          if (tracked && cancelled && setupTerminalId)
+            yield* terminals
+              .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
+              .pipe(Effect.ignore);
           if (tracked && createdWorktreePath && (cancelled || !workspaceRecorded)) {
-            if (setupTerminalId)
-              yield* terminals
-                .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
-                .pipe(Effect.ignore);
             const removedPath = createdWorktreePath;
             // The thread forgets the worktree only once it is gone; a failed
             // removal leaves the directory for the user to clean up rather than

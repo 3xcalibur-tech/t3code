@@ -137,6 +137,9 @@ function makeHarness(options: HarnessOptions = {}) {
   const runSetup = vi.fn(
     options.runSetup ?? (() => Effect.succeed({ status: "no-script" as const })),
   );
+  const closeTerminal = vi.fn(
+    (_input: Parameters<TerminalManager.TerminalManager["Service"]["close"]>[0]) => Effect.void,
+  );
   const generateBranchName = vi.fn(
     options.generateBranchName ?? (() => Effect.succeed({ branch: "generated-branch" })),
   );
@@ -146,7 +149,7 @@ function makeHarness(options: HarnessOptions = {}) {
   const externalServices = Layer.mergeAll(
     WorktreeSetupTracker.layer,
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
-    Layer.mock(TerminalManager.TerminalManager)({ close: () => Effect.void }),
+    Layer.mock(TerminalManager.TerminalManager)({ close: closeTerminal }),
     Layer.succeed(ProjectService.ProjectService, {
       create: () => Effect.die("unused"),
       bootstrap: () => Effect.die("unused"),
@@ -233,6 +236,7 @@ function makeHarness(options: HarnessOptions = {}) {
     generateBranchName,
     generateThreadTitle,
     runSetup,
+    closeTerminal,
   };
 }
 
@@ -2233,6 +2237,52 @@ it.effect("cancels tracked setup before provider work is released", () =>
       assert.equal(projection.runs[0]?.status, "failed");
       assert.isNull(projection.thread.worktreePath);
       assert.isEmpty(yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)));
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("cancelling setup in an empty repository stops its script in the project folder", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      hasCommit: () => Effect.succeed(false),
+      runSetup: (input) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.as({
+            status: "started" as const,
+            async: false,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "vp install",
+            terminalId: "setup",
+            cwd: input.worktreePath,
+            completion: Effect.never,
+          }),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "launch:cancel-empty-repo",
+          thread: "thread:cancel-empty-repo",
+          message: "Start",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      yield* Deferred.await(entered);
+      yield* waitUntil(() =>
+        tracker
+          .get(launched.threadId)
+          .pipe(Effect.map((setup) => setup?.setupScript?.terminalId === "setup")),
+      );
+      assert.isTrue(yield* tracker.cancel(launched.threadId));
+      assert.deepInclude(harness.closeTerminal.mock.calls[0]?.[0], {
+        threadId: launched.threadId,
+        terminalId: "setup",
+      });
+      assert.equal(harness.removeWorktree.mock.calls.length, 0);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
