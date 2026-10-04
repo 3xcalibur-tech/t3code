@@ -7,6 +7,7 @@ import {
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
+  type ProviderApprovalDecision,
   ProviderRequestKind,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -54,6 +55,13 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
 });
 
 const isApprovalKind = Schema.is(ProviderRequestKind);
+// The composer's choices when a provider advertises none.
+const defaultApprovalDecisions: ReadonlyArray<ProviderApprovalDecision> = [
+  "cancel",
+  "decline",
+  "acceptForSession",
+  "accept",
+];
 /** Pending requests a caller can act on: user questions and approvals. */
 const isPendingRequest = (request: OrchestrationV2ThreadProjection["runtimeRequests"][number]) =>
   request.status === "pending" && (request.kind === "user_input" || isApprovalKind(request.kind));
@@ -245,7 +253,7 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
     }),
   t3_pending_request_respond: (input) =>
     Effect.gen(function* () {
-      const { threads, projection, request } = yield* readPendingRequest(input, true);
+      const { threads, projection, request, item } = yield* readPendingRequest(input, true);
       const approval = request.kind !== "user_input";
       const response = approval
         ? input.decision === undefined
@@ -258,6 +266,19 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: approval ? "Approvals need a decision." : "User questions need answers.",
+        });
+      // Like the composer, offer only the provider's options, else the same defaults.
+      const offered = item?.type === "approval_request" ? item.options : undefined;
+      if (
+        approval &&
+        input.decision !== undefined &&
+        !(offered?.map((option) => option.decision) ?? defaultApprovalDecisions).includes(
+          input.decision,
+        )
+      )
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "That decision was not offered for this approval.",
         });
       // Approving lets the caller run commands in the target thread.
       if (approval)
