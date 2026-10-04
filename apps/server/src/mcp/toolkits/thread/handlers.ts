@@ -3,7 +3,6 @@ import {
   type RuntimeRequestId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2ThreadShell,
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
@@ -23,6 +22,7 @@ import {
   readWritableThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as ThreadInbox from "../../../orchestration-v2/ThreadInbox.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
@@ -95,38 +95,6 @@ const readPendingRequest = Effect.fn("mcp.readPendingRequest")(function* (
   return { ...context, request, item };
 });
 
-/** Mirrors the client's early wake: a fresh completion or failure after the snooze. */
-function raisedHandWhileSnoozed(shell: OrchestrationV2ThreadShell) {
-  const completedAt = shell.latestRunCompletedAt ?? null;
-  const snoozedAt = shell.snoozedAt ?? null;
-  if (snoozedAt === null) return shell.status === "failed";
-  return (
-    (shell.status === "completed" || shell.status === "failed") &&
-    completedAt !== null &&
-    DateTime.isGreaterThan(completedAt, snoozedAt)
-  );
-}
-
-/** Why a thread needs attention, if it does. unread mirrors the client's hasUnseenCompletion. */
-function inboxReason(shell: OrchestrationV2ThreadShell, now: DateTime.Utc) {
-  if (shell.pendingRuntimeRequest !== null) return "pending_request" as const;
-  if (shell.settledOverride === "settled") return null;
-  if (
-    shell.snoozedUntil != null &&
-    DateTime.isGreaterThan(shell.snoozedUntil, now) &&
-    !raisedHandWhileSnoozed(shell)
-  )
-    return null;
-  if (shell.status === "failed") return "error" as const;
-  const completedAt = shell.latestRunCompletedAt ?? null;
-  const visitedAt = shell.lastVisitedAt ?? null;
-  return completedAt !== null &&
-    visitedAt !== null &&
-    DateTime.isGreaterThan(completedAt, visitedAt)
-    ? ("unread" as const)
-    : null;
-}
-const inboxReasonOrder = ["pending_request", "error", "unread"] as const;
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
@@ -340,27 +308,16 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
     }),
   t3_inbox: (input) =>
     Effect.gen(function* () {
-      const { threads, caller } = yield* readCaller();
+      const { caller } = yield* readCaller();
       // Like t3_thread_search, an omitted project means the caller's own; a client outside
       // a thread sees every project.
       const projectId = input.projectId ?? caller?.projectId;
-      const snapshot = yield* threads.getShellSnapshot().pipe(Effect.mapError(unavailable));
-      const now = yield* DateTime.now;
-      const items = snapshot.threads
-        .flatMap((shell) => {
-          if (shell.archivedAt !== null || shell.deletedAt !== null) return [];
-          if (projectId !== undefined && shell.projectId !== projectId) return [];
-          const reason = inboxReason(shell, now);
-          return reason === null ? [] : [{ shell, reason }];
-        })
-        .toSorted(
-          (left, right) =>
-            inboxReasonOrder.indexOf(left.reason) - inboxReasonOrder.indexOf(right.reason) ||
-            DateTime.toEpochMillis(right.shell.updatedAt) -
-              DateTime.toEpochMillis(left.shell.updatedAt),
-        );
+      const inbox = yield* ThreadInbox.ThreadInbox;
+      const items = yield* inbox
+        .list({ projectId, limit: input.limit })
+        .pipe(Effect.mapError(unavailable));
       return {
-        items: items.slice(0, input.limit ?? 50).map(({ shell, reason }) => ({
+        items: items.map(({ shell, reason }) => ({
           threadId: shell.id,
           projectId: shell.projectId,
           title: shell.title,

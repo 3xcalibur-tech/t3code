@@ -48,6 +48,7 @@ import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { ReviewToolkitHandlersLive } from "./toolkits/review/handlers.ts";
 import { ReviewToolkit } from "./toolkits/review/tools.ts";
+import * as ThreadInbox from "../orchestration-v2/ThreadInbox.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -670,6 +671,7 @@ export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(Orchestrato
 
 export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
   Layer.provide(ThreadToolkitHandlersLive),
+  Layer.provide(ThreadInbox.layer),
 );
 
 const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
