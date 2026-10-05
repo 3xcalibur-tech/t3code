@@ -2130,6 +2130,7 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  openedByThreadId: parent.thread.id,
                 })
                 .pipe(
                   Effect.mapError((error) =>
