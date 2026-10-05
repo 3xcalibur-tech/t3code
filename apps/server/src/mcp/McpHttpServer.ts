@@ -13,13 +13,15 @@ import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
 import { McpProtocol, McpSchema, McpServer, Tool, type Toolkit } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { PreviewAutomationError } from "@t3tools/contracts";
+import { PreviewAutomationError, ThreadId } from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { agentToolProperties } from "../telemetry/ProviderDimensions.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
@@ -650,9 +652,41 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 });
 
 /**
+ * Tools that hand work to another thread's agent: they create it, message it,
+ * steer it, or move context into it. Their events name the receiving agent too.
+ */
+const HANDOFF_TOOLS: ReadonlySet<string> = new Set([
+  "delegate_task",
+  "create_threads",
+  "t3_thread_launch",
+  "t3_thread_send",
+  "t3_thread_send_attachments",
+  "t3_thread_fork",
+  "t3_thread_merge_back",
+  "t3_queue_edit",
+  "t3_queue_promote_to_steer",
+  "t3_pending_request_respond",
+  "schedule_task",
+  "run_scheduled_task_now",
+]);
+
+const resultThreadKeys = ["childThreadId", "targetThreadId", "boundThreadId", "threadId"] as const;
+
+/** Thread ids a handoff tool result names: the thread that received the work. */
+const resultThreadIds = (content: unknown): ReadonlyArray<string> => {
+  if (typeof content !== "object" || content === null) return [];
+  const record = content as Readonly<Record<string, unknown>>;
+  if (Array.isArray(record.threads)) return record.threads.flatMap(resultThreadIds);
+  const key = resultThreadKeys.find((candidate) => typeof record[candidate] === "string");
+  return key === undefined ? [] : [record[key] as string];
+};
+
+/**
  * Runs a tool registration against a server that records one anonymous
- * `mcp.tool.invoked` event per call: the tool name and the calling agent's
- * driver kind. Arguments, results, and ids are never recorded.
+ * `mcp.tool.invoked` event per call. The event names the tool and the calling
+ * agent's provider and model. A handoff tool also names the provider and model
+ * of each thread that received the work, so delegation between providers is
+ * visible. Arguments, results, ids, and text are never recorded.
  */
 const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
   Effect.gen(function* () {
@@ -660,19 +694,43 @@ const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
     const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
     if (Option.isNone(analytics)) return yield* registration;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-    const record = (tool: string) =>
+    const threads = yield* Effect.serviceOption(ThreadManagement.ThreadManagementService);
+    const modelSelectionOf = (threadId: string) =>
+      Option.isNone(threads)
+        ? Effect.succeed(undefined)
+        : threads.value.getThreadShell(ThreadId.make(threadId)).pipe(
+            Effect.map((shell) => shell?.modelSelection),
+            Effect.orElseSucceed(() => undefined),
+          );
+    const record = (tool: string, result: McpSchema.CallToolResult | undefined) =>
       Effect.gen(function* () {
-        const invocation = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+        const invocation = Option.getOrUndefined(
+          yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+        );
         const providers = Option.isSome(registry) ? yield* registry.value.getProviders : [];
-        const caller = Option.isSome(invocation)
-          ? providers.find(
-              (provider) => provider.instanceId === invocation.value.providerInstanceId,
+        // Only handoff tools pay for thread lookups; the rest report the
+        // caller's provider from the credential and skip its model.
+        const handoff = HANDOFF_TOOLS.has(tool);
+        const caller =
+          invocation === undefined
+            ? undefined
+            : handoff
+              ? yield* modelSelectionOf(invocation.threadId)
+              : { instanceId: invocation.providerInstanceId, model: "" };
+        const targetIds = handoff
+          ? [...new Set(resultThreadIds(result?.structuredContent))].filter(
+              (threadId) => threadId !== invocation?.threadId,
             )
-          : undefined;
-        yield* analytics.value.record("mcp.tool.invoked", {
+          : [];
+        const targets = yield* Effect.forEach(targetIds, modelSelectionOf);
+        for (const properties of agentToolProperties({
           tool,
-          provider: caller?.driver ?? "unknown",
-        });
+          providers,
+          caller,
+          targets: targets.filter((selection) => selection !== undefined),
+        })) {
+          yield* analytics.value.record("mcp.tool.invoked", properties);
+        }
       }).pipe(Effect.ignoreCause);
     const recordingServer = McpServer.McpServer.of({
       ...server,
@@ -680,7 +738,13 @@ const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
         server.addTool({
           ...options,
           handle: (payload) =>
-            record(options.tool.name).pipe(Effect.andThen(options.handle(payload))),
+            options
+              .handle(payload)
+              .pipe(
+                Effect.onExit((exit) =>
+                  record(options.tool.name, exit._tag === "Success" ? exit.value : undefined),
+                ),
+              ),
         }),
     });
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));

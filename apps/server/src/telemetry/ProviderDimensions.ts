@@ -35,21 +35,34 @@ export function providerDimensions(
     : { provider: provider.driver };
 }
 
-/** Event properties relating the agent that delegated work to the agent that received it. */
-export function delegationProperties(input: {
+/**
+ * Event properties for an agent tool call: the calling agent, and when the call
+ * acted on other threads, the agents running them. Each target counts once, so
+ * a create_threads batch on two providers reports both.
+ */
+export function agentToolProperties(input: {
   readonly tool: string;
   readonly providers: ReadonlyArray<ServerProvider>;
-  readonly caller: ModelSelection;
-  readonly target: ModelSelection;
-}): Readonly<Record<string, unknown>> {
-  const caller = providerDimensions(input.providers, input.caller);
-  const target = providerDimensions(input.providers, input.target);
-  return {
+  readonly caller: ModelSelection | undefined;
+  readonly targets: ReadonlyArray<ModelSelection>;
+}): ReadonlyArray<Readonly<Record<string, unknown>>> {
+  const caller =
+    input.caller === undefined
+      ? { provider: "unknown" }
+      : providerDimensions(input.providers, input.caller);
+  const base = {
     tool: input.tool,
     callerProvider: caller.provider,
     ...(caller.model === undefined ? {} : { callerModel: caller.model }),
-    targetProvider: target.provider,
-    ...(target.model === undefined ? {} : { targetModel: target.model }),
-    crossProvider: caller.provider !== target.provider,
   };
+  if (input.targets.length === 0) return [base];
+  return input.targets.map((selection) => {
+    const target = providerDimensions(input.providers, selection);
+    return {
+      ...base,
+      targetProvider: target.provider,
+      ...(target.model === undefined ? {} : { targetModel: target.model }),
+      crossProvider: caller.provider !== target.provider,
+    };
+  });
 }

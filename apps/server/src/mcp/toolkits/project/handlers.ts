@@ -1,10 +1,4 @@
-import {
-  MessageId,
-  type ModelSelection,
-  ThreadId,
-  OrchestratorMcpFailure,
-  ProjectId,
-} from "@t3tools/contracts";
+import { MessageId, ThreadId, OrchestratorMcpFailure, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
@@ -12,9 +6,6 @@ import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
-import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
-import * as AnalyticsService from "../../../telemetry/AnalyticsService.ts";
-import { delegationProperties } from "../../../telemetry/ProviderDimensions.ts";
 import { newCommandId, readCaller, readMutationCaller, unavailable } from "../../threadAccess.ts";
 import { ProjectToolkit } from "./tools.ts";
 
@@ -46,19 +37,6 @@ const mutation = Effect.gen(function* () {
     });
   return yield* Project.ProjectService;
 });
-/** Records which agent launched a thread on which provider, without ids or prompts. */
-const recordLaunch = (caller: ModelSelection, target: ModelSelection) =>
-  Effect.gen(function* () {
-    const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
-    const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
-    if (Option.isNone(analytics) || Option.isNone(registry)) return;
-    const providers = yield* registry.value.getProviders;
-    yield* analytics.value.record(
-      "mcp.agent.delegated",
-      delegationProperties({ tool: "t3_thread_launch", providers, caller, target }),
-    );
-  }).pipe(Effect.ignoreCause);
-
 export const ProjectHandlersLive = ProjectToolkit.toLayer({
   t3_thread_launch: (input) =>
     Effect.gen(function* () {
@@ -129,7 +107,6 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
       );
       const thread = result.projection.thread;
       const run = result.projection.runs.find((run) => run.userMessageId === messageId);
-      yield* recordLaunch(caller.modelSelection, thread.modelSelection);
       return {
         threadId: thread.id,
         projectId: thread.projectId,

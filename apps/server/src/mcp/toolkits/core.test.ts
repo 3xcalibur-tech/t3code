@@ -159,12 +159,24 @@ it.effect("returns a bounded public failure without serializing storage causes",
   ),
 );
 
-it.effect("records one anonymous analytics event per tool call", () => {
+it.effect("records the calling agent and the agent a tool acted on", () => {
   const recorded: Array<{ event: string; properties: unknown }> = [];
+  const shell = (id: ThreadId, instanceId: string, model: string) =>
+    ({
+      id,
+      projectId: "mcp-core-project",
+      providerInstanceId: ProviderInstanceId.make(instanceId),
+      modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      archivedAt: null,
+      deletedAt: null,
+      activeRunId: "mcp-core-run",
+    }) as never;
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     yield* server
-      .callTool({ name: "t3_thread_organize", arguments: { action: "pin" } })
+      .callTool({ name: "t3_thread_fork", arguments: { sourcePoint: { type: "latest_stable" } } })
       .pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
@@ -172,7 +184,14 @@ it.effect("records one anonymous analytics event per tool call", () => {
     expect(recorded).toEqual([
       {
         event: "mcp.tool.invoked",
-        properties: { tool: "t3_thread_organize", provider: "codex" },
+        properties: {
+          tool: "t3_thread_fork",
+          callerProvider: "codex",
+          callerModel: "gpt-5.5",
+          targetProvider: "claudeAgent",
+          targetModel: "claude-opus-5-5",
+          crossProvider: true,
+        },
       },
     ]);
   }).pipe(
@@ -182,13 +201,30 @@ it.effect("records one anonymous analytics event per tool call", () => {
         Layer.provide(NodeCrypto.layer),
         Layer.provide(
           Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: () => Effect.succeed(null),
+            getThreadShell: (id) =>
+              Effect.succeed(
+                id === threadId
+                  ? shell(threadId, "codex", "gpt-5.5")
+                  : shell(id, "claudeAgent", "claude-opus-5-5"),
+              ),
+            getProjectThreadRecords: () =>
+              Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
+            dispatch: () => Effect.succeed({ sequence: 1 } as never),
           }),
         ),
         Layer.provide(
           Layer.mock(ProviderRegistry.ProviderRegistry)({
             getProviders: Effect.succeed([
-              { instanceId: ProviderInstanceId.make("codex"), driver: "codex" } as never,
+              {
+                instanceId: ProviderInstanceId.make("codex"),
+                driver: "codex",
+                models: [{ slug: "gpt-5.5", isCustom: false }],
+              } as never,
+              {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                driver: "claudeAgent",
+                models: [{ slug: "claude-opus-5-5", isCustom: false }],
+              } as never,
             ]),
           }),
         ),
