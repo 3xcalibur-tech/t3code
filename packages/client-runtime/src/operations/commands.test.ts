@@ -504,6 +504,89 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect.each([false, true])(
+    "Stop ends PR watches and resumed child work, children %s",
+    (withChildren) =>
+      Effect.gen(function* () {
+        const childThreadId = ThreadId.make("watch:resumed-child");
+        const childRunId = RunId.make("watch:child-run");
+        const queuedRunId = RunId.make("watch:queued-follow-up");
+        const link = {
+          host: "github.com",
+          repository: "pingdotgg/t3code",
+          url: "https://github.com/pingdotgg/t3code/pull/7",
+          source: "agent" as const,
+          linkedAt: "2026-10-05T00:00:00.000Z",
+          snapshot: null,
+          stack: null,
+        };
+        const watch = {
+          startedAt: "2026-10-05T00:00:00.000Z",
+          headSha: null,
+          failedChecks: [],
+          passed: false,
+          passedChecks: [],
+          remarksThrough: "2026-10-05T00:00:00.000Z",
+          remarkIds: [],
+          conflicting: false,
+          wakes: 0,
+        };
+        const projection: OrchestrationV2ThreadProjection = {
+          ...v2Projection,
+          childInterruptTargets: withChildren
+            ? [
+                { threadId: childThreadId, runId: childRunId, action: "interrupt" },
+                { threadId: childThreadId, runId: queuedRunId, action: "cancel" },
+              ]
+            : [],
+          thread: {
+            ...v2Projection.thread,
+            pullRequests: [
+              { ...link, number: 7, watch },
+              { ...link, number: 8 },
+              { ...link, number: 9, source: "stack-dismissed", watch },
+            ],
+          },
+        };
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+
+        const result = yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+
+        expect(commands).toEqual([
+          ...(withChildren
+            ? [
+                {
+                  type: "run.interrupt",
+                  commandId: expect.any(String),
+                  threadId: childThreadId,
+                  runId: childRunId,
+                  holdQueue: true,
+                },
+                {
+                  type: "queued-run.cancel",
+                  commandId: expect.any(String),
+                  threadId: childThreadId,
+                  runId: queuedRunId,
+                },
+              ]
+            : []),
+          {
+            type: "thread.pull-request.watch",
+            commandId: expect.any(String),
+            threadId: v2ThreadId,
+            host: "github.com",
+            repository: "pingdotgg/t3code",
+            number: 7,
+            watching: false,
+          },
+        ]);
+        expect(result.sequence).toBe(commands.length);
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect.each([
     "waiting",
     "completed",

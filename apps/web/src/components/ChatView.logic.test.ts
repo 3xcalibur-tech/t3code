@@ -93,6 +93,46 @@ import {
 } from "./ChatView.logic";
 
 describe("pending background tasks", () => {
+  it("includes PR watches when the waiting roster falls back to the projection", () => {
+    const projection = makeThreadProjectionFixture();
+    const tasks = resolvePendingBackgroundTasks(null, {
+      ...projection,
+      thread: {
+        ...projection.thread,
+        pullRequests: [
+          {
+            host: "github.com",
+            repository: "pingdotgg/t3code",
+            number: 7,
+            url: "https://github.com/pingdotgg/t3code/pull/7",
+            source: "agent",
+            linkedAt: "2026-10-05T00:00:00.000Z",
+            snapshot: null,
+            stack: null,
+            watch: {
+              startedAt: "2026-10-05T00:00:00.000Z",
+              headSha: null,
+              failedChecks: [],
+              passed: false,
+              passedChecks: [],
+              remarksThrough: "2026-10-05T00:00:00.000Z",
+              remarkIds: [],
+              conflicting: false,
+              wakes: 0,
+            },
+          },
+        ],
+      },
+    });
+    expect(tasks).toEqual([
+      {
+        taskId: "pull-request-watch:github.com/pingdotgg/t3code#7",
+        description: "Watching pull request #7",
+        kind: "monitor",
+      },
+    ]);
+  });
+
   it.each(["omitted", "empty", "populated", "no-shell", "inferred", "inferred-duplicate"] as const)(
     "selects the waiting roster with %s shell data",
     (roster) => {

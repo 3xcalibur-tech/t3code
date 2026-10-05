@@ -100,6 +100,7 @@ export function resolvePendingBackgroundTasks(
       turnItems: serverProjection.turnItems,
       activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
       runs: serverProjection.runs,
+      pullRequests: serverProjection.thread.pullRequests,
     }),
   ];
   const taskIds = new Set(tasks.map((task) => task.taskId));
