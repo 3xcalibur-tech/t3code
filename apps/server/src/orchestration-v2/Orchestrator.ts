@@ -10069,7 +10069,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return yield* dispatch;
       const parentId = yield* appOwnedSubagentParentThreadId(commandThreadId(command)).pipe(
         // Missing threads must reach dispatch's rejection receipt handling.
-        Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(undefined)),
+        Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(undefined) }),
         Effect.mapError(
           (cause) => new OrchestratorProjectionError({ threadId: commandThreadId(command), cause }),
         ),

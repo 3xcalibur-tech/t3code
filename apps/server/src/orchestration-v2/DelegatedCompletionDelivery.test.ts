@@ -301,24 +301,24 @@ const seedParentWithTerminalTask = (input: {
   });
 
 it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
-  it.effect.each([false, true])(
-    "a timeline read acknowledges only the result it returns, racing=%s",
-    (racing) =>
+  it.effect.each(["normal", "legacy", "racing", "backfill"] as const)(
+    "a timeline read acknowledges only the result it returns, scenario=%s",
+    (scenario) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const sink = yield* EventSink.EventSinkV2;
         const now = yield* DateTime.now;
-        const parentId = ThreadId.make(`review:${racing}:parent`);
-        const childId = ThreadId.make(`review:${racing}:child`);
-        const parentRunId = RunId.make(`review:${racing}:parent-run`);
-        const taskId = NodeId.make(`review:${racing}:task`);
-        const projectId = ProjectId.make(`review:${racing}:project`);
+        const parentId = ThreadId.make(`review:${scenario}:parent`);
+        const childId = ThreadId.make(`review:${scenario}:child`);
+        const parentRunId = RunId.make(`review:${scenario}:parent-run`);
+        const taskId = NodeId.make(`review:${scenario}:task`);
+        const projectId = ProjectId.make(`review:${scenario}:project`);
         yield* seedParentWithTerminalTask({
           threadId: parentId,
           runId: parentRunId,
           taskId,
           projectId,
-          rootNodeId: NodeId.make(`review:${racing}:parent-root`),
+          rootNodeId: NodeId.make(`review:${scenario}:parent-root`),
           deliveryState: "claimed",
           completionWake: "always",
           deliveryTaskIds: [taskId],
@@ -326,7 +326,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
         });
         yield* orchestrator.dispatch({
           type: "thread.create",
-          commandId: CommandId.make(`review:${racing}:create-child`),
+          commandId: CommandId.make(`review:${scenario}:create-child`),
           threadId: childId,
           projectId,
           title: "Review child",
@@ -343,7 +343,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
         yield* sink.write({
           events: [
             {
-              id: EventId.make(`review:${racing}:child-lineage`),
+              id: EventId.make(`review:${scenario}:child-lineage`),
               type: "thread.metadata-updated",
               threadId: childId,
               occurredAt: now,
@@ -358,7 +358,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
               },
             },
             {
-              id: EventId.make(`review:${racing}:task-link`),
+              id: EventId.make(`review:${scenario}:task-link`),
               type: "subagent.updated",
               threadId: parentId,
               occurredAt: now,
@@ -366,14 +366,14 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
             },
           ],
         });
-        const addResult = (ordinal: number) =>
+        const addResult = (ordinal: number, backfill = false) =>
           Effect.gen(function* () {
-            const runId = RunId.make(`review:${racing}:result-run:${ordinal}`);
-            const messageId = MessageId.make(`review:${racing}:result-message:${ordinal}`);
+            const runId = RunId.make(`review:${scenario}:result-run:${ordinal}`);
+            const messageId = MessageId.make(`review:${scenario}:result-message:${ordinal}`);
             yield* sink.write({
               events: [
                 {
-                  id: EventId.make(`review:${racing}:run:${ordinal}`),
+                  id: EventId.make(`review:${scenario}:run:${ordinal}`),
                   type: "run.updated",
                   threadId: childId,
                   runId,
@@ -385,7 +385,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
                     providerInstanceId: modelSelection.instanceId,
                     modelSelection,
                     providerThreadId: null,
-                    userMessageId: MessageId.make(`review:${racing}:user:${ordinal}`),
+                    userMessageId: MessageId.make(`review:${scenario}:user:${ordinal}`),
                     rootNodeId: null,
                     activeAttemptId: null,
                     status: "completed",
@@ -397,7 +397,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
                   },
                 },
                 {
-                  id: EventId.make(`review:${racing}:message:${ordinal}`),
+                  id: EventId.make(`review:${scenario}:message:${ordinal}`),
                   type: "message.updated",
                   threadId: childId,
                   runId,
@@ -418,13 +418,13 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
                   },
                 },
                 {
-                  id: EventId.make(`review:${racing}:item:${ordinal}`),
+                  id: EventId.make(`review:${scenario}:item:${ordinal}`),
                   type: "turn-item.updated",
                   threadId: childId,
                   runId,
                   occurredAt: now,
                   payload: {
-                    id: TurnItemId.make(`review:${racing}:item:${ordinal}`),
+                    id: TurnItemId.make(`review:${scenario}:item:${ordinal}`),
                     threadId: childId,
                     runId,
                     nodeId: null,
@@ -445,12 +445,12 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
                   },
                 },
                 {
-                  id: EventId.make(`review:${racing}:transfer:${ordinal}`),
+                  id: EventId.make(`review:${scenario}:transfer:${ordinal}`),
                   type: "context-transfer.created",
                   threadId: parentId,
                   occurredAt: now,
                   payload: {
-                    id: ContextTransferId.make(`review:${racing}:transfer:${ordinal}`),
+                    id: ContextTransferId.make(`review:${scenario}:transfer:${ordinal}`),
                     type: "subagent_result",
                     sourceThreadId: childId,
                     targetThreadId: parentId,
@@ -468,21 +468,27 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
                     consumedAt: now,
                   },
                 },
-                {
-                  id: EventId.make(`review:${racing}:task-delivery:${ordinal}`),
-                  type: "subagent.updated",
-                  threadId: parentId,
-                  occurredAt: now,
-                  payload: {
-                    ...originalTask,
-                    childThreadId: childId,
-                    completionDelivery: { state: "claimed", observedByRunId: null },
-                  },
-                },
+                ...(backfill
+                  ? []
+                  : [
+                      {
+                        id: EventId.make(`review:${scenario}:task-delivery:${ordinal}`),
+                        type: "subagent.updated" as const,
+                        threadId: parentId,
+                        occurredAt: now,
+                        payload: {
+                          ...originalTask,
+                          childThreadId: childId,
+                          ...(scenario === "legacy" ? {} : { resultRunId: runId }),
+                          completionDelivery: { state: "claimed" as const, observedByRunId: null },
+                        },
+                      },
+                    ]),
               ],
             });
           });
-        yield* addResult(1);
+        yield* addResult(2);
+        if (scenario === "backfill") yield* addResult(1, true);
         const dependencies = Layer.mergeAll(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: orchestrator.getThreadRecords,
@@ -494,8 +500,8 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
               Effect.gen(function* () {
                 const page = yield* orchestrator.getTimelinePage(threadId, options);
                 // A newer result arrives after this page was captured. The client
-                // will receive only Result 1, but the acknowledgment preflight sees 2.
-                if (racing) yield* addResult(2).pipe(Effect.orDie);
+                // will receive only Result 2, but the acknowledgment preflight sees 3.
+                if (scenario === "racing") yield* addResult(3).pipe(Effect.orDie);
                 return page;
               }),
           }),
@@ -509,18 +515,18 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
           return yield* service.readThread(
             {
-              environmentId: EnvironmentId.make(`review:${racing}:env`),
-              requestNamespace: `review:${racing}:session`,
+              environmentId: EnvironmentId.make(`review:${scenario}:env`),
+              requestNamespace: `review:${scenario}:session`,
               thread: {
                 threadId: parentId,
                 providerInstanceId: modelSelection.instanceId,
-                providerSessionId: `review:${racing}:session`,
+                providerSessionId: `review:${scenario}:session`,
               },
               client: undefined,
               capabilities: new Set(["orchestration"]),
               issuedAt: 1,
             },
-            { threadId: childId },
+            { threadId: childId, itemId: TurnItemId.make(`review:${scenario}:item:2`) },
           );
         }).pipe(
           Effect.provide(
@@ -532,13 +538,15 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
         );
         assert.deepEqual(
           result.items.map((item) => item.text),
-          ["Result 1"],
+          ["Result 2"],
         );
         const final = yield* orchestrator.getThreadProjection(parentId);
         assert.equal(
           final.subagents[0]?.completionDelivery?.state,
-          racing ? "claimed" : "acknowledged",
-          "Result 2 was never returned to the reader",
+          scenario === "racing" ? "claimed" : "acknowledged",
+          scenario === "racing"
+            ? "Result 3 was never returned"
+            : "Returned Result 2 must be acknowledged",
         );
       }),
   );

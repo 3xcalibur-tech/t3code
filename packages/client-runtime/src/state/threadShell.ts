@@ -43,6 +43,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     OrchestrationV2ThreadShell,
     Map<EnvironmentId, EnvironmentThreadShell>
   >();
+  // Keep wire-field presence when live children add a client-side waiting roster.
+  const originalThreads = new WeakMap<OrchestrationV2ThreadShell, OrchestrationV2ThreadShell>();
   const scopedThread = (environmentId: EnvironmentId, thread: OrchestrationV2ThreadShell) => {
     let byEnvironment = scopedThreads.get(thread);
     if (byEnvironment === undefined) {
@@ -52,6 +54,8 @@ export function createEnvironmentThreadShellAtoms(input: {
     let value = byEnvironment.get(environmentId);
     if (value === undefined) {
       value = presentThreadShell(environmentId, thread);
+      const original = originalThreads.get(thread);
+      if (original !== undefined) value = { ...value, source: original };
       byEnvironment.set(environmentId, value);
     }
     return value;
@@ -121,6 +125,7 @@ export function createEnvironmentThreadShellAtoms(input: {
         )
           return previous;
         const next = { ...thread, pendingBackgroundTasks: tasks };
+        originalThreads.set(next, thread);
         derived.set(thread, next);
         return next;
       });

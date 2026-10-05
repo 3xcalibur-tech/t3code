@@ -1,3 +1,8 @@
+import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  latestUnheldRun,
+  usageLimitRunPresentedAsLatest,
+} from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Option from "effect/Option";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
@@ -12,6 +17,7 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ThreadProjection,
   type PreviewAnnotationPayload,
   type ProviderInteractionMode,
   ProviderDriverKind,
@@ -66,6 +72,51 @@ import {
   resolveSelectableProviderInstanceEntry,
   type ProviderInstanceEntry,
 } from "../providerInstances";
+
+export function resolvePendingBackgroundTasks(
+  activeThreadShell: EnvironmentThreadShell | null,
+  serverProjection: OrchestrationV2ThreadProjection | null | undefined,
+) {
+  if (activeThreadShell?.source.pendingBackgroundTasks !== undefined) {
+    return activeThreadShell.pendingBackgroundTasks;
+  }
+  if (serverProjection === null || serverProjection === undefined) {
+    return activeThreadShell?.pendingBackgroundTasks ?? [];
+  }
+  const sessionError =
+    serverProjection.providerSessions.findLast(
+      (session) => session.providerInstanceId === serverProjection.thread.providerInstanceId,
+    )?.lastError ?? null;
+  const latestRun =
+    usageLimitRunPresentedAsLatest(
+      serverProjection.runs,
+      serverProjection.turnItems,
+      sessionError,
+    ) ?? latestUnheldRun(serverProjection.runs);
+  const tasks = [
+    ...derivePendingBackgroundWork({
+      latestRun,
+      providerThreads: serverProjection.providerThreads,
+      turnItems: serverProjection.turnItems,
+      activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
+      runs: serverProjection.runs,
+    }),
+  ];
+  const taskIds = new Set(tasks.map((task) => task.taskId));
+  const childIds = new Set(
+    tasks.flatMap((task) =>
+      task.kind === "subagent" && task.childThreadId != null ? [task.childThreadId] : [],
+    ),
+  );
+  for (const task of activeThreadShell?.pendingBackgroundTasks ?? []) {
+    const childId = task.kind === "subagent" ? task.childThreadId : null;
+    if (taskIds.has(task.taskId) || (childId != null && childIds.has(childId))) continue;
+    taskIds.add(task.taskId);
+    if (childId != null) childIds.add(childId);
+    tasks.push(task);
+  }
+  return tasks;
+}
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;

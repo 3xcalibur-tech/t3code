@@ -1123,7 +1123,7 @@ describe("orchestration V2 contracts", () => {
     expect(runtimeThread.nativeMetadata).toBeNull();
   });
 
-  it("decodes historical thread shell JSON without pendingBackgroundTasks as empty roster", () => {
+  it("preserves an omitted thread shell roster for projection fallback", () => {
     const shell = decodeOrchestrationV2ThreadShell({
       createdBy: "user",
       creationSource: "web",
@@ -1163,7 +1163,7 @@ describe("orchestration V2 contracts", () => {
       deletedAt: null,
     });
 
-    expect(shell.pendingBackgroundTasks).toEqual([]);
+    expect(shell.pendingBackgroundTasks).toBeUndefined();
   });
 });
 

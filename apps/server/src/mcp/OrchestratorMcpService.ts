@@ -365,26 +365,19 @@ function directAppOwnedChildTask(
 }
 
 function pageIncludesTerminalTaskResult(input: {
-  readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "contextTransfers">;
   readonly page: ReadonlyArray<OrchestrationV2ThreadProjection["visibleTurnItems"][number]>;
   readonly task: OrchestrationV2Subagent;
+  readonly resultRunId: RunId | undefined;
   readonly target: Pick<
     OrchestrationV2ThreadProjection,
     "thread" | "runs" | "contextTransfers" | "messages" | "turnItems"
   >;
   readonly maxChars: number;
 }): boolean {
-  const transfer = input.parent.contextTransfers.findLast(
-    (transfer) =>
-      transfer.type === "subagent_result" &&
-      transfer.sourceThreadId === input.target.thread.id &&
-      transfer.targetThreadId === input.parent.thread.id,
-  );
-  if (transfer === undefined) return false;
   const run =
-    transfer.sourcePoint.runId === undefined
+    input.resultRunId === undefined
       ? delegatedTaskRun(input.target, input.task)
-      : input.target.runs.find((run) => run.id === transfer.sourcePoint.runId);
+      : input.target.runs.find((run) => run.id === input.resultRunId);
   if (run === undefined || !isTerminalTaskStatus(taskStatusForRun(run))) return false;
 
   const result = subagentResultForRun(input.target, run);
@@ -1950,9 +1943,11 @@ const make = Effect.gen(function* () {
             (transfer) =>
               transfer.type === "subagent_result" &&
               transfer.sourceThreadId === target.thread.id &&
-              transfer.targetThreadId === parent.thread.id,
+              transfer.targetThreadId === parent.thread.id &&
+              (task.resultRunId === undefined || transfer.sourcePoint.runId === task.resultRunId),
           );
-          const resultRunId = transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
+          const resultRunId =
+            task.resultRunId ?? transfer?.sourcePoint.runId ?? delegatedTaskRun(target, task)?.id;
           const resultRunIds = resultRunId === undefined ? [] : [resultRunId];
           const resultRecords = yield* threadManagement
             .getThreadRecords(target.thread.id, ["messages", "turnItems"], {
@@ -1963,10 +1958,11 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(threadManagementFailure));
           if (
+            transfer !== undefined &&
             pageIncludesTerminalTaskResult({
-              parent,
               page,
               task,
+              resultRunId,
               target: { ...target, ...resultRecords },
               maxChars,
             })

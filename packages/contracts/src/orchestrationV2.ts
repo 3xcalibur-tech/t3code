@@ -1817,9 +1817,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   hasActionableProposedPlan: Schema.Boolean,
   // Normalized post-settlement background work for sidebar Waiting pills.
   // Empty when the latest root run is still active or no pending work remains.
-  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  // Omitted by older servers, so clients can derive it from the thread projection.
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)),
   // Distinct provider instances that have owned a root provider thread here,
   // in first-use order, so lists can show where a handed-off thread has been.
   // Omitted by servers that predate it; decodes to [].

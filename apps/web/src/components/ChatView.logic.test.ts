@@ -7,6 +7,7 @@ import {
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderDriverKind,
+  OrchestrationV2ThreadShell,
   type ServerProvider,
 } from "@t3tools/contracts";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
@@ -16,6 +17,7 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -27,6 +29,8 @@ import {
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -40,6 +44,7 @@ import {
   getAntigravitySendBlockReason,
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
+  resolvePendingBackgroundTasks,
   restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
   resolveProactiveTurnDiffAction,
@@ -86,6 +91,102 @@ import {
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
+
+describe("pending background tasks", () => {
+  it.each(["omitted", "empty", "populated", "no-shell", "inferred", "inferred-duplicate"] as const)(
+    "selects the waiting roster with %s shell data",
+    (roster) => {
+      const projection = makeThreadProjectionFixture();
+      const runId = RunId.make("background-root-run");
+      const at = projection.updatedAt;
+      const itemId = TurnItemId.make("background-review");
+      const childThreadId = ThreadId.make("background-child");
+      const pendingTask = { taskId: "current-child", kind: "subagent" as const };
+      const shellSource = makeThreadFixture().source;
+      const wire = Schema.encodeSync(OrchestrationV2ThreadShell)(shellSource);
+      const shell = presentThreadShell(
+        EnvironmentId.make("background-env"),
+        Schema.decodeSync(OrchestrationV2ThreadShell)({
+          ...wire,
+          ...(roster === "empty"
+            ? { pendingBackgroundTasks: [] }
+            : roster === "populated"
+              ? { pendingBackgroundTasks: [pendingTask] }
+              : {}),
+        }),
+      );
+      const presentedShell =
+        roster === "inferred"
+          ? { ...shell, pendingBackgroundTasks: [pendingTask] }
+          : roster === "inferred-duplicate"
+            ? { ...shell, pendingBackgroundTasks: [{ ...pendingTask, childThreadId }] }
+            : shell;
+      const tasks = resolvePendingBackgroundTasks(roster === "no-shell" ? null : presentedShell, {
+        ...projection,
+        runs: [
+          {
+            id: runId,
+            threadId: projection.thread.id,
+            ordinal: 1,
+            providerInstanceId: projection.thread.providerInstanceId,
+            modelSelection: projection.thread.modelSelection,
+            providerThreadId: null,
+            userMessageId: MessageId.make("background-user"),
+            rootNodeId: null,
+            activeAttemptId: null,
+            status: "completed",
+            requestedAt: at,
+            startedAt: at,
+            completedAt: at,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        ],
+        turnItems: [
+          {
+            id: itemId,
+            threadId: projection.thread.id,
+            runId,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "running",
+            title: "Review",
+            startedAt: at,
+            completedAt: null,
+            updatedAt: at,
+            type: "subagent",
+            subagentId: NodeId.make("background-delegation"),
+            origin: "app_owned",
+            driver: ProviderDriverKind.make("codex"),
+            providerInstanceId: projection.thread.providerInstanceId,
+            childThreadId,
+            prompt: "Review",
+            result: null,
+          },
+        ],
+      });
+      expect(tasks).toEqual(
+        roster === "empty"
+          ? []
+          : roster === "populated"
+            ? [pendingTask]
+            : [
+                {
+                  taskId: itemId,
+                  description: "Review",
+                  kind: "subagent",
+                  childThreadId,
+                },
+                ...(roster === "inferred" ? [pendingTask] : []),
+              ],
+      );
+    },
+  );
+});
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

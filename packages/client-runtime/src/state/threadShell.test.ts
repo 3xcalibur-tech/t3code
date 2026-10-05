@@ -243,6 +243,7 @@ it("tracks resumed delegated children in the waiting roster through shell update
           description: child.title,
         },
       ]);
+    expect(read()?.source.pendingBackgroundTasks).toBeUndefined();
     if (status === "running") {
       expect(presentPendingBackgroundWork(read()!.pendingBackgroundTasks)?.title).toBe(
         "Waiting on subagent Resumed worker",
