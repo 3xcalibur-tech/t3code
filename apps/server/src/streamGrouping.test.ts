@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -62,7 +63,7 @@ describe("groupedAfterFirst", () => {
     ),
   );
 
-  it.effect("batches a burst the way groupedWithin does", () =>
+  it.effect("batches a burst within the window its first item opens", () =>
     withGroupedSource(({ source, batches, sleeps }) =>
       Effect.gen(function* () {
         // A partial group waits out the window opened by its first item.
@@ -97,11 +98,20 @@ describe("groupedAfterFirst", () => {
       Effect.gen(function* () {
         yield* Queue.offer(source, 1);
         yield* Queue.end(source);
-        // The group goes out once the end reaches the window, or when the window
-        // elapses, whichever comes first.
-        yield* TestClock.adjust(WINDOW);
         assert.deepEqual(yield* Queue.take(batches), [1]);
         yield* Fiber.join(fiber);
+      }),
+    ),
+  );
+
+  it.effect("delivers the group in hand before the source's defect", () =>
+    withGroupedSource(({ source, batches, fiber }) =>
+      Effect.gen(function* () {
+        yield* Queue.offerAll(source, [1, 2]);
+        yield* Queue.failCause(source, Cause.die("projection failed"));
+        const exit = yield* Fiber.await(fiber);
+        assert.isTrue(Exit.hasDies(exit));
+        assert.deepEqual(yield* Queue.clear(batches), [[1, 2]]);
       }),
     ),
   );

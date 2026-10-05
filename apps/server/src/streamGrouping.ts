@@ -11,8 +11,9 @@ import * as Stream from "effect/Stream";
  * `groupedWithin` keeps its schedule ticking while the source is idle, which wakes
  * the server for every open subscription. Here an idle source arms no timer.
  *
- * At most `maxSize` items wait in the hand-off queue, so a budgeted source still
- * sees backpressure when the consumer falls behind.
+ * The hand-off queue holds at most `maxSize` items, so a budgeted source still
+ * sees backpressure when the consumer falls behind, one group later than with
+ * `groupedWithin`.
  */
 export const groupedAfterFirst =
   (maxSize: number, window: Duration.Input) =>
@@ -24,11 +25,11 @@ export const groupedAfterFirst =
           Effect.gen(function* () {
             const group = yield* Queue.takeBetween(queue, 1, maxSize);
             if (group.length < maxSize) {
-              // A failed fill means the source ended or failed. The group goes
-              // out now and the next take reports the end.
+              // A failed fill means the source ended, failed or died. The group
+              // goes out now and the next take reports the end.
               yield* fillGroup(queue, group, maxSize).pipe(
                 Effect.timeoutOption(window),
-                Effect.ignore,
+                Effect.ignoreCause,
               );
             }
             return group;
