@@ -963,6 +963,141 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
+  it.effect("re-probes a provider that looks unavailable before refusing it", () =>
+    Effect.gen(function* () {
+      const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
+      const claudeDriver = ProviderDriverKind.make("claudeAgent");
+      const task = {
+        id: taskId,
+        threadId: parentThreadId,
+        runId: parentRunId,
+        parentNodeId,
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: claudeDriver,
+        providerInstanceId: claudeInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Review the diff.",
+        title: null,
+        model: "claude-opus-5-5",
+        status: "running",
+        result: null,
+        startedAt: null,
+        completedAt: null,
+      };
+      // The cached snapshot is from before the user repaired the CLI; a probe
+      // reports whatever `cliInstalled` says now.
+      const missingCli: ServerProvider = {
+        ...providerSnapshot({
+          instanceId: claudeInstanceId,
+          driver: claudeDriver,
+          model: "claude-opus-5-5",
+        }),
+        installed: false,
+        status: "error",
+        message: "Claude Agent CLI (`claude`) was not found on PATH.",
+      };
+      const healthyClaude = providerSnapshot({
+        instanceId: claudeInstanceId,
+        driver: claudeDriver,
+        model: "claude-opus-5-5",
+      });
+      const codex = providerSnapshot({
+        instanceId: codexInstanceId,
+        driver: ProviderDriverKind.make("codex"),
+        model: "gpt-5.4",
+      });
+      let cliInstalled = false;
+      let claude = missingCli;
+      const refreshed = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      let delegated = false;
+      const dependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: (threadId) =>
+            Effect.succeed(
+              threadId === parentThreadId
+                ? parentProjection(delegated ? [task] : [])
+                : childProjection,
+            ),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  delegated = true;
+                }),
+              ),
+              Effect.as({
+                sequence: 1,
+                storedEvents: [
+                  {
+                    sequence: 1,
+                    commandId: null,
+                    event: { type: "subagent.updated", payload: task },
+                  },
+                ],
+              } as never),
+            ),
+        }),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.sync(() => [codex, claude]),
+          refreshInstance: (instanceId) =>
+            Ref.update(refreshed, (ids) => [...ids, instanceId]).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  claude = cliInstalled ? healthyClaude : missingCli;
+                  return [codex, claude];
+                }),
+              ),
+            ),
+        }),
+        adapterRegistryLayer([codexInstanceId, claudeInstanceId]),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const delegate = (clientRequestId: string) =>
+          service.delegateTask(scope, {
+            task: "Review the diff.",
+            target: { providerInstanceId: claudeInstanceId, model: "claude-opus-5-5" },
+            mode: "async",
+            clientRequestId,
+          });
+
+        // Still broken: the re-probe confirms it, so the refusal stands.
+        const error = yield* delegate("delegate-recheck-1").pipe(Effect.flip);
+        assert.equal(error.code, "provider_unavailable");
+        assert.include(error.message, "was not found on PATH");
+        assert.deepEqual(yield* Ref.get(refreshed), [claudeInstanceId]);
+        assert.deepEqual(yield* Ref.get(dispatched), []);
+
+        // The CLI was repaired, but no client is in the foreground to refresh
+        // the cache. Capabilities and delegation both see the fix.
+        cliInstalled = true;
+        const capabilities = yield* service.capabilities(scope);
+        const entry = capabilities.providers.find(
+          (provider) => provider.providerInstanceId === claudeInstanceId,
+        );
+        assert.isTrue(entry?.canRunChildTask);
+        assert.deepEqual(entry?.constraints, []);
+
+        claude = missingCli;
+        const result = yield* delegate("delegate-recheck-2");
+        assert.equal(result.providerInstanceId, claudeInstanceId);
+        assert.equal((yield* Ref.get(dispatched)).length, 1);
+
+        // A healthy snapshot is trusted without another probe.
+        const probes = (yield* Ref.get(refreshed)).length;
+        yield* service.capabilities(scope);
+        assert.equal((yield* Ref.get(refreshed)).length, probes);
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+    }),
+  );
+
   it.effect(
     "inherits an available parent instance for driver-only targets and otherwise selects a healthy peer",
     () =>

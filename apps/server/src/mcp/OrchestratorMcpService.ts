@@ -995,7 +995,47 @@ const make = Effect.gen(function* () {
   const loadOrchestrationCapableInstanceIds = () =>
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
+  /**
+   * Snapshots re-probe on a timer only while a client is in the foreground, so
+   * an unattended agent can read a stale failure, such as "not installed" after
+   * the CLI was repaired. Re-probe enabled instances that look unavailable
+   * before telling an agent they cannot run. Healthy instances stay cached.
+   */
+  const loadProvidersRecheckingUnavailable = Effect.gen(function* () {
+    const providers = yield* loadProviders;
+    const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
+    const unavailable = providers.filter(
+      (provider) =>
+        provider.enabled &&
+        orchestrationCapableInstanceIds.has(provider.instanceId) &&
+        providerConstraints(provider, true).length > 0,
+    );
+    if (unavailable.length === 0) return providers;
+    yield* Effect.forEach(
+      unavailable,
+      (provider) => providerRegistry.refreshInstance(provider.instanceId),
+      { concurrency: "unbounded", discard: true },
+    );
+    return yield* loadProviders;
+  });
+
+  /** Resolves against cached snapshots, rechecking once before reporting an unavailable provider. */
   const resolveTarget = (input: {
+    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
+    readonly target: OrchestratorMcpTarget | undefined;
+  }) =>
+    loadProviders.pipe(
+      Effect.flatMap((providers) => resolveTargetFrom({ ...input, providers })),
+      Effect.catchIf(
+        (error) => error.code === "provider_unavailable",
+        () =>
+          loadProvidersRecheckingUnavailable.pipe(
+            Effect.flatMap((providers) => resolveTargetFrom({ ...input, providers })),
+          ),
+      ),
+    );
+
+  const resolveTargetFrom = (input: {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
@@ -1459,7 +1499,7 @@ const make = Effect.gen(function* () {
     capabilities: (scope) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
-        const providers = yield* loadProviders;
+        const providers = yield* loadProvidersRecheckingUnavailable;
         const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
         return {
           parentThreadId: parent?.thread.id ?? null,
@@ -1517,12 +1557,7 @@ const make = Effect.gen(function* () {
             "Delegated tasks require an active run owned by this MCP provider session.",
           );
         }
-        const providers = yield* loadProviders;
-        const target = yield* resolveTarget({
-          parent,
-          target: input.target,
-          providers,
-        });
+        const target = yield* resolveTarget({ parent, target: input.target });
         const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
         const interactionMode = yield* resolveInteractionMode(
           parent.thread.interactionMode,
@@ -1727,17 +1762,12 @@ const make = Effect.gen(function* () {
           );
         }
         const parentNodeId = parentRun.rootNodeId;
-        const providers = yield* loadProviders;
         const key = yield* requestKey(input.clientRequestId);
         const created = yield* Effect.forEach(
           input.threads,
           (request, index) =>
             Effect.gen(function* () {
-              const target = yield* resolveTarget({
-                parent,
-                target: request.target,
-                providers,
-              });
+              const target = yield* resolveTarget({ parent, target: request.target });
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
                 request.runtimeMode,
