@@ -501,7 +501,7 @@ type MessagesTimelineRowContent =
       groupId: string;
       expanded: boolean;
       active: boolean;
-      /** Latest reasoning in the live group, shown under the status line. */
+      /** Latest reasoning in the live group, shown above the status line. */
       thought?: WorkLogEntry;
     }
   | {

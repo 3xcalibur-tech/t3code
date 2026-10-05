@@ -756,7 +756,7 @@ export function toolGroupSummaryKind(
 }
 
 /**
- * Plain-text line for the latest thought under the live activity row. A
+ * Plain-text line for the latest thought in the live activity row. A
  * bold-only opening line (the Codex summary heading) wins; otherwise this is
  * the first sentence of the reasoning text. Web and mobile both render it.
  */

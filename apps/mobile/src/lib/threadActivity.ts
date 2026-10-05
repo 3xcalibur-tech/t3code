@@ -194,7 +194,7 @@ type ThreadFeedEntryContent =
       readonly hasFailure: boolean;
       readonly live: boolean;
       readonly shimmer: boolean;
-      /** First sentence of the latest thought, shown under the live status line. */
+      /** First sentence of the latest thought, shown above the live status line. */
       readonly thought?: string;
     }
   | {

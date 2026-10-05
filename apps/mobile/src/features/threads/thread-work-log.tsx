@@ -1226,7 +1226,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly onToggle: () => void;
 }) {
   const statusLabel = props.hasFailure ? `${props.summary}, tool call failed` : props.summary;
-  const accessibilityLabel = props.thought ? `${statusLabel}. ${props.thought}` : statusLabel;
+  const accessibilityLabel = props.thought ? `${props.thought} ${statusLabel}` : statusLabel;
   const icon =
     props.summaryToolIcon ??
     (props.toolSurface
@@ -1235,6 +1235,24 @@ export function ThreadWorkGroupToggle(props: {
 
   return (
     <WorkLogBlock layout="group-header">
+      {props.thought ? (
+        // The latest thought sits above the status line in full, up to four lines.
+        <Pressable
+          accessible={false}
+          onPress={props.onToggle}
+          className="rounded-md px-0.5 pt-1 active:bg-subtle"
+        >
+          <Text
+            key={props.rowSizing.textSizeKey}
+            selectable={false}
+            numberOfLines={4}
+            ellipsizeMode="tail"
+            className="ml-7 text-sm text-foreground"
+          >
+            {props.thought}
+          </Text>
+        </Pressable>
+      ) : null}
       <WorkLogPressable
         accessibilityRole="button"
         accessibilityState={{ expanded: props.expanded }}
@@ -1278,24 +1296,6 @@ export function ThreadWorkGroupToggle(props: {
           tintColor={props.iconSubtleColor}
         />
       </WorkLogPressable>
-      {props.thought ? (
-        // The latest thought sits under the status line in full, up to four lines.
-        <Pressable
-          accessible={false}
-          onPress={props.onToggle}
-          className="rounded-md px-0.5 pb-1 active:bg-subtle"
-        >
-          <Text
-            key={props.rowSizing.textSizeKey}
-            selectable={false}
-            numberOfLines={4}
-            ellipsizeMode="tail"
-            className="ml-7 text-sm text-foreground"
-          >
-            {props.thought}
-          </Text>
-        </Pressable>
-      ) : null}
     </WorkLogBlock>
   );
 }

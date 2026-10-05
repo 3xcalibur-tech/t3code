@@ -3656,6 +3656,13 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
       aria-expanded={row.expanded}
       onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
     >
+      {thoughtLine ? (
+        // The latest thought's first sentence sits above the status line in
+        // full, so a finding never hides behind the next tool call.
+        <span className="ms-7 line-clamp-4 pt-0.5 text-sm leading-6 text-foreground">
+          {thoughtLine}
+        </span>
+      ) : null}
       <LiveActivityRow
         label={
           thoughtIsStatus ? (
@@ -3689,13 +3696,6 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
         failed={failed}
         active={row.active}
       />
-      {thoughtLine ? (
-        // The latest thought's first sentence sits under the status line in
-        // full, so a finding never hides behind the next tool call.
-        <span className="ms-7 line-clamp-4 pb-0.5 text-sm leading-6 text-foreground">
-          {thoughtLine}
-        </span>
-      ) : null}
     </button>
   );
 }
