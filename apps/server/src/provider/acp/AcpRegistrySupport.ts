@@ -1851,8 +1851,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
               ),
             );
             const isReferenced = Object.values(settings.providerInstances).some((instance) => {
-              if (instance.driver !== "acpRegistry" || instance.config === null) return false;
-              return instance.config.source !== "local" && instance.config.agentId === safeAgentId;
+              if (
+                instance.driver !== "acpRegistry" ||
+                instance.config === null ||
+                typeof instance.config !== "object"
+              )
+                return false;
+              const config = instance.config as Record<string, unknown>;
+              return config.source !== "local" && config.agentId === safeAgentId;
             });
             if (isReferenced) {
               yield* consumePreparedBinaryReservation(safeAgentId);
