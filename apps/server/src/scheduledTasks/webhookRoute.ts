@@ -11,6 +11,7 @@ import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as Metrics from "../observability/Metrics.ts";
+import { makeRelayDeliveryVerifier } from "./relayDeliveryProof.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
 
 /** Largest request body a webhook accepts. The relay enforces the same cap. */
@@ -30,7 +31,10 @@ const json = (status: number, body: Record<string, string>, outcome: string) =>
  * URL, where the endpoint key is this environment's managed tunnel key.
  */
 const handleWebhook =
-  (scheduledTasks: ScheduledTaskService.ScheduledTaskService["Service"]) =>
+  (
+    scheduledTasks: ScheduledTaskService.ScheduledTaskService["Service"],
+    verifyRelayDelivery: Effect.Success<typeof makeRelayDeliveryVerifier>,
+  ) =>
   ({
     params,
     request,
@@ -68,15 +72,16 @@ const handleWebhook =
         if (typeof value === "string") headers[name.toLowerCase()] = value;
       }
       const queryIndex = request.url.indexOf("?");
-      // Only the relay sets these; it strips any copy a sender supplied. The
-      // receive time matters for requests the relay held while we were offline.
-      const relayDeliveryId = headers["x-t3-relay-delivery-id"];
-      const relayReceivedAt = relayDeliveryId ? headers["x-t3-relay-received-at"] : undefined;
+      // The relay's delivery id and receive time count only with its signed
+      // proof; the URL can also be called directly. The receive time matters
+      // for requests the relay held while we were offline.
+      const relay = yield* verifyRelayDelivery({ headers, hookId: params.hookId });
+      const relayDeliveryId = Option.isSome(relay) ? relay.value.deliveryId : undefined;
+      const relayReceivedAt = Option.isSome(relay) ? relay.value.receivedAt : undefined;
 
       // A relay delivery joins the relay's trace, and goes to the T3 Connect
-      // tracer with it. A sender's own traceparent is never trusted: anyone
-      // calling the URL directly could otherwise attach to our traces.
-      const relayParent = relayDeliveryId
+      // tracer with it. Anyone else's traceparent is never trusted.
+      const relayParent = Option.isSome(relay)
         ? HttpTraceContext.fromHeaders(request.headers)
         : Option.none<Tracer.ExternalSpan>();
       const result = yield* scheduledTasks
@@ -129,7 +134,10 @@ export const webhookHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "webhooks",
   Effect.fnUntraced(function* (handlers) {
-    const handler = handleWebhook(yield* ScheduledTaskService.ScheduledTaskService);
+    const handler = handleWebhook(
+      yield* ScheduledTaskService.ScheduledTaskService,
+      yield* makeRelayDeliveryVerifier,
+    );
     return handlers
       .handleRaw("webhookPost", handler)
       .handleRaw("webhookPut", handler)

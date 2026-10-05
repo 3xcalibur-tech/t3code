@@ -1,9 +1,11 @@
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -11,7 +13,14 @@ import * as HttpClient from "effect/http/HttpClient";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { RelayApi } from "@t3tools/contracts/relay";
+import { EnvironmentId } from "@t3tools/contracts";
+import { RelayApi, type RelayHookDeliveryProofPayload } from "@t3tools/contracts/relay";
+import {
+  normalizeRelayIssuer,
+  RELAY_HOOK_DELIVERY_HEADER,
+  RELAY_HOOK_DELIVERY_TYP,
+  signRelayJwt,
+} from "@t3tools/shared/relayJwt";
 
 import * as RelayConfiguration from "../Config.ts";
 import {
@@ -57,6 +66,7 @@ const DROPPED_REQUEST_HEADERS = new Set([
   // Only the relay may set this; a sender could otherwise collide delivery ids.
   "x-t3-relay-delivery-id",
   "x-t3-relay-received-at",
+  RELAY_HOOK_DELIVERY_HEADER,
   // The environment trusts trace context only from the relay, which sets its own.
   "traceparent",
   "tracestate",
@@ -129,6 +139,37 @@ const errorResponse = (status: number, error: string, headers?: Record<string, s
   HttpServerResponse.jsonUnsafe({ error }, { status, ...(headers ? { headers } : {}) });
 
 const hookNotFound = () => errorResponse(404, "hook_not_found");
+
+/** Longer than the inbox holds a request, so a held delivery's proof still verifies. */
+const DELIVERY_PROOF_LIFETIME_SECONDS = 25 * 60 * 60;
+
+const signDeliveryProof = (input: {
+  readonly settings: RelayConfiguration.RelayConfiguration["Service"];
+  readonly environmentId: string;
+  readonly deliveryId: string;
+  readonly receivedAt: string;
+  readonly hookId: string;
+  readonly jti: string;
+}) =>
+  Effect.gen(function* () {
+    const now = Math.floor((yield* Clock.currentTimeMillis) / 1_000);
+    return yield* signRelayJwt({
+      privateKey: Redacted.value(input.settings.cloudMintPrivateKey),
+      typ: RELAY_HOOK_DELIVERY_TYP,
+      payload: {
+        iss: normalizeRelayIssuer(input.settings.relayIssuer),
+        aud: `t3-env:${input.environmentId}`,
+        sub: input.environmentId,
+        jti: input.jti,
+        iat: now,
+        exp: now + DELIVERY_PROOF_LIFETIME_SECONDS,
+        environmentId: EnvironmentId.make(input.environmentId),
+        deliveryId: input.deliveryId,
+        receivedAt: input.receivedAt,
+        hookId: input.hookId,
+      } satisfies RelayHookDeliveryProofPayload,
+    });
+  }).pipe(Effect.orDie);
 
 /** Methods a webhook can arrive with; HEAD reaches the GET route and is refused. */
 const FORWARDED_METHODS = new Set(["GET", "POST", "PUT", "PATCH"]);
@@ -352,15 +393,27 @@ const make = Effect.gen(function* () {
     // One id per request, so a request that reached the environment before a
     // timeout and is later delivered from the inbox runs only once.
     yield* Effect.annotateCurrentSpan({ "relay.hook.body_bytes": body.success.byteLength });
+    const deliveryId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+    // Proves to the environment that this delivery id, receive time and
+    // trace context came from the relay. Signed once here and stored with a
+    // held request, so the inbox never needs the signing key.
+    const proof = yield* signDeliveryProof({
+      settings,
+      environmentId: endpoint.environmentId,
+      deliveryId,
+      receivedAt,
+      hookId: parsed.hookId,
+      jti: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+    });
     const hook = {
-      id: yield* crypto.randomUUIDv4.pipe(Effect.orDie),
+      id: deliveryId,
       receivedAt,
       method: request.method,
       rawHookId: parsed.rawHookId,
       rawToken: parsed.rawToken,
       hookKey: parsed.hookId,
       query: parsed.search.replace(/^\?/, ""),
-      headers: forwardedHeaders(request.headers),
+      headers: { ...forwardedHeaders(request.headers), [RELAY_HOOK_DELIVERY_HEADER]: proof },
       body: body.success,
     };
     // Held only for environments that opted in; otherwise the relay is a plain proxy.

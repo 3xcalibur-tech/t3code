@@ -1,11 +1,13 @@
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeCrypto from "node:crypto";
+import * as EffectNodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { RelayApi } from "@t3tools/contracts/relay";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -34,9 +36,15 @@ import {
   traceRelayHttpRequestWith,
 } from "../http/Api.ts";
 import * as HookForwarder from "./HookForwarder.ts";
+import { RELAY_HOOK_DELIVERY_TYP, verifyRelayJwt } from "@t3tools/shared/relayJwt";
 import * as HookInbox from "./HookInbox.ts";
 import type { HeldHook } from "./HookInboxStore.ts";
 import { RELAY_HOOK_UPSTREAM_TIMEOUT_MS } from "./upstream.ts";
+
+const mintKeys = NodeCrypto.generateKeyPairSync("ed25519", {
+  privateKeyEncoding: { format: "pem", type: "pkcs8" },
+  publicKeyEncoding: { format: "pem", type: "spki" },
+});
 
 const settings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
@@ -45,8 +53,8 @@ const settings: RelayConfiguration.RelayConfiguration["Service"] = {
   clerkPublishableKey: "pk_test_test",
   clerkJwtAudience: "t3-code-relay",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
-  cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
-  cloudMintPublicKey: "cloud-mint-public-key",
+  cloudMintPrivateKey: Redacted.make(mintKeys.privateKey),
+  cloudMintPublicKey: mintKeys.publicKey,
   managedEndpointBaseDomain: "example.test",
   managedEndpointNamespace: "dev",
 };
@@ -141,7 +149,7 @@ function makeHarness(options: Harness = {}) {
               return true;
             }),
         }),
-        NodeCrypto.layer,
+        EffectNodeCrypto.layer,
         Layer.succeed(HookForwarder.HookRateLimiter, {
           allowHook: (key) =>
             Effect.sync(() => {
@@ -237,6 +245,36 @@ describe("HookForwarder", () => {
       // The budget key is a hash, so the token never reaches the limiter.
       expect(harness.rateLimitKeys).toHaveLength(1);
       expect(harness.rateLimitKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+    }),
+  );
+
+  it.effect("signs each forward for the environment, replacing any copy a sender sent", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* harness.send(
+        new Request(hookUrl("hook-1/tok"), {
+          method: "POST",
+          headers: { "x-t3-relay-delivery": "forged", "x-t3-relay-delivery-id": "forged" },
+          body: "{}",
+        }),
+      );
+      const sent = harness.sent[0]!;
+      const payload = yield* verifyRelayJwt({
+        publicKey: mintKeys.publicKey,
+        token: sent.headers["x-t3-relay-delivery"]!,
+        typ: RELAY_HOOK_DELIVERY_TYP,
+        issuer: settings.relayIssuer,
+        audience: `t3-env:${environmentId}`,
+        nowEpochSeconds: Math.floor((yield* Clock.currentTimeMillis) / 1_000),
+      });
+      // The proof names exactly the delivery the environment receives.
+      expect(payload).toMatchObject({
+        environmentId,
+        hookId: "hook-1",
+        deliveryId: sent.headers["x-t3-relay-delivery-id"],
+        receivedAt: sent.headers["x-t3-relay-received-at"],
+      });
+      expect(sent.headers["x-t3-relay-delivery-id"]).not.toBe("forged");
     }),
   );
 

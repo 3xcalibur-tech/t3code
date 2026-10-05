@@ -88,6 +88,8 @@ export const sendUpstream = (baseUrl: string, hook: UpstreamHook) =>
     // The environment's span joins this trace. Set by hand: the client span
     // that would propagate it is off, because it records the token in url.full.
     const parent = yield* Effect.currentSpan.pipe(Effect.option);
+    // `hook.headers` carries the signed delivery proof, set once when the
+    // relay received the request, so a held request sends the same proof.
     const headers: Record<string, string> = {
       ...hook.headers,
       ...(Option.isSome(parent) ? HttpTraceContext.toHeaders(parent.value) : {}),
