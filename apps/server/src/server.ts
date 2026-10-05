@@ -655,6 +655,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
+      Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(CloudHttp.layer),
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
@@ -670,7 +671,6 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
-    McpOAuthHttp.layerRoutes.pipe(Layer.provide(McpOAuth.layer)),
   ),
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here. The orchestrator toolkit resolves
