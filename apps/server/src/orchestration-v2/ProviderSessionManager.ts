@@ -63,6 +63,51 @@ export const ProviderSessionReleaseReason = Schema.Literals([
 export type ProviderSessionReleaseReason = typeof ProviderSessionReleaseReason.Type;
 
 /**
+ * Closes a provider session scope, waiting at most
+ * `RELEASE_SCOPE_CLOSE_TIMEOUT_MS`. Scope close can wedge on a misbehaving
+ * adapter finalizer (e.g. a provider process that never yields its message
+ * stream). Past the bound, the close keeps running detached and its outcome is
+ * logged, so the caller gets its thread lane back instead of waiting on a
+ * process that may never let go.
+ */
+const closeSessionScopeBounded = (
+  scope: Scope.Closeable,
+  annotations: {
+    readonly providerSessionId: ProviderSessionId;
+    readonly reason: ProviderSessionReleaseReason | "open_abandoned";
+  },
+) =>
+  Effect.gen(function* () {
+    const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.exit,
+      Effect.forkDetach({ startImmediately: true }),
+    );
+    const closeExit = yield* Fiber.join(closeFiber).pipe(
+      Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
+    );
+    if (Option.isSome(closeExit)) return closeExit;
+    yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
+      ...annotations,
+      timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
+    });
+    yield* Fiber.join(closeFiber).pipe(
+      Effect.flatMap((exit) =>
+        Exit.isFailure(exit)
+          ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
+              ...annotations,
+              cause: exit.cause,
+            })
+          : Effect.logInfo(
+              "orchestration-v2.provider-session-scope-close-completed-late",
+              annotations,
+            ),
+      ),
+      Effect.forkDetach,
+    );
+    return closeExit;
+  });
+
+/**
  * ProviderSessionManager owns live session residency: open sessions, idle release,
  * explicit shutdown, and release-on-runtime-failure.
  *
@@ -882,49 +927,10 @@ export const layerWithOptions = (
                       input.detail ?? `Provider session released: ${input.reason}.`,
                     );
                   }
-                  // Scope close can wedge on a misbehaving adapter finalizer
-                  // (e.g. a provider process that never yields its message
-                  // stream). Time-box it so release still persists released
-                  // events and leaves a diagnosable trail instead of silently
-                  // parking the session as "ready" forever.
-                  const closeFiber = yield* Scope.close(entry.scope, Exit.void).pipe(
-                    Effect.exit,
-                    Effect.forkDetach({ startImmediately: true }),
-                  );
-                  const closeExit = yield* Fiber.join(closeFiber).pipe(
-                    Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-                  );
-                  if (Option.isNone(closeExit)) {
-                    yield* Effect.logWarning(
-                      "orchestration-v2.provider-session-scope-close-timeout",
-                      {
-                        providerSessionId: input.providerSessionId,
-                        reason: input.reason,
-                        timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-                      },
-                    );
-                    yield* Fiber.join(closeFiber).pipe(
-                      Effect.flatMap((exit) =>
-                        Exit.isFailure(exit)
-                          ? Effect.logWarning(
-                              "orchestration-v2.provider-session-scope-close-failed",
-                              {
-                                providerSessionId: input.providerSessionId,
-                                reason: input.reason,
-                                cause: exit.cause,
-                              },
-                            )
-                          : Effect.logInfo(
-                              "orchestration-v2.provider-session-scope-close-completed-late",
-                              {
-                                providerSessionId: input.providerSessionId,
-                                reason: input.reason,
-                              },
-                            ),
-                      ),
-                      Effect.forkDetach,
-                    );
-                  }
+                  const closeExit = yield* closeSessionScopeBounded(entry.scope, {
+                    providerSessionId: input.providerSessionId,
+                    reason: input.reason,
+                  });
                   const records = {
                     entry,
                     reason: input.reason,
@@ -1750,6 +1756,22 @@ export const layerWithOptions = (
                 }
               });
               const sessionScope = yield* Scope.make();
+              // An open that fails or is interrupted (a start timeout, a Stop)
+              // must not leave the provider process it spawned behind. Bound
+              // the close the same way release does: a misbehaving adapter
+              // finalizer must not turn the abandonment itself into a new hang.
+              const abandonOpen = closeSessionScopeBounded(sessionScope, {
+                providerSessionId: input.providerSessionId,
+                reason: "open_abandoned",
+              }).pipe(
+                Effect.andThen(dropReservation),
+                // Revoke only a credential this open freshly minted: a reused
+                // credential is held by another live provider process and must
+                // survive this open's failure.
+                Effect.andThen(
+                  prepared.issued ? clearMcpSession(input.threadId, mcpCredentialId) : Effect.void,
+                ),
+              );
               const runtime = yield* adapter
                 .openSession({
                   threadId: input.threadId,
@@ -1771,21 +1793,8 @@ export const layerWithOptions = (
                 })
                 .pipe(
                   Effect.provideService(Scope.Scope, sessionScope),
-                  Effect.tapError(() =>
-                    Scope.close(sessionScope, Exit.void).pipe(
-                      Effect.ignore,
-                      Effect.andThen(dropReservation),
-                      // Revoke only a credential this open freshly minted: a
-                      // reused credential is held by another live provider
-                      // process and must survive this open's failure.
-                      Effect.andThen(
-                        prepared.issued
-                          ? clearMcpSession(input.threadId, mcpCredentialId)
-                          : Effect.void,
-                      ),
-                    ),
-                  ),
-                  Effect.onInterrupt(() => dropReservation),
+                  Effect.tapError(() => abandonOpen),
+                  Effect.onInterrupt(() => abandonOpen),
                   Effect.mapError(
                     (cause) =>
                       new ProviderSessionOpenError({

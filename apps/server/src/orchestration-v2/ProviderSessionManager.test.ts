@@ -293,6 +293,8 @@ function makeProviderAdapter(
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hangSessionScopeClose?: boolean;
+    /** Runs after the session's resources are registered, before open returns. */
+    readonly afterOpen?: Effect.Effect<void>;
     readonly beforeUnload?: Effect.Effect<void>;
   } = {},
 ): ProviderAdapterV2Shape {
@@ -339,6 +341,9 @@ function makeProviderAdapter(
           // close before the closeCount finalizer, like a provider process
           // that never yields its message stream.
           yield* Effect.addFinalizer(() => Effect.never);
+        }
+        if (options.afterOpen !== undefined) {
+          yield* options.afterOpen;
         }
 
         return {
@@ -409,6 +414,7 @@ function makeTestLayer(input: {
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
+  readonly afterOpen?: Effect.Effect<void>;
   readonly beforeUnload?: Effect.Effect<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
   readonly projectServiceLayer?: Layer.Layer<ProjectService.ProjectService>;
@@ -431,6 +437,7 @@ function makeTestLayer(input: {
       ...(input.hangSessionScopeClose === undefined
         ? {}
         : { hangSessionScopeClose: input.hangSessionScopeClose }),
+      ...(input.afterOpen === undefined ? {} : { afterOpen: input.afterOpen }),
       ...(input.beforeUnload === undefined ? {} : { beforeUnload: input.beforeUnload }),
     }),
   );
@@ -770,6 +777,96 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
           state,
           idleTimeoutMs: 60_000,
           beforeOpen,
+        }),
+      ),
+    );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 closes the session scope when an open is interrupted", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const openBlocked = yield* Deferred.make<void>();
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-interrupted-open");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+
+      // Like a start timeout or a Stop interrupting an open that spawned its
+      // provider process and then never heard back from it.
+      const fiber = yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(openBlocked);
+      yield* Fiber.interrupt(fiber);
+
+      assert.equal((yield* Ref.get(state)).openCount, 1);
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+      assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+          afterOpen: Deferred.succeed(openBlocked, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+      ),
+    );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 finishes an interrupted open when its scope close hangs", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const openBlocked = yield* Deferred.make<void>();
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-interrupted-hung-open");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+
+      const fiber = yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(openBlocked);
+      // A start timeout interrupting an open whose provider process never
+      // yields its message stream must still get its thread lane back.
+      const interrupter = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("29 seconds");
+      assert.isUndefined(interrupter.pollUnsafe());
+
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(interrupter);
+      assert.equal((yield* Ref.get(state)).closeCount, 0);
+      assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+          hangSessionScopeClose: true,
+          afterOpen: Deferred.succeed(openBlocked, undefined).pipe(Effect.andThen(Effect.never)),
         }),
       ),
     );
