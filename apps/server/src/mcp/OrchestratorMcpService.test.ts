@@ -12,7 +12,9 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
@@ -967,6 +969,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     Effect.gen(function* () {
       const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
       const claudeDriver = ProviderDriverKind.make("claudeAgent");
+      const grokInstanceId = ProviderInstanceId.make("grok");
       const task = {
         id: taskId,
         threadId: parentThreadId,
@@ -987,8 +990,6 @@ describe("OrchestratorMcpService provider resolution", () => {
         startedAt: null,
         completedAt: null,
       };
-      // The cached snapshot is from before the user repaired the CLI; a probe
-      // reports whatever `cliInstalled` says now.
       const missingCli: ServerProvider = {
         ...providerSnapshot({
           instanceId: claudeInstanceId,
@@ -1009,8 +1010,39 @@ describe("OrchestratorMcpService provider resolution", () => {
         driver: ProviderDriverKind.make("codex"),
         model: "gpt-5.4",
       });
+      // An unrelated provider that stays broken; only capabilities re-probes it.
+      let grok: ServerProvider = {
+        ...providerSnapshot({
+          instanceId: grokInstanceId,
+          driver: ProviderDriverKind.make("grok"),
+          model: "grok-build",
+        }),
+        installed: false,
+        status: "error",
+      };
+      // The cached Claude snapshot predates the CLI repair. Each probe reports
+      // whatever `cliInstalled` says now, with a new `checkedAt`.
       let cliInstalled = false;
       let claude = missingCli;
+      let probeCount = 0;
+      // Hooks that order concurrent calls: a read runs `onRead` after it takes
+      // the snapshot, a probe runs `onProbe` and then waits for `probesHeld`.
+      let onRead: Effect.Effect<void> = Effect.void;
+      let onProbe: Effect.Effect<void> = Effect.void;
+      let probesHeld: Deferred.Deferred<void> | undefined;
+      // `done` completes on the `count`th `tick`.
+      const countdown = (count: number) =>
+        Effect.map(Deferred.make<void>(), (done) => {
+          let remaining = count;
+          return {
+            done,
+            tick: Effect.suspend(() =>
+              (remaining -= 1) === 0
+                ? Deferred.succeed(done, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
+          };
+        });
       const refreshed = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
       const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
       let delegated = false;
@@ -1043,19 +1075,26 @@ describe("OrchestratorMcpService provider resolution", () => {
             ),
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
-          getProviders: Effect.sync(() => [codex, claude]),
+          getProviders: Effect.sync(() => [codex, claude, grok]).pipe(Effect.tap(() => onRead)),
           refreshInstance: (instanceId) =>
-            Ref.update(refreshed, (ids) => [...ids, instanceId]).pipe(
-              Effect.andThen(
-                Effect.sync(() => {
-                  claude = cliInstalled ? healthyClaude : missingCli;
-                  return [codex, claude];
-                }),
-              ),
-            ),
+            Effect.gen(function* () {
+              yield* Ref.update(refreshed, (ids) => [...ids, instanceId]);
+              const held = probesHeld;
+              yield* onProbe;
+              if (held !== undefined) yield* Deferred.await(held);
+              probeCount += 1;
+              const checkedAt = `2026-10-05T00:00:${String(probeCount).padStart(2, "0")}.000Z`;
+              if (instanceId === claudeInstanceId) {
+                claude = { ...(cliInstalled ? healthyClaude : missingCli), checkedAt };
+              } else {
+                grok = { ...grok, checkedAt };
+              }
+              return [codex, claude, grok];
+            }),
         }),
-        adapterRegistryLayer([codexInstanceId, claudeInstanceId]),
+        adapterRegistryLayer([codexInstanceId, claudeInstanceId, grokInstanceId]),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        Layer.mock(ProjectService.ProjectService)({}),
       );
 
       yield* Effect.gen(function* () {
@@ -1067,33 +1106,59 @@ describe("OrchestratorMcpService provider resolution", () => {
             mode: "async",
             clientRequestId,
           });
+        const takeRefreshed = Ref.getAndSet(refreshed, []);
 
-        // Still broken: the re-probe confirms it, so the refusal stands.
+        // Still broken: the re-probe confirms it, and only the target is probed.
         const error = yield* delegate("delegate-recheck-1").pipe(Effect.flip);
         assert.equal(error.code, "provider_unavailable");
         assert.include(error.message, "was not found on PATH");
-        assert.deepEqual(yield* Ref.get(refreshed), [claudeInstanceId]);
+        assert.deepEqual(yield* takeRefreshed, [claudeInstanceId]);
         assert.deepEqual(yield* Ref.get(dispatched), []);
 
         // The CLI was repaired, but no client is in the foreground to refresh
-        // the cache. Capabilities and delegation both see the fix.
+        // the cache. Concurrent capability calls that read the same stale
+        // snapshots share one probe per instance, and all see the fix.
         cliInstalled = true;
-        const capabilities = yield* service.capabilities(scope);
-        const entry = capabilities.providers.find(
-          (provider) => provider.providerInstanceId === claudeInstanceId,
-        );
-        assert.isTrue(entry?.canRunChildTask);
-        assert.deepEqual(entry?.constraints, []);
+        claude = missingCli;
+        const held = yield* Deferred.make<void>();
+        const firstProbes = yield* countdown(2);
+        probesHeld = held;
+        onProbe = firstProbes.tick;
+        const first = yield* service.capabilities(scope).pipe(Effect.forkChild);
+        yield* Deferred.await(firstProbes.done);
+        // The first call holds both probes. Two more calls read the stale snapshots.
+        const laterReads = yield* countdown(2);
+        onRead = laterReads.tick;
+        const later = yield* Effect.all(
+          [service.capabilities(scope), service.capabilities(scope)],
+          {
+            concurrency: "unbounded",
+          },
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(laterReads.done);
+        onRead = Effect.void;
+        onProbe = Effect.void;
+        probesHeld = undefined;
+        yield* Deferred.succeed(held, undefined);
+        for (const capabilities of [yield* Fiber.join(first), ...(yield* Fiber.join(later))]) {
+          const entry = capabilities.providers.find(
+            (provider) => provider.providerInstanceId === claudeInstanceId,
+          );
+          assert.isTrue(entry?.canRunChildTask);
+          assert.deepEqual(entry?.constraints, []);
+        }
+        assert.sameMembers([...(yield* takeRefreshed)], [claudeInstanceId, grokInstanceId]);
 
+        // Delegation sees the repair through its own recheck too.
         claude = missingCli;
         const result = yield* delegate("delegate-recheck-2");
         assert.equal(result.providerInstanceId, claudeInstanceId);
         assert.equal((yield* Ref.get(dispatched)).length, 1);
+        assert.deepEqual(yield* takeRefreshed, [claudeInstanceId]);
 
         // A healthy snapshot is trusted without another probe.
-        const probes = (yield* Ref.get(refreshed)).length;
         yield* service.capabilities(scope);
-        assert.equal((yield* Ref.get(refreshed)).length, probes);
+        assert.deepEqual(yield* takeRefreshed, [grokInstanceId]);
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
     }),
   );

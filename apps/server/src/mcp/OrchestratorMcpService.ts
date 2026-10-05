@@ -54,6 +54,7 @@ import {
   type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -768,6 +769,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+  const providerRecheckLocks = yield* KeyedLock.make<ServerProvider["instanceId"]>();
   const projects = yield* ProjectService.ProjectService;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
@@ -995,45 +997,71 @@ const make = Effect.gen(function* () {
   const loadOrchestrationCapableInstanceIds = () =>
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
+  /** Re-probes `stale` unless another caller re-probed it while this one waited. */
+  const recheckProvider = (stale: ServerProvider) =>
+    providerRecheckLocks.withLock(
+      stale.instanceId,
+      Effect.gen(function* () {
+        const current = (yield* loadProviders).find(
+          (provider) => provider.instanceId === stale.instanceId,
+        );
+        if (current?.checkedAt !== stale.checkedAt) return;
+        yield* providerRegistry.refreshInstance(stale.instanceId);
+      }),
+    );
+
   /**
    * Snapshots re-probe on a timer only while a client is in the foreground, so
    * an unattended agent can read a stale failure, such as "not installed" after
-   * the CLI was repaired. Re-probe enabled instances that look unavailable
-   * before telling an agent they cannot run. Healthy instances stay cached.
+   * the CLI was repaired. Re-probe the enabled instances `include` selects that
+   * look unavailable before telling an agent they cannot run. Healthy
+   * instances stay cached.
    */
-  const loadProvidersRecheckingUnavailable = Effect.gen(function* () {
-    const providers = yield* loadProviders;
-    const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
-    const unavailable = providers.filter(
-      (provider) =>
-        provider.enabled &&
-        orchestrationCapableInstanceIds.has(provider.instanceId) &&
-        providerConstraints(provider, true).length > 0,
-    );
-    if (unavailable.length === 0) return providers;
-    yield* Effect.forEach(
-      unavailable,
-      (provider) => providerRegistry.refreshInstance(provider.instanceId),
-      { concurrency: "unbounded", discard: true },
-    );
-    return yield* loadProviders;
-  });
+  const loadProvidersRecheckingUnavailable = (include: (provider: ServerProvider) => boolean) =>
+    Effect.gen(function* () {
+      const providers = yield* loadProviders;
+      const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
+      const unavailable = providers.filter(
+        (provider) =>
+          include(provider) &&
+          provider.enabled &&
+          orchestrationCapableInstanceIds.has(provider.instanceId) &&
+          providerConstraints(provider, true).length > 0,
+      );
+      if (unavailable.length === 0) return providers;
+      yield* Effect.forEach(unavailable, recheckProvider, {
+        concurrency: "unbounded",
+        discard: true,
+      });
+      return yield* loadProviders;
+    });
 
-  /** Resolves against cached snapshots, rechecking once before reporting an unavailable provider. */
+  /**
+   * Resolves against cached snapshots. On `provider_unavailable`, re-probes the
+   * instances the target could use and resolves once more.
+   */
   const resolveTarget = (input: {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
-  }) =>
-    loadProviders.pipe(
+  }) => {
+    const { providerInstanceId, driverKind } = input.target ?? {};
+    const couldServeTarget = (provider: ServerProvider) =>
+      providerInstanceId !== undefined
+        ? provider.instanceId === providerInstanceId
+        : driverKind !== undefined
+          ? provider.driver === driverKind
+          : provider.instanceId === input.parent.thread.modelSelection.instanceId;
+    return loadProviders.pipe(
       Effect.flatMap((providers) => resolveTargetFrom({ ...input, providers })),
       Effect.catchIf(
         (error) => error.code === "provider_unavailable",
         () =>
-          loadProvidersRecheckingUnavailable.pipe(
+          loadProvidersRecheckingUnavailable(couldServeTarget).pipe(
             Effect.flatMap((providers) => resolveTargetFrom({ ...input, providers })),
           ),
       ),
     );
+  };
 
   const resolveTargetFrom = (input: {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
@@ -1499,7 +1527,7 @@ const make = Effect.gen(function* () {
     capabilities: (scope) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
-        const providers = yield* loadProvidersRecheckingUnavailable;
+        const providers = yield* loadProvidersRecheckingUnavailable(() => true);
         const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
         return {
           parentThreadId: parent?.thread.id ?? null,
