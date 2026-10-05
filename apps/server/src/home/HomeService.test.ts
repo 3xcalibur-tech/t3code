@@ -205,6 +205,8 @@ it.effect("turning Home off holds the old Home's queue, then stops its run", () 
       { type: "queue.hold", threadId: busy },
       { type: "run.interrupt", threadId: busy },
     ]);
+    // Each command needs its own id; a reused id would replay the hold's receipt.
+    expect(dispatched[0]?.commandId).not.toBe(dispatched[1]?.commandId);
   }).pipe(Effect.provide(layer));
 });
 
