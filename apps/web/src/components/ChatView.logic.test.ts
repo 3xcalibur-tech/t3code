@@ -32,7 +32,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { presentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { Atom, AsyncResult } from "effect/unstable/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentThreadDetails } from "../state/threads";
 

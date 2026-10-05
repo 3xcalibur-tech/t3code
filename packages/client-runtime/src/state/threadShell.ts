@@ -9,7 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import { isProviderNativeSubagentThread } from "@t3tools/contracts";
 import { activeSubagentThreadStatus } from "./subagentRuntime.ts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
 import { presentThreadShell } from "./models.ts";
