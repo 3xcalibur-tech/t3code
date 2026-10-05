@@ -57,6 +57,20 @@ function adjustProjectWrites(projectKeys: ReadonlyArray<string>, delta: number) 
   });
 }
 
+// The newest pin slot handed out. Pins made faster than the list updates
+// still land in click order instead of sharing one slot.
+let lastIssuedPinOrderKey: string | null = null;
+
+function issuePinOrderKey(groups: ReadonlyArray<ProjectGroup>): string | null {
+  const key = nextProjectPinOrderKey(
+    lastIssuedPinOrderKey === null
+      ? groups
+      : [...groups, { pinnedAt: "issued", pinOrderKey: lastIssuedPinOrderKey }],
+  );
+  if (key !== null) lastIssuedPinOrderKey = key;
+  return key;
+}
+
 /** Runs `run` after earlier writes to any of the projects, marking them busy meanwhile. */
 function queueProjectWrite(
   projectKeys: ReadonlyArray<string>,
@@ -194,16 +208,19 @@ export function useProjectGroupActions() {
   const isBusy = useCallback((projectKey: string) => busyCounts.has(projectKey), [busyCounts]);
 
   const setPinned = useCallback(
-    (group: ProjectGroup, pinned: boolean, groups: ReadonlyArray<ProjectGroup>) =>
-      queueProjectWrite([group.projectKey], () =>
+    (group: ProjectGroup, pinned: boolean, groups: ReadonlyArray<ProjectGroup>) => {
+      // Take the slot at click time, so quick pins keep their order.
+      const input = pinned
+        ? { pinned: true, pinOrderKey: issuePinOrderKey(groups) }
+        : { pinned: false };
+      return queueProjectWrite([group.projectKey], () =>
         organizeGroup(
           group,
-          pinned
-            ? { pinned: true, pinOrderKey: nextProjectPinOrderKey(groups) }
-            : { pinned: false },
+          input,
           pinned ? `Failed to pin ${group.displayName}` : `Failed to unpin ${group.displayName}`,
         ),
-      ),
+      );
+    },
     [organizeGroup],
   );
 
