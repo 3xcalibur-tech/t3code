@@ -161,7 +161,9 @@ export const make = Effect.gen(function* () {
     return [path.join("public", clean), clean];
   };
 
-  const findExistingFile = Effect.fn("ProjectFaviconResolver.findExistingFile")(function* (
+  // Untraced: one resolution checks about 20 candidates, and resolvePathUncached
+  // already records the whole scan.
+  const findExistingFile = Effect.fnUntraced(function* (
     projectCwd: string,
     relativeCandidates: ReadonlyArray<string>,
     candidateScope: "workspace" | "filesystem",

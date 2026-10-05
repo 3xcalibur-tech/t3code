@@ -190,8 +190,9 @@ export const make = Effect.gen(function* () {
     return normalizedWorkspaceRoot;
   });
 
+  // Untraced: pure path math that favicon scans call for every candidate file.
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =
-    Effect.fn("WorkspacePaths.resolveRelativePathWithinRoot")(function* (input) {
+    Effect.fnUntraced(function* (input) {
       const normalizedInputPath = input.relativePath.trim();
       if (path.isAbsolute(normalizedInputPath)) {
         return yield* new WorkspacePathOutsideRootError({
