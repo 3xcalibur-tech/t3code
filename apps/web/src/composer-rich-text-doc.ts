@@ -995,6 +995,44 @@ export function splitOrLiftListItem(editor: Editor): boolean {
   return editor.can().command(move) && editor.chain().command(move).run();
 }
 
+/**
+ * Deletes `from`–`to`, the typed `[ ]` at the start of a bullet item's text,
+ * and makes that item a task where it stands. A task list holds only tasks, so
+ * the bullet list splits around it into sibling lists, which is also how the
+ * parser reads a change of list kind. Nested items and the item's own nested
+ * lists stay where they are.
+ */
+export function convertBulletItemToTask(
+  tr: Transaction,
+  from: number,
+  to: number,
+  checked: boolean,
+): void {
+  tr.delete(from, to);
+  const $pos = tr.doc.resolve(from);
+  const item = $pos.node(-1);
+  const list = $pos.node(-2);
+  const index = $pos.index(-2);
+  const { schema } = tr.doc.type;
+  const before: ProseMirrorNode[] = [];
+  const after: ProseMirrorNode[] = [];
+  list.forEach((child, _, childIndex) => {
+    if (childIndex < index) before.push(child);
+    else if (childIndex > index) after.push(child);
+  });
+  const task = schema.nodes.taskItem!.create({ checked, indent: item.attrs.indent }, item.content);
+  const lists = [
+    ...(before.length > 0 ? [list.copy(Fragment.from(before))] : []),
+    schema.nodes.taskList!.create(null, task),
+    ...(after.length > 0 ? [list.copy(Fragment.from(after))] : []),
+  ];
+  const listStart = $pos.before(-2);
+  tr.replaceWith(listStart, listStart + list.nodeSize, lists);
+  // Into the task list, its item and its paragraph.
+  const caret = listStart + (before.length > 0 ? lists[0]!.nodeSize : 0) + 3;
+  tr.setSelection(TextSelection.create(tr.doc, caret));
+}
+
 function listItemTypeAt($pos: ResolvedPos): "listItem" | "taskItem" | null {
   const name = $pos.depth > 1 ? $pos.node(-1).type.name : null;
   return name === "listItem" || name === "taskItem" ? name : null;

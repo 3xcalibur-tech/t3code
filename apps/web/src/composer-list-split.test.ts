@@ -14,6 +14,7 @@ import {
   ComposerCodeBlockExtension,
   ComposerListExtensions,
   ComposerTaskItemExtension,
+  convertBulletItemToTask,
   deleteAcrossList,
   serializeEditorDoc,
   splitOrLiftListItem,
@@ -197,5 +198,29 @@ describe("blocks that a list item or quote cannot hold", () => {
     placeCaret(editor, "q");
     expect(editor.commands.wrapInList("taskList")).toBe(false);
     expect(storedDraft(editor)).toBe("> q");
+  });
+});
+
+describe("[ ] typed at the start of a bullet item", () => {
+  // The value holds `[ ]` already; the rule fires on the space after it.
+  it.each([
+    ["* [ ]x", "- [ ] x"],
+    ["* a\n* [ ]x\n* c", "* a\n- [ ] x\n* c"],
+    ["- a\n  * [ ]x", "- a\n  - [ ] x"],
+    ["- a\n  - [ ]x\n  - y", "- a\n  - [ ] x\n  - y"],
+    ["- [ ]x\n  - y", "- [ ] x\n  - y"],
+  ])("makes the item in %j a task where it stands", (value, expected) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "[ ]x");
+    const from = editor.state.selection.from;
+    editor.view.dispatch(
+      editor.state.tr.setSelection(TextSelection.create(editor.state.doc, from + 3)),
+    );
+    const { tr } = editor.state;
+    convertBulletItemToTask(tr, from, from + 3, false);
+    editor.view.dispatch(tr);
+    expect(editor.state.selection.$from.parent.textContent).toBe("x");
+    expect(editor.state.selection.$from.parentOffset).toBe(0);
+    expect(storedDraft(editor)).toBe(expected);
   });
 });

@@ -50,6 +50,7 @@ import {
   ComposerListExtensions,
   buildTiptapContent,
   collapsedToFlat,
+  convertBulletItemToTask,
   ComposerCodeExtension,
   ComposerTaskItemExtension,
   ComposerTaskListExtension,
@@ -584,11 +585,12 @@ const bulletToTaskInputRule = new InputRule({
     // Any bullet converts; the task grammar only knows `-`, so a `*` or `+`
     // item comes back out as `- [ ]`.
     if (!["-", "*", "+"].includes((item.attrs as { marker?: string }).marker ?? "")) return null;
-    const indent = typeof item.attrs.indent === "string" ? item.attrs.indent : "";
+    const checked = (match[1] ?? " ").toLowerCase() === "x";
     chain()
-      .deleteRange(range)
-      .toggleList("taskList", "taskItem")
-      .updateAttributes("taskItem", { checked: (match[1] ?? " ").toLowerCase() === "x", indent })
+      .command(({ tr }) => {
+        convertBulletItemToTask(tr, range.from, range.to, checked);
+        return true;
+      })
       .run();
     return undefined;
   },
