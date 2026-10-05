@@ -197,9 +197,9 @@ fails, the required checks pass, someone else comments or reviews, or the branch
 Comments from your own account do not wake it. Watching ends when the pull request merges or closes,
 after 10 wakes in a row that bring only comments, when the server cannot read the pull request for
 15 minutes, or when you press Stop on the thread. A host rate limit pauses the watch instead of
-ending it. Subagents cannot watch; the thread that delegated them watches instead. Settling a thread also ends all its watches.
-Unsettle the thread before starting a new watch. To start or stop it yourself, use the row menu in
-the **Linked pull requests** panel.
+ending it. Settling a thread also ends all its watches. Unsettle the thread before starting a new
+watch. Subagents cannot watch; the thread that delegated them watches instead. To start or stop a
+watch yourself, use the row menu in the **Linked pull requests** panel.
 
 A watched thread counts as working between wakes, so it stays in the **Working** section and does
 not auto-settle. Agents stop watching when they hand the work back to you, and the thread then
