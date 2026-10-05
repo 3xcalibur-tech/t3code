@@ -544,7 +544,8 @@ it.effect("a held request already delivered directly runs only once", () =>
         requestFor(task, { relayDeliveryId: "relay-1", receivedAt: "2026-10-04T10:00:00.000Z" }),
       );
       assert.equal(direct._tag, "accepted");
-      assert.deepEqual(replayed, direct);
+      // Same delivery, answered the same way, but recorded as a duplicate.
+      assert.deepEqual(replayed, { ...direct, outcome: "duplicate" } as typeof replayed);
       yield* Queue.take(launches);
       const logged = (yield* service.listWebhookDeliveries({ id: task.id })).deliveries;
       assert.equal(logged.length, 1);

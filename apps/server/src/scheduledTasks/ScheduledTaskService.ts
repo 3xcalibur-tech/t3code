@@ -122,12 +122,37 @@ export interface WebhookTriggerRequest extends WebhookRequest {
 }
 
 /** What the HTTP route should answer. `not_found` covers unknown hooks and wrong tokens alike. */
+/**
+ * What happened to one webhook request, as recorded in metrics and spans.
+ * Sent back to the relay as `x-t3-hook-outcome`; never request contents.
+ */
+export type WebhookDeliveryOutcome =
+  | "accepted"
+  | "duplicate"
+  | "prompt_too_long"
+  | "queue_full"
+  | "rate_limited"
+  | "disabled"
+  | "rejected_signature"
+  | "expired"
+  | "not_found"
+  | "error";
+
 export type WebhookTriggerResult =
-  | { readonly _tag: "accepted"; readonly deliveryId: ScheduledTaskWebhookDeliveryId }
+  | {
+      readonly _tag: "accepted";
+      readonly deliveryId: ScheduledTaskWebhookDeliveryId;
+      /** A 202 covers more than a started run; this says which. */
+      readonly outcome: "accepted" | "duplicate" | "prompt_too_long";
+    }
   | { readonly _tag: "not_found" }
   | { readonly _tag: "rejected_signature" }
   | { readonly _tag: "disabled" }
-  | { readonly _tag: "rate_limited" }
+  | {
+      readonly _tag: "rate_limited";
+      /** Too many requests to this hook, or too many runs already waiting. */
+      readonly outcome: "rate_limited" | "queue_full";
+    }
   | { readonly _tag: "expired" };
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
@@ -1335,7 +1360,7 @@ export const layer = Layer.effect(
      */
     const observeDelivery = (
       request: WebhookTriggerRequest,
-      outcome: string,
+      outcome: WebhookDeliveryOutcome,
       receivedAt: DateTime.DateTime | undefined,
       now: DateTime.DateTime | undefined,
     ) =>
@@ -1408,7 +1433,8 @@ export const layer = Layer.effect(
                 Option.getOrElse(DateTime.make(request.receivedAt), () => now),
                 now,
               );
-        const observe = (outcome: string) => observeDelivery(request, outcome, receivedAt, now);
+        const observe = (outcome: WebhookDeliveryOutcome) =>
+          observeDelivery(request, outcome, receivedAt, now);
         const deliveryId = ScheduledTaskWebhookDeliveryId.make(
           request.relayDeliveryId === undefined
             ? `delivery:${yield* crypto.randomUUIDv4.pipe(
@@ -1449,7 +1475,7 @@ export const layer = Layer.effect(
               if (claimed.length === 0) {
                 // A held request this environment already ran: accepted, not run twice.
                 yield* observe("duplicate");
-                return { _tag: "accepted" as const, deliveryId };
+                return { _tag: "accepted" as const, deliveryId, outcome: "duplicate" as const };
               }
               // Older claims can no longer be replayed by the relay.
               yield* sql`
@@ -1484,7 +1510,10 @@ export const layer = Layer.effect(
             if (slot !== "allowed") {
               if (slot === "first_rejected") yield* log("rate_limited");
               yield* observe("rate_limited");
-              return yield* releaseClaim({ _tag: "rate_limited" as const });
+              return yield* releaseClaim({
+                _tag: "rate_limited" as const,
+                outcome: "rate_limited" as const,
+              });
             }
             if (!task.enabled) {
               yield* log("disabled");
@@ -1530,7 +1559,7 @@ export const layer = Layer.effect(
                 error: "The filled-in prompt is too long.",
               });
               yield* observe("prompt_too_long");
-              return { _tag: "accepted" as const, deliveryId };
+              return { _tag: "accepted" as const, deliveryId, outcome: "prompt_too_long" as const };
             }
             // Bound the deliveries one task holds, so steady traffic to a stuck
             // task cannot pile up parked fibers. A refused request is not logged,
@@ -1545,7 +1574,10 @@ export const layer = Layer.effect(
             if (!queued) {
               // The task is busy with WEBHOOK_MAX_QUEUED_PER_TASK deliveries already.
               yield* observe("queue_full");
-              return yield* releaseClaim({ _tag: "rate_limited" as const });
+              return yield* releaseClaim({
+                _tag: "rate_limited" as const,
+                outcome: "queue_full" as const,
+              });
             }
             // Entries leave the map when their count reaches zero, so a deleted
             // task's key does not linger once its last delivery finishes.
@@ -1601,7 +1633,7 @@ export const layer = Layer.effect(
               Effect.ensuring(release),
               Effect.forkIn(serviceScope),
             );
-            return { _tag: "accepted" as const, deliveryId };
+            return { _tag: "accepted" as const, deliveryId, outcome: "accepted" as const };
           }),
         );
       });

@@ -65,13 +65,19 @@ const deliver = (baseUrl: string, hook: HookInboxStore.HeldHook) =>
       if (Option.isNone(result.success))
         return { outcome: "unreachable" as const, reason: "timeout" };
       const status = result.success.value.status;
+      const upstreamOutcome = result.success.value.outcome;
       const outcome: HookInboxStore.DeliveryOutcome = UNREACHABLE_STATUSES.has(status)
         ? "unreachable"
         : BUSY_STATUSES.has(status)
           ? "busy"
           : "delivered";
-      return { outcome, reason: `status ${status}` };
+      return { outcome, reason: `status ${status}`, upstreamOutcome };
     }),
+    Effect.tap(({ upstreamOutcome }) =>
+      upstreamOutcome === undefined
+        ? Effect.void
+        : Effect.annotateCurrentSpan({ "relay.hook.upstream_outcome": upstreamOutcome }),
+    ),
     Effect.tap(({ outcome, reason }) =>
       outcome === "delivered"
         ? Effect.void

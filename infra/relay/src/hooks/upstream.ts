@@ -1,10 +1,12 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpMethod from "effect/http/HttpMethod";
+import * as HttpTraceContext from "effect/http/HttpTraceContext";
 import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import { withoutRedirects } from "../environments/EnvironmentConnector.ts";
@@ -36,8 +38,13 @@ export interface UpstreamHook {
 export interface UpstreamResponse {
   readonly status: number;
   readonly contentType: string | undefined;
+  /** What the environment did with the request (`x-t3-hook-outcome`). */
+  readonly outcome: string | undefined;
   readonly body: Uint8Array;
 }
+
+/** Outcome names are short identifiers; anything else is not recorded. */
+const OUTCOME_PATTERN = /^[a-z_]{1,32}$/;
 
 class ResponseTooLarge extends Schema.TaggedError<ResponseTooLarge>()("ResponseTooLarge", {}) {}
 
@@ -78,8 +85,12 @@ export const sendUpstream = (baseUrl: string, hook: UpstreamHook) =>
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
     const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+    // The environment's span joins this trace. Set by hand: the client span
+    // that would propagate it is off, because it records the token in url.full.
+    const parent = yield* Effect.currentSpan.pipe(Effect.option);
     const headers: Record<string, string> = {
       ...hook.headers,
+      ...(Option.isSome(parent) ? HttpTraceContext.toHeaders(parent.value) : {}),
       [RELAY_DELIVERY_ID_HEADER]: hook.id,
       [RELAY_RECEIVED_AT_HEADER]: hook.receivedAt,
     };
@@ -93,11 +104,15 @@ export const sendUpstream = (baseUrl: string, hook: UpstreamHook) =>
     return yield* httpClient.execute(request).pipe(
       Effect.flatMap((response) =>
         readCapped(response).pipe(
-          Effect.map((body): UpstreamResponse => ({
-            status: response.status,
-            contentType: response.headers["content-type"],
-            body,
-          })),
+          Effect.map((body): UpstreamResponse => {
+            const outcome = response.headers["x-t3-hook-outcome"];
+            return {
+              status: response.status,
+              contentType: response.headers["content-type"],
+              outcome: outcome !== undefined && OUTCOME_PATTERN.test(outcome) ? outcome : undefined,
+              body,
+            };
+          }),
         ),
       ),
       withoutRedirects,

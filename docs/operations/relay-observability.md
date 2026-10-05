@@ -64,7 +64,13 @@ A public webhook request is one `relay.hooks.forward` span. Its `relay.hook.outc
 happened: `forwarded`, `held`, `rate_limited`, `inbox_full`, `not_found`, `payload_too_large`,
 `environment_unavailable`, or `environment_timeout`. `relay.hook.endpoint_key` identifies the
 managed endpoint, and with it the environment. On a forward, `relay.hook.upstream_status` or
-`relay.hook.upstream_error` records the environment's answer. `relay.hook.rate_limit` says which
+`relay.hook.upstream_error` records the environment's answer, and
+`relay.hook.upstream_outcome` what it did with the request (`accepted`, `duplicate`,
+`prompt_too_long`, `queue_full`, `rejected_signature`, `expired`, `disabled`, ...), from its
+`x-t3-hook-outcome` response header. A held request's delivery records the same on its
+`relay.inbox.deliver` span. The relay sends its own `traceparent` with each forward and drops any a
+sender supplied, so on environments that export to T3 Connect, the environment's
+`ScheduledTaskService.triggerWebhook` span lands in the same trace. `relay.hook.rate_limit` says which
 budget ran out: `endpoint` or `hook`. `relay.hook.rate_limiter_failed_open` is set when the
 Cloudflare rate limiter was unavailable and the request went through unlimited.
 

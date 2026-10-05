@@ -56,6 +56,7 @@ describe("webhook route", () => {
       return Effect.succeed({
         _tag: "accepted",
         deliveryId: ScheduledTaskWebhookDeliveryId.make("delivery:1"),
+        outcome: "accepted",
       });
     });
     try {
@@ -84,6 +85,7 @@ describe("webhook route", () => {
       return Effect.succeed({
         _tag: "accepted",
         deliveryId: ScheduledTaskWebhookDeliveryId.make("delivery:1"),
+        outcome: "accepted",
       });
     });
     try {
@@ -103,22 +105,51 @@ describe("webhook route", () => {
     }
   });
 
-  it("maps service outcomes to status codes", async () => {
-    const cases: ReadonlyArray<[WebhookTriggerResult["_tag"], number]> = [
-      ["not_found", 404],
-      ["rejected_signature", 401],
-      ["disabled", 409],
-      ["rate_limited", 429],
+  it("maps service outcomes to status codes and names each outcome for the relay", async () => {
+    const deliveryId = ScheduledTaskWebhookDeliveryId.make("delivery:1");
+    const cases: ReadonlyArray<[WebhookTriggerResult, number, string]> = [
+      [{ _tag: "accepted", deliveryId, outcome: "accepted" }, 202, "accepted"],
+      // Same status as a started run; only the header tells them apart.
+      [{ _tag: "accepted", deliveryId, outcome: "duplicate" }, 202, "duplicate"],
+      [{ _tag: "accepted", deliveryId, outcome: "prompt_too_long" }, 202, "prompt_too_long"],
+      [{ _tag: "not_found" }, 404, "not_found"],
+      [{ _tag: "rejected_signature" }, 401, "rejected_signature"],
+      [{ _tag: "disabled" }, 409, "disabled"],
+      [{ _tag: "rate_limited", outcome: "rate_limited" }, 429, "rate_limited"],
+      [{ _tag: "rate_limited", outcome: "queue_full" }, 429, "queue_full"],
+      [{ _tag: "expired" }, 410, "expired"],
     ];
-    for (const [tag, status] of cases) {
-      const { handler, dispose } = handlerFor(() =>
-        Effect.succeed({ _tag: tag } as WebhookTriggerResult),
-      );
+    for (const [result, status, outcome] of cases) {
+      const { handler, dispose } = handlerFor(() => Effect.succeed(result));
       try {
-        expect((await handler(post("/api/hooks/id/tok", "{}"))).status).toBe(status);
+        const response = await handler(post("/api/hooks/id/tok", "{}"));
+        expect(response.status).toBe(status);
+        expect(response.headers.get("x-t3-hook-outcome")).toBe(outcome);
       } finally {
         await dispose();
       }
+    }
+  });
+
+  it("joins the relay's trace only for requests the relay forwarded", async () => {
+    const parents: Array<string | undefined> = [];
+    const { handler, dispose } = handlerFor(() =>
+      Effect.gen(function* () {
+        const span = yield* Effect.currentParentSpan.pipe(Effect.option);
+        parents.push(span._tag === "Some" ? span.value.traceId : undefined);
+        return { _tag: "not_found" } as const;
+      }),
+    );
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    try {
+      await handler(
+        post("/api/hooks/id/tok", "{}", { traceparent, "x-t3-relay-delivery-id": "relay-1" }),
+      );
+      // A sender calling the URL directly cannot attach to our traces.
+      await handler(post("/api/hooks/id/tok", "{}", { traceparent }));
+      expect(parents).toEqual(["0af7651916cd43dd8448eb211c80319c", undefined]);
+    } finally {
+      await dispose();
     }
   });
 

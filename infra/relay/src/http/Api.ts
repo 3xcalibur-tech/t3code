@@ -230,6 +230,9 @@ const relayRequestDeadline = <E, R>(
     ),
   );
 
+/** Trace context headers in every format the tracer reads (W3C and B3). */
+const SENDER_TRACE_HEADER = /^(traceparent|tracestate|b3|x-b3-.*)$/i;
+
 export const traceRelayHttpRequest = <E, R>(
   httpEffect: Effect.Effect<
     HttpServerResponse.HttpServerResponse,
@@ -247,8 +250,16 @@ export const traceRelayHttpRequest = <E, R>(
       return yield* HttpMiddleware.tracer(traced).pipe(Effect.ensuring(Effect.yieldNow));
     }
     // Hook URLs carry a secret token: the tracer and deadline log see a redacted
-    // request, while the route itself still receives the original.
-    const redacted = request.modify({ url: redactRelayHookUrl(request.url) });
+    // request, while the route itself still receives the original. A webhook
+    // sender's trace context is dropped, so it cannot pick the trace our relay
+    // and environment spans land in.
+    const redacted = request.modify({
+      url: redactRelayHookUrl(request.url),
+      headers: Headers.removeMany(
+        request.headers,
+        Object.keys(request.headers).filter((name) => SENDER_TRACE_HEADER.test(name)),
+      ),
+    });
     return yield* HttpMiddleware.tracer(
       appendRelayTraceContextResponseHeader.pipe(
         Effect.andThen(

@@ -558,6 +558,75 @@ describe("HookForwarder", () => {
     }),
   );
 
+  it.effect("joins the environment to its trace and records what the environment did", () =>
+    Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const respondWith = (outcome: string) =>
+        makeHarness({
+          execute: (request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response('{"deliveryId":"d"}', {
+                  status: 202,
+                  headers: { "x-t3-hook-outcome": outcome },
+                }),
+              ),
+            ),
+        });
+      const forward = (harness: ReturnType<typeof makeHarness>) =>
+        Effect.gen(function* () {
+          const handler = yield* harness.httpEffect;
+          return yield* traceRelayHttpRequestWith(
+            handler,
+            Layer.succeed(Tracer.Tracer, tracer),
+          ).pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request(hookUrl(), {
+                  method: "POST",
+                  // A sender's own trace context never reaches the environment.
+                  headers: {
+                    traceparent: "00-11111111111111111111111111111111-2222222222222222-01",
+                    "x-b3-traceid": "33333333333333333333333333333333",
+                  },
+                  body: "{}",
+                }),
+              ),
+            ),
+          );
+        });
+
+      const duplicate = respondWith("duplicate");
+      expect((yield* forward(duplicate)).status).toBe(202);
+      yield* Effect.yieldNow;
+      const forwardSpan = spans.find((span) => span.name === "relay.hooks.forward");
+      expect(forwardSpan?.attributes.get("relay.hook.upstream_outcome")).toBe("duplicate");
+      const sent = duplicate.sent[0]!;
+      expect(sent.headers.traceparent).toContain(forwardSpan!.traceId);
+      expect(sent.headers.traceparent).not.toContain("1111111111");
+      expect(sent.headers["x-b3-traceid"]).toBeUndefined();
+
+      // Only a plain outcome name is recorded.
+      spans.length = 0;
+      yield* forward(respondWith("<script>alert(1)</script>"));
+      yield* Effect.yieldNow;
+      expect(
+        spans
+          .find((span) => span.name === "relay.hooks.forward")
+          ?.attributes.has("relay.hook.upstream_outcome"),
+      ).toBe(false);
+    }),
+  );
+
   describe("holding requests while the environment is offline", () => {
     const offline = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.fail(

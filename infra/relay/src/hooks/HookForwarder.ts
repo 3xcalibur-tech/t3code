@@ -57,8 +57,12 @@ const DROPPED_REQUEST_HEADERS = new Set([
   // Only the relay may set this; a sender could otherwise collide delivery ids.
   "x-t3-relay-delivery-id",
   "x-t3-relay-received-at",
+  // The environment trusts trace context only from the relay, which sets its own.
+  "traceparent",
+  "tracestate",
+  "b3",
 ]);
-const DROPPED_REQUEST_HEADER_PREFIXES = ["proxy-", "cf-", "x-forwarded-"];
+const DROPPED_REQUEST_HEADER_PREFIXES = ["proxy-", "cf-", "x-forwarded-", "x-b3-"];
 
 export const isRelayHookPath = (url: string): boolean => url.startsWith(RELAY_HOOK_PATH_PREFIX);
 
@@ -412,6 +416,9 @@ const make = Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan({
       "relay.hook.outcome": "forwarded",
       "relay.hook.upstream_status": response.status,
+      ...(response.outcome === undefined
+        ? {}
+        : { "relay.hook.upstream_outcome": response.outcome }),
     });
     // Only content-type is passed through: no location (redirects are never
     // followed or relayed), no cookies, no upstream infrastructure headers.
