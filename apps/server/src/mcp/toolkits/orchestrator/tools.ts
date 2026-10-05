@@ -71,7 +71,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
 
 const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Needs an agent running inside a T3 thread. Read current work for a T3-owned delegated child created by this parent thread. childRunId identifies the current run. workState distinguishes working, waiting_for_children, and result_available. summary is null while work is pending and otherwise contains the current result, including provider errors on failure. Follow-ups update current status and result; the original result remains in the timeline. hasPendingChildRuns reports later queued or executing turns. latestTerminal* exposes the most recent non-monitor result while work is active. Reading a terminal result acknowledges that result's automatic parent delivery. task_cancel remains scoped to the original delegation.",
+    "Needs an agent running inside a T3 thread. Read current work for a T3-owned delegated child created by this parent thread. childRunId identifies the current run. workState distinguishes working, waiting_for_children, and result_available. summary is null while work is pending and otherwise contains the current result, including provider errors on failure. Follow-ups update current status and result; the original result remains in the timeline. hasPendingChildRuns reports later queued or executing turns. latestTerminal* exposes the most recent non-monitor result while work is active. Reading a terminal result acknowledges that result's automatic parent delivery. task_cancel stops the child thread, including later follow-up work.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -85,7 +85,7 @@ const TaskStatusTool = Tool.make("task_status", {
 
 const TaskCancelTool = Tool.make("task_cancel", {
   description:
-    "Needs an agent running inside a T3 thread. Request interruption of an active T3-owned delegated task and dispose its automatic parent delivery. If the original delegated run is terminal, return its status and dispose delivery without interrupting later child-thread runs, even when task_status reports current follow-up work. Results remain available in the timeline. Use t3_thread_interrupt for a later active run.",
+    "Needs an agent running inside a T3 thread. Stop a T3-owned delegated task and dispose its automatic parent delivery. Its child thread stops like a user Stop: the running turn is interrupted, queued turns are held, pull request watches end, and the tasks it delegated stop too. This includes later child-thread runs, even after the task is terminal. A terminal task returns its existing status, and published task results remain available.",
   parameters: OrchestratorMcpTaskCancelInput,
   success: OrchestratorMcpTaskCancelResult,
   failure: OrchestratorMcpFailure,

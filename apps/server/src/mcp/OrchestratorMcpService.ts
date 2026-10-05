@@ -1654,50 +1654,61 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
-        // Task cancellation owns the original delegation, not separate later child turns.
-        const childControls = yield* threadManagement
-          .getThreadRecords(current.childThreadId, ["runs", "contextTransfers"])
-          .pipe(Effect.mapError(threadManagementFailure));
-        const originalRun = delegatedTaskRun(childControls, {
-          threadId: scope.thread.threadId,
-          childThreadId: current.childThreadId,
+        // Cancelling stops the child thread the way Stop does, including work that came
+        // after a published result: follow-up runs, pull request watch wakes, and the
+        // tasks it delegated. Earlier results remain in the timeline.
+        const stopChild = Effect.gen(function* () {
+          const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
+          const reason = input.reason;
+          yield* threadManagement
+            .dispatch({
+              type: "thread.stop",
+              commandId,
+              threadId: current.childThreadId,
+              ...(reason === undefined ? {} : { reason }),
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  "task_not_cancellable",
+                  `Unable to stop delegated task ${input.taskId}: ${errorMessage(error)}`,
+                ),
+              ),
+            );
+          // A retry with the same clientRequestId repeats only the stops that failed.
+          yield* threadManagement
+            .stopDelegatedTasks({ threadId: current.childThreadId, commandId, reason })
+            .pipe(
+              Effect.mapError((error) =>
+                failure(
+                  "task_not_cancellable",
+                  `Stopped delegated task ${input.taskId}, but not every task it delegated: ${errorMessage(error)}`,
+                ),
+              ),
+            );
         });
-        const originalStatus = taskStatusForRun(originalRun);
-        if (isTerminalTaskStatus(originalStatus)) {
+        if (isTerminalTaskStatus(current.status)) {
+          yield* stopChild;
           yield* disposeCompletionDelivery;
           return {
             taskId: input.taskId,
-            status: originalStatus,
+            status: current.status,
           } satisfies OrchestratorMcpTaskCancelResult;
         }
+        // Queued follow-ups and nested delegates are work to stop even between turns.
+        // A task awaiting a restart with neither keeps its delivery.
         const child = yield* loadProjection(current.childThreadId);
-        const activeRun = ThreadManagementService.latestActiveRun(child);
-        if (activeRun === undefined) {
+        if (
+          current.workState !== "waiting_for_children" &&
+          !current.hasPendingChildRuns &&
+          ThreadManagementService.latestActiveRun(child) === undefined
+        ) {
           return yield* failure(
             "task_not_cancellable",
             `Delegated task ${input.taskId} has no interruptible child run.`,
           );
         }
-        yield* threadManagement
-          .dispatch({
-            type: "run.interrupt",
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "cancel-task",
-            }),
-            threadId: current.childThreadId,
-            runId: activeRun.id,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
-          })
-          .pipe(
-            Effect.mapError((error) =>
-              failure(
-                "task_not_cancellable",
-                `Unable to interrupt delegated task ${input.taskId}: ${errorMessage(error)}`,
-              ),
-            ),
-          );
+        yield* stopChild;
         yield* disposeCompletionDelivery.pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("orchestrator-mcp.cancel-task.delivery-dispose-failed", {

@@ -273,16 +273,18 @@ from another parent thread is rejected. Follow-ups update current status and
 result; the original result stays in the timeline. While work is pending, the
 summary is null and the most recent non-monitor result remains available through
 `latestTerminal*`. Reading a terminal result acknowledges delivery of that exact
-result. Task cancellation remains scoped to the original delegation.
+result. Task cancellation stops the child thread, including later follow-up work.
 
 ### `task_cancel`
 
-Interrupts the currently active task run through the normal V2 `run.interrupt`
-command and disposes automatic parent delivery. Native background work between
-turns currently has no interruptible run. If the original delegated run is terminal,
-it returns that run's status and disposes delivery without interrupting later child-thread runs,
-even when `task_status` reports follow-up work. Results remain in the timeline. It accepts an optional cancellation reason. Use
-`t3_thread_interrupt` to stop a later active run.
+Stops the child thread with the internal `thread.stop` command, then stops every
+task the child delegated, and disposes automatic parent delivery. Like a user Stop,
+`thread.stop` interrupts the running turn, holds queued turns, and ends pull request
+watches. A nonterminal task with no active run, queued follow-up, or nested work
+is rejected. A terminal task
+returns its existing status, and its child thread still stops, including later
+runs and watch wakes. Published task results remain available. It accepts an
+optional cancellation reason.
 
 ### `create_threads`
 

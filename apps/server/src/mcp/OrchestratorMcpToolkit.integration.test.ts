@@ -1711,9 +1711,10 @@ describe("orchestrator MCP toolkit", () => {
                 legacyDelegatedRun,
               ),
             ).toBe(true);
+            const cancelParentSequence = yield* orchestrator.getThreadEventSequence(parentThreadId);
             const completedTaskCancelCall = yield* invoke("task_cancel", {
               taskId: delegated.taskId,
-              reason: "Must not interrupt a later unrelated child run.",
+              reason: "Stop the child's later work too.",
               clientRequestId: "cancel-completed-delegated-task-1",
             });
             const completedTaskCancel = yield* decodeTaskCancelResult(
@@ -1721,37 +1722,16 @@ describe("orchestrator MCP toolkit", () => {
             ).pipe(Effect.orDie);
             expect(completedTaskCancel).toEqual({
               taskId: delegated.taskId,
-              status: "completed",
+              status: "cancel_requested",
             });
             expect(
               (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
                 (task) => task.id === delegated.taskId,
               ),
             ).toMatchObject({
-              result: delegatedStatusAfterFollowup.summary,
-              resultRunId: childFollowup.runId,
               completionDelivery: { state: "disposed" },
             });
-            expect(
-              (yield* orchestrator.getThreadProjection(delegated.childThreadId)).runs.find(
-                (run) => run.id === activeChildFollowup.runId,
-              )?.status,
-            ).toBe("running");
-            const cleanupParentSequence =
-              yield* orchestrator.getThreadEventSequence(parentThreadId);
-            const activeChildCleanupCall = yield* invoke("t3_thread_interrupt", {
-              threadId: delegated.childThreadId,
-              runId: activeChildFollowup.runId,
-              reason: "Clean up the active follow-up after verifying task cancellation isolation.",
-              clientRequestId: "interrupt-delegated-child-followup-1",
-            });
-            const activeChildCleanup = yield* decodeThreadInterruptResult(
-              activeChildCleanupCall.structuredContent,
-            ).pipe(Effect.orDie);
-            expect(activeChildCleanup).toMatchObject({
-              runId: activeChildFollowup.runId,
-              status: "interrupt_requested",
-            });
+            // Cancelling a resumed task stops its current follow-up.
             yield* waitForProjection(orchestrator, delegated.childThreadId, (projection) =>
               projection.runs.some(
                 (run) => run.id === activeChildFollowup.runId && run.status === "interrupted",
@@ -1761,15 +1741,15 @@ describe("orchestrator MCP toolkit", () => {
               orchestrator,
               delegated.childThreadId,
               activeChildFollowup.runId,
-              cleanupParentSequence,
+              cancelParentSequence,
             );
-            const delegatedStatusAfterCleanupCall = yield* invoke("task_status", {
+            const delegatedStatusAfterCancelCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
             });
-            const delegatedStatusAfterCleanup = yield* decodeDelegateTaskResult(
-              delegatedStatusAfterCleanupCall.structuredContent,
+            const delegatedStatusAfterCancel = yield* decodeDelegateTaskResult(
+              delegatedStatusAfterCancelCall.structuredContent,
             ).pipe(Effect.orDie);
-            expect(delegatedStatusAfterCleanup).toMatchObject({
+            expect(delegatedStatusAfterCancel).toMatchObject({
               childRunId: activeChildFollowup.runId,
               status: "interrupted",
               summary: expect.any(String),

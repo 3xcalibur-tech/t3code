@@ -328,7 +328,7 @@ describe("OrchestratorMcpService", () => {
     }),
   );
 
-  it.effect("does not dispose delivery when the child interrupt fails", () =>
+  it.effect("does not dispose delivery when the child stop fails", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-cancel-failed-parent");
       const childThreadId = ThreadId.make("thread:mcp-cancel-failed-child");
@@ -367,7 +367,7 @@ describe("OrchestratorMcpService", () => {
             Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
           dispatch: (command) =>
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-              Effect.andThen(Effect.fail(new Error("simulated interrupt failure") as never)),
+              Effect.andThen(Effect.fail(new Error("simulated stop failure") as never)),
             ),
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
@@ -398,91 +398,101 @@ describe("OrchestratorMcpService", () => {
         assert.equal(error.code, "task_not_cancellable");
         assert.deepEqual(
           (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
-          ["run.interrupt"],
+          ["thread.stop"],
         );
       }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
     }),
   );
 
-  it.effect("returns cancel requested when post-interrupt disposal fails", () =>
-    Effect.gen(function* () {
-      const parentThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-parent");
-      const childThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-child");
-      const childRunId = RunId.make("run:mcp-cancel-dispose-failed-child");
-      const taskId = NodeId.make("node:mcp-cancel-dispose-failed-task");
-      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
-      const parentProjection = {
-        thread: { id: parentThreadId },
-        runs: [],
-        contextTransfers: [],
-        subagents: [
-          {
-            id: taskId,
-            threadId: parentThreadId,
-            origin: "app_owned",
-            childThreadId,
-            driver: "codex",
-            model: "gpt-5.6-terra",
-            result: null,
-            completionDelivery: { state: "pending" },
-          },
-        ],
-      } as unknown as OrchestrationV2ThreadProjection;
-      const childProjection = {
-        thread: { id: childThreadId },
-        runs: [{ id: childRunId, status: "running" }],
-        contextTransfers: [],
-        messages: [],
-        subagents: [],
-        providerThreads: [],
-      } as unknown as OrchestrationV2ThreadProjection;
-      const dependencies = Layer.mergeAll(
-        NodeServices.layer,
-        Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getThreadRecords: (threadId) =>
-            Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
-          dispatch: (command) =>
-            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
-              Effect.andThen(
-                command.type === "delegated_task.completion-delivery.dispose"
-                  ? Effect.fail(new Error("simulated disposal failure") as never)
-                  : Effect.succeed({} as never),
+  it.effect.each(["active turn", "queued follow-up"] as const)(
+    "returns cancel requested for %s when post-stop disposal fails",
+    (work) =>
+      Effect.gen(function* () {
+        const parentThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-parent");
+        const childThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-child");
+        const childRunId = RunId.make("run:mcp-cancel-dispose-failed-child");
+        const taskId = NodeId.make("node:mcp-cancel-dispose-failed-task");
+        const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const parentProjection = {
+          thread: { id: parentThreadId },
+          runs: [],
+          contextTransfers: [],
+          subagents: [
+            {
+              id: taskId,
+              threadId: parentThreadId,
+              origin: "app_owned",
+              childThreadId,
+              driver: "codex",
+              model: "gpt-5.6-terra",
+              result: null,
+              completionDelivery: { state: "pending" },
+            },
+          ],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const childProjection = {
+          thread: { id: childThreadId },
+          runs:
+            work === "queued follow-up"
+              ? [
+                  { id: RunId.make(`${childRunId}:original`), ordinal: 1, status: "completed" },
+                  { id: childRunId, ordinal: 2, status: "queued", queueHeld: false },
+                ]
+              : [{ id: childRunId, ordinal: 1, status: "running" }],
+          contextTransfers: [],
+          messages: [],
+          turnItems: [],
+          subagents: [],
+          providerThreads: [],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const dependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: (threadId) =>
+              Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.andThen(
+                  command.type === "delegated_task.completion-delivery.dispose"
+                    ? Effect.fail(new Error("simulated disposal failure") as never)
+                    : Effect.succeed({} as never),
+                ),
               ),
-            ),
-        }),
-        Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
-        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
-          list: () => Effect.succeed([]),
-        }),
-        Layer.mock(ProjectService.ProjectService)({}),
-        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
-      );
-      const scope: McpInvocationScope = {
-        environmentId: EnvironmentId.make("environment:mcp-cancel-dispose-failed"),
-        requestNamespace: "provider-session:mcp-cancel-dispose-failed",
-        thread: {
-          threadId: parentThreadId,
-          providerSessionId: "provider-session:mcp-cancel-dispose-failed",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-        },
-        client: undefined,
-        capabilities: new Set(["orchestration"]),
-        issuedAt: 1,
-      };
-
-      yield* Effect.gen(function* () {
-        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-        const result = yield* service.cancelTask(scope, {
-          taskId,
-          clientRequestId: "cancel-dispose-failed-task",
-        });
-        assert.equal(result.status, "cancel_requested");
-        assert.deepEqual(
-          (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
-          ["run.interrupt", "delegated_task.completion-delivery.dispose"],
+            stopDelegatedTasks: () => Effect.void,
+          }),
+          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            list: () => Effect.succeed([]),
+          }),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
         );
-      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
-    }),
+        const scope: McpInvocationScope = {
+          environmentId: EnvironmentId.make("environment:mcp-cancel-dispose-failed"),
+          requestNamespace: "provider-session:mcp-cancel-dispose-failed",
+          thread: {
+            threadId: parentThreadId,
+            providerSessionId: "provider-session:mcp-cancel-dispose-failed",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service.cancelTask(scope, {
+            taskId,
+            clientRequestId: "cancel-dispose-failed-task",
+          });
+          assert.equal(result.status, "cancel_requested");
+          assert.deepEqual(
+            (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
+            ["thread.stop", "delegated_task.completion-delivery.dispose"],
+          );
+        }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(dependencies))));
+      }),
   );
 });
 
