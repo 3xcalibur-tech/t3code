@@ -194,7 +194,6 @@ const ProjectEventPersistedRowSchema = Schema.Struct({
 });
 
 /** Exported so tests can exercise a full raw page without hardcoding a number that could drift. */
-export /** Exported so tests can exercise a full raw page without hardcoding a number that could drift. */
 export const READ_PAGE_SIZE = 500;
 
 interface ApplicationEventRow {

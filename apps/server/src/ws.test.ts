@@ -26,7 +26,10 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { ThreadManagementService } from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import { layer as OrchestrationEventStoreLive, OrchestrationEventStore } from "./persistence/OrchestrationEventStore.ts";
+import {
+  layer as OrchestrationEventStoreLive,
+  OrchestrationEventStore,
+} from "./persistence/OrchestrationEventStore.ts";
 import { layerMemory as SqlitePersistenceMemory } from "./persistence/Sqlite.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { ProjectEnrichmentService } from "./project/ProjectEnrichmentService.ts";
