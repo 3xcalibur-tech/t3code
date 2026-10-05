@@ -249,8 +249,19 @@ it.effect("makes Home name a project and watches the thread before launching it"
           return Effect.die("Home launched without a project.");
         },
       }),
-      Layer.mock(Project.ProjectService)({}),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      Layer.mock(Project.ProjectService)({
+        getById: (projectId) =>
+          Effect.succeed(
+            Option.some({
+              id: projectId,
+              workspaceRoot: projectId === caller.projectId ? "/data/home" : "/code/app",
+            } as never),
+          ),
+      }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isInHomeFolder: (candidate) => Effect.succeed(candidate.startsWith("/data/home")),
+      }),
       NodeServices.layer,
       ServerConfig.layerTest(process.cwd(), { prefix: "t3-home-launch-" }).pipe(
         Layer.provide(NodeServices.layer),
@@ -276,6 +287,12 @@ it.effect("makes Home name a project and watches the thread before launching it"
     expect(isHomeLaunchedThreadId(threadId)).toBe(true);
     expect(steps).toEqual([`watch ${threadId}`, `launch ${threadId}`]);
     expect(launched).toHaveLength(0);
+
+    // Home archives and settles; it never deletes.
+    const deleted = yield* toolkit
+      .handle("t3_project_delete", { projectId: ProjectId.make("project:app"), force: true })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+    expect(deleted.at(-1)?.result).toMatchObject({ code: "capability_denied" });
   }),
 );
 

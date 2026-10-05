@@ -102,6 +102,9 @@ const handlers = {
         const routed = yield* routeHome(input.environmentId, "threads.rename", {
           threadId,
           title: input.title,
+          ...(input.clientRequestId === undefined
+            ? {}
+            : { clientRequestId: input.clientRequestId }),
         });
         if (Option.isSome(routed)) return routed.value;
       } else if (input.environmentId !== undefined && input.environmentId !== scope.environmentId) {

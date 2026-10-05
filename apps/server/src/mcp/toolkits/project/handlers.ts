@@ -9,6 +9,7 @@ import {
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { refuseHomeFolder } from "../../../home/FleetService.ts";
 import * as HomeService from "../../../home/HomeService.ts";
 import { callerIsHome, routeHome, runAsHome } from "../../homeRouting.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
@@ -94,16 +95,11 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
       const targetEnvironmentId = input.environmentId ?? scope.environmentId;
       const remote = targetEnvironmentId !== scope.environmentId;
       // Home's folder carries Home's own instructions, so nothing launches there.
-      if (
-        isHome &&
-        (input.projectId === undefined
-          ? input.scratch !== true
-          : !remote && input.projectId === caller?.projectId)
-      )
+      if (isHome && input.projectId === undefined && input.scratch !== true)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message:
-            "Home must pass another project's projectId or scratch:true. Threads never launch in Home's folder.",
+            "Home must pass projectId or scratch:true. Threads never launch in Home's folder.",
         });
       if (remote && !isHome)
         return yield* new OrchestratorMcpFailure({
@@ -130,6 +126,16 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
           message:
             "scratch:true picks its own project and folder; omit projectId and workspaceStrategy.",
         });
+      // Checked before the watch is saved, so a refused launch leaves no watch.
+      // Another environment checks its own Home folder in FleetService.
+      if (isHome && !remote && input.projectId !== undefined)
+        yield* refuseHomeFolder(
+          {
+            projects: yield* Project.ProjectService,
+            folders: yield* ManagedProjectFolders.ManagedProjectFolders,
+          },
+          { projectId: input.projectId, workspaceStrategy: input.workspaceStrategy },
+        );
       const commandId = yield* newCommandId();
       const threadId = ThreadId.make(
         isHome ? `${HOME_LAUNCHED_THREAD_ID_PREFIX}${commandId}` : commandId,
@@ -299,6 +305,12 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
     }),
   t3_project_delete: (input) =>
     Effect.gen(function* () {
+      // Home archives and settles; it never deletes.
+      if (yield* callerIsHome())
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Home cannot delete projects. Archive or settle their threads instead.",
+        });
       const projects = yield* mutation;
       return yield* projects
         .delete({ ...input, commandId: yield* newCommandId() })

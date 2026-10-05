@@ -22,6 +22,7 @@ import {
 } from "./baseSchemas.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import {
+  OrchestratorMcpClientRequestId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpProviderCapability,
   OrchestratorMcpFailure,
@@ -200,6 +201,7 @@ export const FleetThreadRenameInput = Schema.Struct({
   environmentId: environmentIdField,
   threadId: ThreadId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type FleetThreadRenameInput = typeof FleetThreadRenameInput.Type;
 

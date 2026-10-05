@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  type FleetInput,
   type ExecutionEnvironmentDescriptor,
   type Project as ContractProject,
   ProjectId,
@@ -80,11 +81,14 @@ const setup = () => {
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           namedProjectsRoot: "/projects",
           homeRoot: Effect.succeed("/home"),
+          isInHomeFolder: (candidate) =>
+            Effect.succeed(candidate === "/home" || candidate.startsWith("/home/")),
         }),
         Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
         Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: (id) => Effect.succeed(shell(id, "a", 1)),
           getShellSnapshot: () =>
             Effect.succeed({
               schemaVersion: 1,
@@ -110,7 +114,7 @@ const setup = () => {
             } as never),
           dispatch: (command) => {
             dispatched.push(command);
-            return Effect.succeed({ sequence: 7 } as never);
+            return Effect.succeed({ sequence: 7, storedEvents: [] } as never);
           },
         }),
       ),
@@ -207,19 +211,42 @@ it.effect("refuses a scratch launch that also names a workspace", () => {
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("refuses to launch into a Home folder", () => {
+it.effect("refuses to launch into a Home folder, as a project or a worktree", () => {
   const { layer } = setup();
   return Effect.gen(function* () {
     const fleet = yield* FleetService.FleetService;
-    const error = yield* fleet
-      .execute({
-        actor,
-        request: {
-          op: "threads.launch",
-          input: { projectId: ProjectId.make("home"), title: "Worker" },
-        },
-      })
-      .pipe(Effect.asVoid, Effect.flip);
-    expect(error.code).toBe("invalid_request");
+    const launch = (input: Omit<FleetInput<"threads.launch">, "title">) =>
+      fleet
+        .execute({ actor, request: { op: "threads.launch", input: { title: "Worker", ...input } } })
+        .pipe(Effect.asVoid, Effect.flip);
+    expect((yield* launch({ projectId: ProjectId.make("home") })).code).toBe("invalid_request");
+    const worktree = yield* launch({
+      projectId: ProjectId.make("app"),
+      workspaceStrategy: { type: "existing_worktree", worktreePath: "/home/notes" },
+    });
+    expect(worktree.code).toBe("invalid_request");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keys a retried rename by its target thread", () => {
+  const { layer, dispatched } = setup();
+  return Effect.gen(function* () {
+    const fleet = yield* FleetService.FleetService;
+    const rename = (target: string) =>
+      fleet
+        .execute({
+          actor,
+          request: {
+            op: "threads.rename",
+            input: { threadId: ThreadId.make(target), title: "New title", clientRequestId: "r1" },
+          },
+        })
+        .pipe(Effect.ignore);
+    yield* rename("a");
+    yield* rename("a");
+    yield* rename("b");
+    const ids = dispatched.map((command) => command.commandId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[0]);
   }).pipe(Effect.provide(layer));
 });

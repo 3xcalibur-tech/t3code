@@ -128,6 +128,20 @@ it.effect("offers a Scratch folder under the data dir when it is outside a check
   ),
 );
 
+it.effect("knows which paths are Home's folder or inside it", () =>
+  withScratch(({ baseDir }) =>
+    Effect.gen(function* () {
+      const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
+      const path = yield* Path.Path;
+      const home = path.resolve(baseDir, "home");
+      assert.isTrue(yield* folders.isInHomeFolder(home));
+      assert.isTrue(yield* folders.isInHomeFolder(path.join(home, "notes")));
+      assert.isFalse(yield* folders.isInHomeFolder(`${home}work`));
+      assert.isFalse(yield* folders.isInHomeFolder(baseDir));
+    }),
+  ),
+);
+
 it.effect("offers nothing when the data dir sits inside a Git checkout", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;

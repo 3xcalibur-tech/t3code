@@ -16,7 +16,9 @@ import {
   type FleetOperation,
   type FleetResult,
   MessageId,
+  type ProjectId,
   type OrchestrationV2Command,
+  type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   OrchestratorMcpFailure,
   ThreadId,
 } from "@t3tools/contracts";
@@ -66,6 +68,37 @@ const orchestrationError = (error: unknown) =>
     error instanceof Error ? error.message : "The operation could not be completed.",
   );
 
+/**
+ * Fails when a launch would run in Home's folder, as its project or an
+ * existing worktree. That folder's instructions make any agent there act as
+ * Home. Every Home launch path calls this.
+ */
+export const refuseHomeFolder = Effect.fn("FleetService.refuseHomeFolder")(function* (
+  services: {
+    readonly projects: ProjectService.ProjectService["Service"];
+    readonly folders: ManagedProjectFolders.ManagedProjectFolders["Service"];
+  },
+  input: {
+    readonly projectId: ProjectId;
+    readonly workspaceStrategy?: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
+  },
+) {
+  const project = yield* services.projects
+    .getById(input.projectId)
+    .pipe(Effect.mapError(orchestrationError));
+  const roots = [
+    ...(Option.isSome(project) ? [project.value.workspaceRoot] : []),
+    ...(input.workspaceStrategy?.type === "existing_worktree"
+      ? [input.workspaceStrategy.worktreePath]
+      : []),
+  ];
+  for (const root of roots) {
+    if (yield* services.folders.isInHomeFolder(root)) {
+      return yield* failure("invalid_request", "Threads never launch in Home's folder.");
+    }
+  }
+});
+
 type Handlers = {
   readonly [Op in FleetOperation]: (
     input: FleetInput<Op>,
@@ -86,11 +119,18 @@ const make = Effect.gen(function* () {
   // Links in results point at this environment, wherever the call came from.
   const environmentId = (yield* environment.getDescriptor).environmentId;
 
-  // A retried request with the same clientRequestId maps to the same command.
-  const commandId = (actor: FleetActor, operation: string, requestKey?: string) =>
-    (requestKey === undefined
+  // A retried request with the same clientRequestId maps to the same command
+  // for the same target thread; another target gets its own command.
+  const commandId = (
+    actor: FleetActor,
+    operation: string,
+    target?: { readonly threadId: ThreadId; readonly clientRequestId?: string | undefined },
+  ) =>
+    (target?.clientRequestId === undefined
       ? crypto.randomUUIDv4.pipe(Effect.orDie)
-      : Effect.succeed(`${actor.environmentId}:${actor.threadId}:${requestKey}`)
+      : Effect.succeed(
+          `${actor.environmentId}:${actor.threadId}:${target.threadId}:${target.clientRequestId}`,
+        )
     ).pipe(Effect.map((key) => CommandId.make(`fleet:${operation}:${key}`)));
 
   const loadShell = (threadId: ThreadId) =>
@@ -217,13 +257,10 @@ const make = Effect.gen(function* () {
         if (projectId === undefined) {
           return yield* failure("invalid_request", "Pass projectId or scratch:true.");
         }
-        // A Home folder's instructions make any agent there act as Home.
-        const project = yield* projects
-          .getById(projectId)
-          .pipe(Effect.mapError(orchestrationError));
-        if (Option.isSome(project) && project.value.workspaceRoot === (yield* folders.homeRoot)) {
-          return yield* failure("invalid_request", "Threads never launch in Home's folder.");
-        }
+        yield* refuseHomeFolder(
+          { projects, folders },
+          { projectId, workspaceStrategy: input.workspaceStrategy },
+        );
         const current = yield* settings.getSettings.pipe(Effect.mapError(orchestrationError));
         const modelSelection = input.modelSelection ?? current.defaultModelSelection;
         if (modelSelection === null) {
@@ -275,7 +312,7 @@ const make = Effect.gen(function* () {
     "threads.send": (input, actor) =>
       Effect.gen(function* () {
         const shell = yield* loadShell(input.threadId);
-        const id = yield* commandId(actor, "send", input.clientRequestId);
+        const id = yield* commandId(actor, "send", input);
         const messageId = MessageId.make(id);
         const result = yield* threads
           .sendToThread({
@@ -306,7 +343,7 @@ const make = Effect.gen(function* () {
         const result = yield* threads
           .interruptThread({
             projectId: shell.projectId,
-            commandId: yield* commandId(actor, "interrupt", input.clientRequestId),
+            commandId: yield* commandId(actor, "interrupt", input),
             threadId: input.threadId,
             ...(input.runId === undefined ? {} : { runId: input.runId }),
             ...(input.reason === undefined ? {} : { reason: input.reason }),
@@ -353,7 +390,7 @@ const make = Effect.gen(function* () {
     "threads.rename": (input, actor) =>
       Effect.gen(function* () {
         yield* loadShell(input.threadId);
-        const id = yield* commandId(actor, "rename");
+        const id = yield* commandId(actor, "rename", input);
         const dispatched = yield* threads
           .dispatch({
             type: "thread.metadata.update",

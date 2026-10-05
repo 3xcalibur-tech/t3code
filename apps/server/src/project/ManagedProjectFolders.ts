@@ -129,6 +129,8 @@ export class ManagedProjectFolders extends Context.Service<
     >;
     /** Home's folder. */
     readonly homeRoot: Effect.Effect<string>;
+    /** Whether a path is Home's folder or inside it. */
+    readonly isInHomeFolder: (candidate: string) => Effect.Effect<boolean>;
     /**
      * Finds or creates the Home project. The folder becomes a Git repository on
      * first use, and the T3 section of its AGENTS.md is rewritten each time so
@@ -639,6 +641,11 @@ const make = Effect.gen(function* () {
     namedProjectsRoot,
     createNamedProject,
     homeRoot: Effect.succeed(homeFolder),
+    isInHomeFolder: (candidate) =>
+      Effect.sync(() => {
+        const relative = path.relative(path.resolve(homeFolder), path.resolve(candidate));
+        return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      }),
     ensureHomeProject,
   });
 });

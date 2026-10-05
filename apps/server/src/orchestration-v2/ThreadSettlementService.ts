@@ -148,9 +148,18 @@ export function isAutoSettlementCandidate(
   if (thread.activityRunStatus != null) return false;
   if (backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])) return false;
   if (threadHasQueuedTurnStart(thread, nowMs)) return false;
+  const snoozedUntilMs = toMillis(thread.snoozedUntil);
+  if (snoozedUntilMs === null || snoozedUntilMs <= nowMs) return true;
   // A snoozed thread that woke early (error or completed work) can settle;
   // one still parked on its wake time keeps its stronger statement.
-  return !isSnoozed(thread, nowMs);
+  const snoozedAtMs = toMillis(thread.snoozedAt);
+  const completedAtMs = toMillis(thread.latestRunCompletedAt);
+  const wokeOnError =
+    thread.status === "failed" &&
+    (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
+  const wokeOnCompletion =
+    snoozedAtMs !== null && completedAtMs !== null && completedAtMs > snoozedAtMs;
+  return wokeOnError || wokeOnCompletion;
 }
 
 /**
@@ -174,8 +183,12 @@ export function isSnoozed(
   const wokeOnError =
     thread.status === "failed" &&
     (snoozedAtMs === null || (completedAtMs !== null && completedAtMs > snoozedAtMs));
+  // Like the client, only a run that completed wakes it; an interrupt or cancel does not.
   const wokeOnCompletion =
-    snoozedAtMs !== null && completedAtMs !== null && completedAtMs > snoozedAtMs;
+    thread.status === "completed" &&
+    snoozedAtMs !== null &&
+    completedAtMs !== null &&
+    completedAtMs > snoozedAtMs;
   return !wokeOnError && !wokeOnCompletion;
 }
 
