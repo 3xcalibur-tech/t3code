@@ -176,19 +176,21 @@ const make = Effect.gen(function* () {
   const withLock = <A, E>(effect: Effect.Effect<A, E>) => lock.withPermits(1)(effect);
 
   /**
-   * Stops a former Home's active run once its grant is gone, so it does not
-   * keep working next to the new Home. Best effort: the grant already moved.
+   * Stops a former Home's active run once its grant is gone, and holds its
+   * queued messages so none starts it again. Best effort: the grant already moved.
    */
   const stopFormerHome = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const shell = yield* liveShell(threadId);
       if (shell === null || shell.activeRunId === null) return;
       const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-      yield* threads.interruptThread({
-        projectId: shell.projectId,
+      yield* threads.dispatch({
+        type: "run.interrupt",
         commandId: CommandId.make(`home-stop:${id}`),
         threadId,
+        runId: shell.activeRunId,
         reason: "Home was turned off or started fresh.",
+        holdQueue: true,
       });
     }).pipe(Effect.ignore);
 

@@ -29,7 +29,6 @@ const makeHome = () => {
   const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
   const sent: Array<ThreadManagement.ThreadManagementSendInput> = [];
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
-  const interrupted: Array<ThreadId> = [];
   // Threads with a running turn, to model a Home that is busy when it is replaced.
   const running = new Set<string>();
   const shell = (threadId: ThreadId) =>
@@ -74,10 +73,6 @@ const makeHome = () => {
             sent.push(input);
             return Effect.succeed({} as ThreadManagement.ThreadManagementSendResult);
           },
-          interruptThread: (input) => {
-            interrupted.push(input.threadId);
-            return Effect.succeed({} as never);
-          },
           dispatch: (command) => {
             dispatched.push(command);
             return Effect.succeed({} as never);
@@ -86,7 +81,7 @@ const makeHome = () => {
       ),
     ),
   );
-  return { layer, launched, sent, dispatched, sendFailures, interrupted, running };
+  return { layer, launched, sent, dispatched, sendFailures, running };
 };
 
 const event = (threadId: string, kind: HomeWatchEvent["kind"]): HomeWatchEvent => ({
@@ -194,14 +189,14 @@ it.effect("a Home thread that a fresh start replaced cannot change watches", () 
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("turning Home off stops the run the old Home was doing", () => {
-  const { layer, interrupted, running } = makeHome();
+it.effect("turning Home off stops the old Home and holds its queued messages", () => {
+  const { layer, dispatched, running } = makeHome();
   return Effect.gen(function* () {
     const home = yield* HomeService.HomeService;
     const { threadId } = yield* home.enable({ modelSelection });
     running.add(threadId);
     yield* home.disable;
-    expect(interrupted).toEqual([threadId]);
+    expect(dispatched).toMatchObject([{ type: "run.interrupt", threadId, holdQueue: true }]);
   }).pipe(Effect.provide(layer));
 });
 
