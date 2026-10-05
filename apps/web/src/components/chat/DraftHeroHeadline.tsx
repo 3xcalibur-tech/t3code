@@ -5,6 +5,7 @@ import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/envir
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { FolderPlusIcon, MessageSquareDashedIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
+import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
@@ -356,6 +357,16 @@ export function DraftHeroHeadline({
         {noProjectShortcut ? <TooltipPopup side="bottom">{noProjectShortcut}</TooltipPopup> : null}
       </Tooltip>
     ) : null;
+  const updateProjectSettings =
+    hasResolvedProject && !isScratchDraft && activeProjectKey !== "" ? (
+      <InlineButton
+        tone="muted"
+        className="pointer-events-auto"
+        render={<Link to="/projects/$projectKey" params={{ projectKey: activeProjectKey }} />}
+      >
+        update project settings
+      </InlineButton>
+    ) : null;
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
@@ -375,9 +386,16 @@ export function DraftHeroHeadline({
       </h1>
       {/* Reserved whenever threads can skip a project, so the heading does not
           move. Without a project, the picker moves here to choose one. */}
-      {scratchWorkspaceRoot === null ? null : (
-        <p className="mt-2 flex h-6 items-center text-sm">
-          {isScratchDraft ? projectSelector : orStartWithoutProject}
+      {scratchWorkspaceRoot === null && updateProjectSettings === null ? null : (
+        <p className="mt-2 flex h-6 items-center gap-1 text-sm">
+          {isScratchDraft ? (
+            projectSelector
+          ) : (
+            <>
+              {updateProjectSettings}
+              {orStartWithoutProject}
+            </>
+          )}
         </p>
       )}
     </div>
