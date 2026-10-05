@@ -13,6 +13,7 @@ import {
   CommandId,
   DEFAULT_HOME_SETTINGS,
   type EnvironmentId,
+  HOME_REPORT_MESSAGE_ID_PREFIX,
   HOME_THREAD_ID_PREFIX,
   type HomeEnableInput,
   type HomeSettings,
@@ -182,9 +183,9 @@ const make = Effect.gen(function* () {
       yield* threads
         .sendToThread({
           projectId: shell.projectId,
-          commandId: CommandId.make(`home-report:${id}`),
+          commandId: CommandId.make(`${HOME_REPORT_MESSAGE_ID_PREFIX}${id}`),
           threadId: homeThreadId,
-          messageId: MessageId.make(`home-report:${id}`),
+          messageId: MessageId.make(`${HOME_REPORT_MESSAGE_ID_PREFIX}${id}`),
           text: formatWatchReport(events),
           attachments: [],
           mode: "auto",

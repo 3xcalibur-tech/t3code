@@ -189,7 +189,9 @@ function HomeOnRows(props: {
   const modelLabel =
     modelSelection === null
       ? null
-      : `${modelEntry?.displayName ?? modelSelection.instanceId} ${model ? getTriggerDisplayModelLabel(model) : modelSelection.model}`;
+      : model
+        ? getTriggerDisplayModelLabel(model)
+        : modelSelection.model;
 
   const runStartFresh = async () => {
     setPending(true);

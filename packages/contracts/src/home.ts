@@ -98,6 +98,12 @@ export const HOME_LAUNCHED_THREAD_ID_PREFIX = "home-launched:";
 export const isHomeLaunchedThreadId = (threadId: string): boolean =>
   threadId.startsWith(HOME_LAUNCHED_THREAD_ID_PREFIX);
 
+/** Watch reports T3 Code sends into Home's thread have message ids that start with this. */
+export const HOME_REPORT_MESSAGE_ID_PREFIX = "home-report:";
+
+export const isHomeReportMessageId = (messageId: string): boolean =>
+  messageId.startsWith(HOME_REPORT_MESSAGE_ID_PREFIX);
+
 export const HomeEnableInput = Schema.Struct({ modelSelection: ModelSelection });
 export type HomeEnableInput = typeof HomeEnableInput.Type;
 

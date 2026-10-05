@@ -1,9 +1,10 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type {
-  EnvironmentId,
-  ModelSelection,
-  ProjectId,
-  ScopedProjectRef,
+import {
+  type EnvironmentId,
+  type ModelSelection,
+  type ProjectId,
+  type ScopedProjectRef,
+  isHomeThreadId,
 } from "@t3tools/contracts";
 import type { ComposerThreadDraftState, DraftThreadEnvMode } from "../composerDraftStore";
 
@@ -13,6 +14,7 @@ type ComposerModelSelectionState = Pick<
 >;
 
 interface ThreadContextLike {
+  id?: string;
   environmentId: EnvironmentId;
   projectId: ProjectId;
 }
@@ -71,7 +73,8 @@ export function hasExplicitComposerModelSelection(
 export function resolveThreadActionProjectRef(
   context: ChatThreadActionContext,
 ): ScopedProjectRef | null {
-  if (context.activeThread) {
+  // Home's folder belongs to Home alone, so a new thread from Home uses the default project.
+  if (context.activeThread && !isHomeThreadId(context.activeThread.id ?? "")) {
     return scopeProjectRef(context.activeThread.environmentId, context.activeThread.projectId);
   }
   if (context.activeDraftThread) {

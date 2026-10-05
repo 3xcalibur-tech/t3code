@@ -120,11 +120,17 @@ function HomeRelay({ environmentId }: { readonly environmentId: EnvironmentId })
         get.mount(handlerAtom);
         // A request runs once even if the stream value is seen again.
         const handled = new Set<string>();
-        get.subscribe(requestsAtom, (result) => {
-          if (!AsyncResult.isSuccess(result) || handled.has(result.value.requestId)) return;
-          handled.add(result.value.requestId);
-          void get.once(handlerAtom).handle(result.value);
-        });
+        // `immediate` reads the stream atom now, which opens fleet.connect. Without
+        // it the atom is never computed and the hub never hears from this window.
+        get.subscribe(
+          requestsAtom,
+          (result) => {
+            if (!AsyncResult.isSuccess(result) || handled.has(result.value.requestId)) return;
+            handled.add(result.value.requestId);
+            void get.once(handlerAtom).handle(result.value);
+          },
+          { immediate: true },
+        );
       }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`home:relay:${environmentId}:${clientId}`)),
     [clientId, environmentId, handlerAtom, requestsAtom],
   );

@@ -115,6 +115,16 @@ describe("chatThreadActions", () => {
     expect(projectRef).toEqual(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID));
   });
 
+  it("never starts a new thread in Home's folder from Home", () => {
+    const projectRef = resolveThreadActionProjectRef(
+      createContext({
+        activeThread: { id: "home:current", environmentId: ENVIRONMENT_ID, projectId: PROJECT_ID },
+      }),
+    );
+
+    expect(projectRef).toEqual(scopeProjectRef(ENVIRONMENT_ID, FALLBACK_PROJECT_ID));
+  });
+
   it("falls back to the active draft thread project when there is no active thread", () => {
     const projectRef = resolveThreadActionProjectRef(
       createContext({

@@ -1296,10 +1296,16 @@ function OpenCommandPaletteDialog(props: {
     ],
   );
 
+  // Home's folder belongs to Home alone: no search result or picker starts a thread there.
+  const isPrimaryHomeProject = useCallback(
+    (project: { readonly environmentId: EnvironmentId; readonly workspaceRoot: string }) =>
+      project.environmentId === primaryEnvironmentId && isHomeProject(project, homeWorkspaceRoot),
+    [homeWorkspaceRoot, primaryEnvironmentId],
+  );
   const projectSearchItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects: pickerProjects,
+        projects: pickerProjects.filter((project) => !isPrimaryHomeProject(project)),
         valuePrefix: "project",
         searchTerms: (project) => {
           const members = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)
@@ -1334,6 +1340,7 @@ function OpenCommandPaletteDialog(props: {
         runProject: openProjectFromSearch,
       }),
     [
+      isPrimaryHomeProject,
       openProjectFromSearch,
       pickerProjects,
       projectEnvironmentLocationById,
@@ -1346,14 +1353,10 @@ function OpenCommandPaletteDialog(props: {
       enumerateCommandPaletteItems([
         ...buildProjectActionItems({
           // The no-project home shows once, as the "No project" item below.
-          // Home's folder belongs to Home alone.
           projects: pickerProjects.filter(
             (project) =>
               !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)) &&
-              !(
-                project.environmentId === primaryEnvironmentId &&
-                isHomeProject(project, homeWorkspaceRoot)
-              ),
+              !isPrimaryHomeProject(project),
           ),
           valuePrefix: "new-thread-in",
           searchTerms: (project) => {
@@ -1422,9 +1425,8 @@ function OpenCommandPaletteDialog(props: {
     [
       contextualProjectRef,
       handleNewThread,
-      homeWorkspaceRoot,
+      isPrimaryHomeProject,
       pickerProjects,
-      primaryEnvironmentId,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
       scratchTargetEnvironmentId,
