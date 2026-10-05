@@ -441,6 +441,9 @@ function ThreadNavigationSidebarPane(
           selectedProjectRefs.has(
             scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
           )) &&
+        !archivedProjectKeys.has(
+          scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
+        ) &&
         (v2SearchQuery.length === 0 ||
           pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
     );
@@ -471,6 +474,7 @@ function ThreadNavigationSidebarPane(
     }
     return items;
   }, [
+    archivedProjectKeys,
     nowMinute,
     options.selectedEnvironmentId,
     pendingTasks,

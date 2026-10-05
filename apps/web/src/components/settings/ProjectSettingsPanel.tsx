@@ -207,7 +207,7 @@ function ProjectDetail({
     );
   }, []);
 
-  const { updateGroup, canOrganize, setPinned, setArchived } = useProjectGroupActions();
+  const { updateGroup, canOrganize, isBusy, setPinned, setArchived } = useProjectGroupActions();
   const allGroups = useSettingsProjectGroups();
   const isPinned = wholeGroup.pinnedAt != null;
   const isArchived = wholeGroup.archivedAt != null;
@@ -457,6 +457,7 @@ function ProjectDetail({
                   <Switch
                     aria-label="Pin project"
                     checked={isPinned}
+                    disabled={isBusy(wholeGroup.projectKey)}
                     onCheckedChange={(checked) =>
                       void setPinned(wholeGroup, Boolean(checked), allGroups)
                     }
@@ -474,6 +475,7 @@ function ProjectDetail({
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={isBusy(wholeGroup.projectKey)}
                     onClick={() => void setArchived(wholeGroup, !isArchived)}
                   >
                     {isArchived ? <ArchiveRestoreIcon /> : <ArchiveIcon />}

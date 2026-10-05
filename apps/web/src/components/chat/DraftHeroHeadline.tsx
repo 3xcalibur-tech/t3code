@@ -143,13 +143,15 @@ export function DraftHeroHeadline({
   const activeProjectKey = activeProjectGroup?.projectKey ?? "";
   const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
-  const canChooseProject = projectPickerEntries.length > 0;
+  // Archived projects are not choices, so a catalog of only archived projects
+  // shows the add-project prompt instead of an empty picker.
+  const choosableEntries = projectPickerEntries.filter(({ group }) => group.archivedAt == null);
+  const canChooseProject = choosableEntries.length > 0;
   const shouldShowProjectMenu = canChooseProject;
   // The project that hosts threads without a project appears once, as the
-  // "No project" item, not as a project row. Archived projects stay out.
-  const menuEntries = projectPickerEntries.filter(
-    ({ group, targetProject }) =>
-      group.archivedAt == null &&
+  // "No project" item, not as a project row.
+  const menuEntries = choosableEntries.filter(
+    ({ targetProject }) =>
       !isScratchProject(targetProject, scratchWorkspaceRootFor(targetProject.environmentId)),
   );
   const activeProject =
@@ -308,7 +310,7 @@ export function DraftHeroHeadline({
             );
           })}
         </MenuRadioGroup>
-        {projectPickerEntries.length > 0 ? <MenuSeparator /> : null}
+        {choosableEntries.length > 0 ? <MenuSeparator /> : null}
         <MenuItem onClick={openAddProject}>
           <FolderPlusIcon />
           Add project

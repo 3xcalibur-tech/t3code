@@ -11,7 +11,7 @@ import {
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
@@ -149,52 +149,93 @@ export function useProjectGroupActions() {
   );
 
   /** Pins after every pinned project in `groups`, or unpins. */
+  // A write to every machine is not atomic, so writes to one project run one
+  // at a time, and its controls stay disabled until the last one finishes.
+  const [busyCounts, setBusyCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const tails = useRef(new Map<string, Promise<unknown>>());
+  const whileBusy = useCallback(
+    (projectKeys: ReadonlyArray<string>, run: () => Promise<GroupResult>) => {
+      const adjust = (delta: number) =>
+        setBusyCounts((current) => {
+          const next = new Map(current);
+          for (const key of projectKeys) {
+            const count = (next.get(key) ?? 0) + delta;
+            if (count > 0) next.set(key, count);
+            else next.delete(key);
+          }
+          return next;
+        });
+      adjust(1);
+      const previous = Promise.all(projectKeys.map((key) => tails.current.get(key)));
+      const task = previous.then(run, run).finally(() => adjust(-1));
+      for (const key of projectKeys) tails.current.set(key, task);
+      const forget = () => {
+        for (const key of projectKeys) {
+          if (tails.current.get(key) === task) tails.current.delete(key);
+        }
+      };
+      task.then(forget, forget);
+      return task;
+    },
+    [],
+  );
+  /** True while a pin, archive or reorder write runs or waits for the project. */
+  const isBusy = useCallback((projectKey: string) => busyCounts.has(projectKey), [busyCounts]);
+
   const setPinned = useCallback(
     (group: ProjectGroup, pinned: boolean, groups: ReadonlyArray<ProjectGroup>) =>
-      organizeGroup(
-        group,
-        pinned ? { pinned: true, pinOrderKey: nextProjectPinOrderKey(groups) } : { pinned: false },
-        pinned ? `Failed to pin ${group.displayName}` : `Failed to unpin ${group.displayName}`,
+      whileBusy([group.projectKey], () =>
+        organizeGroup(
+          group,
+          pinned
+            ? { pinned: true, pinOrderKey: nextProjectPinOrderKey(groups) }
+            : { pinned: false },
+          pinned ? `Failed to pin ${group.displayName}` : `Failed to unpin ${group.displayName}`,
+        ),
       ),
-    [organizeGroup],
+    [organizeGroup, whileBusy],
   );
 
   /** Saves a dragged order of the pinned projects. */
   const reorderPinned = useCallback(
-    async (orderedGroups: ReadonlyArray<ProjectGroup>, movedKey: string): Promise<GroupResult> => {
-      const groupByKey = new Map(orderedGroups.map((group) => [group.projectKey, group]));
-      const writes = planProjectPinReorder({
-        orderedKeys: orderedGroups.map((group) => group.projectKey),
-        pinOrderKeyByKey: new Map(
-          orderedGroups.map((group) => [group.projectKey, group.pinOrderKey ?? null]),
-        ),
-        movedKey,
-      });
-      for (const write of writes) {
-        const group = groupByKey.get(write.key);
-        if (!group) continue;
-        const result = await organizeGroup(
-          group,
-          { pinned: true, pinOrderKey: write.pinOrderKey },
-          "Failed to reorder pinned projects",
-        );
-        if (result._tag === "Failure") return result;
-      }
-      return AsyncResult.success(undefined);
-    },
-    [organizeGroup],
+    (orderedGroups: ReadonlyArray<ProjectGroup>, movedKey: string): Promise<GroupResult> =>
+      whileBusy(
+        orderedGroups.map((group) => group.projectKey),
+        async () => {
+          const groupByKey = new Map(orderedGroups.map((group) => [group.projectKey, group]));
+          const writes = planProjectPinReorder({
+            orderedKeys: orderedGroups.map((group) => group.projectKey),
+            pinOrderKeyByKey: new Map(
+              orderedGroups.map((group) => [group.projectKey, group.pinOrderKey ?? null]),
+            ),
+            movedKey,
+          });
+          for (const write of writes) {
+            const group = groupByKey.get(write.key);
+            if (!group) continue;
+            const result = await organizeGroup(
+              group,
+              { pinned: true, pinOrderKey: write.pinOrderKey },
+              "Failed to reorder pinned projects",
+            );
+            if (result._tag === "Failure") return result;
+          }
+          return AsyncResult.success(undefined);
+        },
+      ),
+    [organizeGroup, whileBusy],
   );
 
   /** Archives with an Undo toast, or unarchives. Threads keep their state. */
   const setArchived = useCallback(
     async (group: ProjectGroup, archived: boolean): Promise<GroupResult> => {
       const unarchive = () =>
-        organizeGroup(group, { archived: false }, `Failed to unarchive ${group.displayName}`);
+        whileBusy([group.projectKey], () =>
+          organizeGroup(group, { archived: false }, `Failed to unarchive ${group.displayName}`),
+        );
       if (!archived) return unarchive();
-      const result = await organizeGroup(
-        group,
-        { archived: true },
-        `Failed to archive ${group.displayName}`,
+      const result = await whileBusy([group.projectKey], () =>
+        organizeGroup(group, { archived: true }, `Failed to archive ${group.displayName}`),
       );
       if (result._tag === "Success") {
         const toastId = toastManager.add({
@@ -214,8 +255,8 @@ export function useProjectGroupActions() {
       }
       return result;
     },
-    [organizeGroup],
+    [organizeGroup, whileBusy],
   );
 
-  return { updateGroup, canOrganize, setPinned, reorderPinned, setArchived };
+  return { updateGroup, canOrganize, isBusy, setPinned, reorderPinned, setArchived };
 }

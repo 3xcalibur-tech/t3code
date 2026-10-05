@@ -620,10 +620,19 @@ export function HomeScreen(props: HomeScreenProps) {
             v2ScopedProjectKeys.has(
               scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
             )) &&
+          !archivedProjectKeys.has(
+            scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
+          ) &&
           (v2SearchQuery.length === 0 ||
             pendingTask.title.toLocaleLowerCase().includes(v2SearchQuery)),
       ),
-    [props.pendingTasks, props.selectedEnvironmentId, v2ScopedProjectKeys, v2SearchQuery],
+    [
+      archivedProjectKeys,
+      props.pendingTasks,
+      props.selectedEnvironmentId,
+      v2ScopedProjectKeys,
+      v2SearchQuery,
+    ],
   );
   const threadListV2Items = useMemo(
     () =>

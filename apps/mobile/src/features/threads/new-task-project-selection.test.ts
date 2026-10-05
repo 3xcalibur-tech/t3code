@@ -130,6 +130,15 @@ describe("resolveDraftProjectSelection", () => {
     ).toEqual({ kind: "preserve" });
   });
 
+  it("does not pick an archived project on its own", () => {
+    const project = makeProject("t3code");
+    const archived = { ...makeScope([project]), archivedAt: "2026-07-02T00:00:00.000Z" };
+    expect(resolveDraftProjectSelection(null, [project], [archived])).toEqual({ kind: "pick" });
+    expect(resolveDraftProjectSelection("environment:t3code", [project], [archived])).toEqual({
+      kind: "preserve",
+    });
+  });
+
   it("selects the only physical project when no project was explicitly selected", () => {
     const project = makeProject("t3code");
     expect(resolveDraftProjectSelection(null, [project], [makeScope([project])])).toEqual({

@@ -161,6 +161,7 @@ export function ProjectsList() {
       activity={activityByKey.get(group.projectKey)}
       environments={environments}
       canOrganize={actions.canOrganize(group)}
+      busy={actions.isBusy(group.projectKey)}
       reorderable={reorderable}
       onPin={(pinned) => void actions.setPinned(group, pinned, projectGroups)}
       onArchive={(archived) => void actions.setArchived(group, archived)}
@@ -218,12 +219,19 @@ export function ProjectsList() {
         </SettingsSection>
       ) : (
         <>
-          {visiblePinned.length > 0 ? (
+          {pinnedGroups.length > 0 ? (
             <PinnedProjects
-              groups={visiblePinned}
+              groups={pinnedGroups}
+              isVisible={matches}
               // Dragging a filtered list would skip hidden pins, so search turns
-              // it off; an older server on any pinned project does too.
-              reorderable={normalizedQuery.length === 0 && visiblePinned.every(actions.canOrganize)}
+              // it off; so do an older server on any pinned project and a
+              // pending write.
+              reorderable={
+                normalizedQuery.length === 0 &&
+                pinnedGroups.every(
+                  (group) => actions.canOrganize(group) && !actions.isBusy(group.projectKey),
+                )
+              }
               onReorder={actions.reorderPinned}
               renderRow={renderRow}
             />
@@ -258,15 +266,19 @@ export function ProjectsList() {
 
 /**
  * Pinned projects in their saved order. A drop shows the new order at once
- * and holds it until the server's order changes or the write fails.
+ * and holds it until the server's order changes or the write fails. Another
+ * drag waits for that, so each reorder starts from the saved keys.
  */
 function PinnedProjects({
   groups,
+  isVisible,
   reorderable,
   onReorder,
   renderRow,
 }: {
+  /** Every pinned project, in saved order; search only hides rows. */
   groups: readonly SidebarProjectSnapshot[];
+  isVisible: (group: SidebarProjectSnapshot) => boolean;
   reorderable: boolean;
   onReorder: ReturnType<typeof useProjectGroupActions>["reorderPinned"];
   renderRow: (group: SidebarProjectSnapshot, reorderable?: boolean) => ReactNode;
@@ -276,14 +288,17 @@ function PinnedProjects({
     readonly serverOrderKey: string;
   } | null>(null);
   const serverOrderKey = groups.map((group) => group.projectKey).join("\n");
+  // Once the server's order changes, the write landed (or another edit
+  // replaced it), so the held order is done.
+  const activeHeld = held !== null && held.serverOrderKey === serverOrderKey ? held : null;
+  if (held !== null && activeHeld === null) setHeld(null);
   const groupByKey = new Map(groups.map((group) => [group.projectKey, group]));
   const ordered =
-    held !== null && held.serverOrderKey === serverOrderKey
-      ? held.order.flatMap((key) => {
-          const group = groupByKey.get(key);
-          return group ? [group] : [];
-        })
-      : groups;
+    activeHeld?.order.flatMap((key) => {
+      const group = groupByKey.get(key);
+      return group ? [group] : [];
+    }) ?? groups;
+  const visible = ordered.filter(isVisible);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -303,9 +318,13 @@ function PinnedProjects({
         return group ? [group] : [];
       }),
       movedKey,
-    ).then(() => setHeld((current) => (current === hold ? null : current)));
+    ).then((result) => {
+      if (result._tag === "Failure") setHeld((current) => (current === hold ? null : current));
+    });
   };
 
+  // Stay mounted while a search hides every row, so a held order survives it.
+  if (visible.length === 0) return null;
   return (
     <SettingsSection title="Pinned">
       <DndContext
@@ -315,14 +334,15 @@ function PinnedProjects({
         onDragEnd={handleDragEnd}
       >
         <SortableContext
-          items={ordered.map((group) => group.projectKey)}
+          items={visible.map((group) => group.projectKey)}
           strategy={verticalListSortingStrategy}
         >
-          {ordered.map((group) => (
+          {visible.map((group) => (
             <SortablePinnedRow
               key={group.projectKey}
               group={group}
               reorderable={reorderable}
+              locked={activeHeld !== null}
               renderRow={renderRow}
             />
           ))}
@@ -335,15 +355,18 @@ function PinnedProjects({
 function SortablePinnedRow({
   group,
   reorderable,
+  locked,
   renderRow,
 }: {
   group: SidebarProjectSnapshot;
   reorderable: boolean;
+  /** Dragging waits while an earlier drop is still being saved. */
+  locked: boolean;
   renderRow: (group: SidebarProjectSnapshot, reorderable?: boolean) => ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: group.projectKey,
-    disabled: !reorderable,
+    disabled: !reorderable || locked,
   });
   // The whole row drags, like sidebar rows. The 4px activation distance keeps
   // clicks on its link and buttons working.
@@ -364,6 +387,7 @@ function ProjectListRow({
   activity,
   environments,
   canOrganize,
+  busy,
   reorderable,
   onPin,
   onArchive,
@@ -372,6 +396,8 @@ function ProjectListRow({
   activity: ProjectActivity | undefined;
   environments: ReturnType<typeof useEnvironments>["environments"];
   canOrganize: boolean;
+  /** A pin or archive write for this project is still running. */
+  busy: boolean;
   reorderable: boolean;
   onPin: (pinned: boolean) => void;
   onArchive: (archived: boolean) => void;
@@ -458,13 +484,14 @@ function ProjectListRow({
               title={pinned ? `Unpin ${group.displayName}` : `Pin ${group.displayName}`}
               aria-label={pinned ? `Unpin ${group.displayName}` : `Pin ${group.displayName}`}
               aria-pressed={pinned}
+              disabled={busy}
               onClick={() => onPin(!pinned)}
             >
               {pinned ? <PinOffIcon /> : <PinIcon />}
             </Button>
           ) : null}
           {canOrganize && archived ? (
-            <Button size="xs" variant="outline" onClick={() => onArchive(false)}>
+            <Button size="xs" variant="outline" disabled={busy} onClick={() => onArchive(false)}>
               <ArchiveRestoreIcon />
               Unarchive
             </Button>
@@ -474,6 +501,7 @@ function ProjectListRow({
               variant="ghost-muted"
               title={`Archive ${group.displayName}`}
               aria-label={`Archive ${group.displayName}`}
+              disabled={busy}
               onClick={() => onArchive(true)}
             >
               <ArchiveIcon />
