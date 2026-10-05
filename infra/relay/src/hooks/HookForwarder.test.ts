@@ -20,6 +20,7 @@ import * as Etag from "effect/http/Etag";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
@@ -555,6 +556,49 @@ describe("HookForwarder", () => {
       expect(serialized).not.toContain("header-secret");
       const server = spans.find((span) => span.kind === "server");
       expect(server?.attributes.get("url.path")).toBe(`/v1/hooks/${endpointKey}/hook-1/<redacted>`);
+    }),
+  );
+
+  it.effect("records one redacted server span even inside the worker's own HTTP tracer", () =>
+    Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const harness = makeHarness();
+      const handler = yield* harness.httpEffect;
+      // As the worker runtime runs it: its own tracer around ours, off for hook
+      // paths. This checks the predicate; whether alchemy applies it per event
+      // is only visible on a deployed worker (see worker.ts).
+      yield* HttpMiddleware.tracer(
+        traceRelayHttpRequestWith(handler, Layer.succeed(Tracer.Tracer, tracer)),
+      ).pipe(
+        Effect.provideService(HttpMiddleware.TracerDisabledWhen, (request) =>
+          HookForwarder.isRelayHookPath(request.url),
+        ),
+        Effect.withTracer(tracer),
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(
+            new Request(hookUrl("hook-1/super-secret-token"), {
+              method: "POST",
+              headers: { traceparent: "00-11111111111111111111111111111111-2222222222222222-01" },
+              body: "{}",
+            }),
+          ),
+        ),
+      );
+      yield* Effect.yieldNow;
+      const servers = spans.filter((span) => span.kind === "server");
+      expect(servers).toHaveLength(1);
+      expect(servers[0]?.attributes.get("url.path")).toBe(
+        `/v1/hooks/${endpointKey}/hook-1/<redacted>`,
+      );
+      expect(spans.every((span) => span.traceId !== "11111111111111111111111111111111")).toBe(true);
     }),
   );
 

@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/http/Etag";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
 import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -473,6 +474,18 @@ export const ApiLive = Api.make(
         Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
         Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
         Layer.provideMerge(HookInboxObjectLive),
+        // The worker runtime opens its own HTTP span around ours. For webhook
+        // paths it would record the raw URL, token included, and adopt the
+        // sender's traceparent, so only our redacted span covers those.
+        // Registered as telemetry: request-time context is assembled per
+        // event, and only these layers are built into it.
+        Layer.provideMerge(
+          Alchemy.Telemetry.layer(
+            Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) =>
+              HookForwarder.isRelayHookPath(request.url),
+            ),
+          ),
+        ),
         // Exports spans from events the HTTP tracer does not wrap, notably
         // HookInboxObject calls and alarms, to the same Axiom dataset.
         Layer.provideMerge(
