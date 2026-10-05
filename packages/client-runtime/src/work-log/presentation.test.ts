@@ -989,6 +989,9 @@ describe("liveThoughtLine", () => {
     expect(liveThoughtLine("- Checking [the docs](https://x.dev) for **limits**")).toBe(
       "Checking the docs for limits",
     );
+    expect(liveThoughtLine("This is *really* ~~not~~ _fine_ in snake_case_names.")).toBe(
+      "This is really not fine in snake_case_names.",
+    );
     expect(liveThoughtLine("   ")).toBe("");
   });
 });

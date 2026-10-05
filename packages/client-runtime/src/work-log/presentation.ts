@@ -765,7 +765,8 @@ export function liveThoughtLine(markdown: string): string {
   const text = (heading ?? markdown)
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/^[ \t]*(?:#{1,6}|[-*+]|\d+\.)[ \t]+/gm, "")
-    .replace(/`+|\*\*/g, "")
+    .replace(/`+|\*\*|~~/g, "")
+    .replace(/(^|[^\w*])[*_]([^*_\n]+)[*_](?![\w*])/g, "$1$2")
     .replace(/\s+/g, " ")
     .trim();
   if (heading !== undefined) return text;
