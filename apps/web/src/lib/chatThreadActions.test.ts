@@ -130,6 +130,20 @@ describe("chatThreadActions", () => {
     expect(defaultNewThreadProjectRef([home], options)).toBeNull();
   });
 
+  it("never starts a new thread in Home's folder from Home's draft before its shell loads", () => {
+    const projectRef = resolveThreadActionProjectRef(
+      createContext({
+        activeDraftThread: {
+          threadId: "home:current",
+          environmentId: ENVIRONMENT_ID,
+          projectId: PROJECT_ID,
+        },
+      }),
+    );
+
+    expect(projectRef).toEqual(scopeProjectRef(ENVIRONMENT_ID, FALLBACK_PROJECT_ID));
+  });
+
   it("never starts a new thread in Home's folder from Home", () => {
     const projectRef = resolveThreadActionProjectRef(
       createContext({

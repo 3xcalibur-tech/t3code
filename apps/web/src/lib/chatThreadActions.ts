@@ -15,7 +15,10 @@ type ComposerModelSelectionState = Pick<
 >;
 
 interface ThreadContextLike {
+  /** A thread shell's id. */
   id?: string;
+  /** A draft's thread id, set while its thread shell is not loaded yet. */
+  threadId?: string;
   environmentId: EnvironmentId;
   projectId: ProjectId;
 }
@@ -104,7 +107,10 @@ export function resolveThreadActionProjectRef(
 ): ScopedProjectRef | null {
   // Home's folder belongs to Home alone, so a new thread from Home, or from a
   // draft in Home's composer, uses the default project.
-  if (context.activeThread && isHomeThreadId(context.activeThread.id ?? "")) {
+  if (
+    isHomeThreadId(context.activeThread?.id ?? "") ||
+    isHomeThreadId(context.activeDraftThread?.threadId ?? "")
+  ) {
     return context.defaultProjectRef;
   }
   if (context.activeThread) {
