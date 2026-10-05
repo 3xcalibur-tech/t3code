@@ -43,7 +43,7 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import { forkParked, forkParkedFiber } from "./serverActivation.ts";
+import { forkParked, forkParkedFiber, forkScopedDetached } from "./serverActivation.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -107,7 +107,15 @@ export const makeCommandGate = Effect.gen(function* () {
   const commandWorker = Effect.forever(
     Queue.take(commandQueue).pipe(Effect.flatMap((command) => command.run)),
   );
-  yield* Effect.forkScoped(commandWorker);
+  // forkScopedDetached, not forkParked: this fiber runs for the process lifetime like
+  // the forkParked reactors, so it needs the same span detach (#5410). It must not wait
+  // on activation, though. Each queued command's own `run` already waits on
+  // `commandReady` (which itself only fires after activation), so gating the worker
+  // fiber too adds no safety -- and if a startup failure dies the activation Deferred
+  // before it ever succeeds (see `abort` in serverRuntimeStartup's `make`), a
+  // forkParked worker would never start, leaving any commands already queued during
+  // the pending window stuck forever instead of settling with the startup error.
+  yield* forkScopedDetached(commandWorker);
 
   return {
     awaitCommandReady: Deferred.await(commandReady),

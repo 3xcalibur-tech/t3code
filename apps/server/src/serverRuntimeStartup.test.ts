@@ -5,11 +5,13 @@ import {
   ProjectId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import * as Tracer from "effect/Tracer";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
@@ -111,6 +113,58 @@ it.effect("enqueueCommand fails queued work when readiness fails", () =>
 
       const error = yield* Effect.flip(Fiber.join(queuedCommandFiber));
       assert.equal(error.message, "Server runtime startup failed before command readiness.");
+    }),
+  ),
+);
+
+// Same object-graph walk as serverActivation.test.ts: lookup alone can't tell "the
+// ambient span was replaced" apart from "it's still reachable underneath the
+// replacement", and the latter is what pins memory (#5410).
+const retainsReference = (root: unknown, target: object): boolean => {
+  const seen = new Set<object>();
+  const pending: Array<unknown> = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === target) return true;
+    if (typeof value !== "object" || value === null || seen.has(value)) continue;
+    seen.add(value);
+    pending.push(...(value instanceof Map ? value.values() : Object.values(value)));
+  }
+  return false;
+};
+
+it.effect("makeCommandGate's worker fiber does not retain the caller's ambient span (#5410)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const ambient = Tracer.externalSpan({
+        traceId: "00000000000000000000000000000010",
+        spanId: "0000000000000010",
+        sampled: true,
+      });
+      const observed = yield* Deferred.make<Context.Context<never>>();
+
+      const gate = yield* ServerRuntimeStartup.makeCommandGate.pipe(
+        Effect.provideService(Tracer.ParentSpan, ambient),
+      );
+      yield* gate
+        .enqueueCommand(
+          Effect.context<never>().pipe(
+            Effect.flatMap((context) => Deferred.succeed(observed, context)),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+      // Let the forked enqueue actually run and land in the "pending" queue
+      // before flipping readiness, so this exercises the worker fiber's own
+      // context (the thing under test) instead of enqueueCommand's "already
+      // ready" fast path, which runs the command inline on the caller's fiber.
+      yield* Effect.yieldNow;
+      yield* gate.signalCommandReady;
+
+      const context = yield* Deferred.await(observed);
+      // Lookup resolves a fresh root, not the caller's span.
+      assert.notStrictEqual(Context.getUnsafe(context, Tracer.ParentSpan), ambient);
+      // Nothing in the context's object graph still points back to it either.
+      assert.isFalse(retainsReference(context, ambient));
     }),
   ),
 );
