@@ -1105,20 +1105,147 @@ function selectAutoApprovedPermissionOption(
   );
 }
 
+function elicitationOptions(
+  property: Record<string, unknown>,
+): OrchestrationV2UserInputQuestion["options"] | undefined {
+  // Decline unsupported constraints before opening a form. Agent-provided
+  // regular expressions must never run on the server's event loop.
+  if (
+    property.type === "string" &&
+    (typeof property.pattern === "string" || typeof property.format === "string")
+  )
+    return undefined;
+  if (property.type === "boolean") {
+    return [
+      { label: "true", description: "Yes", value: "true" },
+      { label: "false", description: "No", value: "false" },
+    ];
+  }
+  if (property.type === "number" || property.type === "integer") return [];
+  const choices = property.type === "array" ? unknownRecord(property.items) : property;
+  if ((property.type !== "string" && property.type !== "array") || choices?.type !== "string")
+    return undefined;
+
+  const enumValues = choices.enum;
+  if (
+    enumValues != null &&
+    (!Array.isArray(enumValues) ||
+      enumValues.length === 0 ||
+      !enumValues.every((value) => typeof value === "string"))
+  )
+    return undefined;
+  if (choices.oneOf != null) {
+    if (!Array.isArray(choices.oneOf) || choices.oneOf.length === 0) return undefined;
+    const options: Array<OrchestrationV2UserInputQuestion["options"][number]> = [];
+    for (const [index, value] of choices.oneOf.entries()) {
+      const option = unknownRecord(value);
+      if (typeof option?.const !== "string") return undefined;
+      if (Array.isArray(enumValues) && !enumValues.includes(option.const)) continue;
+      const label = nonEmptyText(option.title, `Option ${index + 1}`);
+      options.push({
+        label,
+        description: nonEmptyText(option.description, label),
+        value: option.const,
+      });
+    }
+    return options.length > 0 ? options : undefined;
+  }
+  if (!Array.isArray(enumValues)) return property.type === "array" ? undefined : [];
+  return enumValues.map((value, index) => {
+    const label = nonEmptyText(value, `Option ${index + 1}`);
+    return { label, description: label, value };
+  });
+}
+
+/** Validate integrality before floating-point rounding can erase fractional digits. */
+function elicitationIntegerTextIsExact(value: string): boolean {
+  const [mantissa = "", exponent = "0"] = value.trim().split(/[eE]/);
+  const fractionLength = mantissa.split(".")[1]?.length ?? 0;
+  const digits = mantissa.replace(/[-.]/g, "");
+  const significantDigits = digits.replace(/0+$/, "");
+  return (
+    significantDigits.length === 0 ||
+    Number(exponent) >= fractionLength - (digits.length - significantDigits.length)
+  );
+}
+
 function elicitationContent(
   answers: ProviderUserInputAnswers,
-  allowedKeys: ReadonlySet<string>,
-): Record<string, EffectAcpSchema.ElicitationContentValue> {
-  const content: Record<string, EffectAcpSchema.ElicitationContentValue> = {};
-  for (const [key, value] of Object.entries(answers)) {
-    if (!allowedKeys.has(key)) continue;
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      content[key] = value;
-    } else if (Array.isArray(value)) {
-      content[key] = value.filter((entry): entry is string => typeof entry === "string");
+  properties: Record<string, unknown>,
+  required: ReadonlySet<string>,
+): Record<string, EffectAcpSchema.ElicitationContentValue> | undefined {
+  const content: Array<[string, EffectAcpSchema.ElicitationContentValue]> = [];
+  for (const id of required) {
+    if (!Object.hasOwn(properties, id) || !Object.hasOwn(answers, id)) return undefined;
+  }
+  for (const [id, property] of Object.entries(properties)) {
+    if (!Object.hasOwn(answers, id)) continue;
+    const record = unknownRecord(property);
+    if (record === undefined) return undefined;
+    const options = elicitationOptions(record);
+    if (options === undefined) return undefined;
+    const answer = answers[id];
+    if (record.type === "array") {
+      if (
+        !Array.isArray(answer) ||
+        !answer.every(
+          (value) => typeof value === "string" && options.some((option) => option.value === value),
+        ) ||
+        (typeof record.minItems === "number" && answer.length < record.minItems) ||
+        (typeof record.maxItems === "number" && answer.length > record.maxItems)
+      )
+        return undefined;
+      content.push([id, answer]);
+      continue;
+    }
+    // Some clients wrap single selections in arrays. Never collapse a multi-answer value.
+    if (Array.isArray(answer) && answer.length !== 1) return undefined;
+    const value = Array.isArray(answer) ? answer[0] : answer;
+    switch (record.type) {
+      case "string": {
+        if (typeof value !== "string") return undefined;
+        const length = Array.from(value).length;
+        if (
+          (options.length > 0 && !options.some((option) => option.value === value)) ||
+          (typeof record.minLength === "number" && length < record.minLength) ||
+          (typeof record.maxLength === "number" && length > record.maxLength)
+        )
+          return undefined;
+        content.push([id, value]);
+        break;
+      }
+      case "boolean": {
+        if (typeof value === "boolean") content.push([id, value]);
+        else if (value === "true" || value === "false") content.push([id, value === "true"]);
+        else return undefined;
+        break;
+      }
+      case "number":
+      case "integer": {
+        const number =
+          typeof value === "number"
+            ? value
+            : typeof value === "string" &&
+                /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value.trim())
+              ? Number(value)
+              : Number.NaN;
+        if (
+          !Number.isFinite(number) ||
+          (record.type === "integer" &&
+            (!Number.isSafeInteger(number) ||
+              (typeof value === "string" && !elicitationIntegerTextIsExact(value)))) ||
+          (typeof record.minimum === "number" && number < record.minimum) ||
+          (typeof record.maximum === "number" && number > record.maximum)
+        )
+          return undefined;
+        content.push([id, number]);
+        break;
+      }
+      default:
+        return undefined;
     }
   }
-  return content;
+  return Object.fromEntries(content);
 }
 
 interface ActiveTextSegment {
@@ -5831,31 +5958,38 @@ export function makeAcpAdapterV2(
               }
               const requestedSchema = unknownRecord(params.requestedSchema);
               const properties = unknownRecord(requestedSchema?.properties) ?? {};
+              const required = new Set(
+                Array.isArray(requestedSchema?.required)
+                  ? requestedSchema.required.filter((id): id is string => typeof id === "string")
+                  : [],
+              );
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
-              const questions = Object.entries(properties).map(
-                ([id, property], index): OrchestrationV2UserInputQuestion => {
-                  const record = unknownRecord(property);
-                  const enumValues = Array.isArray(record?.enum)
-                    ? record.enum.filter((value): value is string => typeof value === "string")
-                    : [];
-                  const options =
-                    enumValues.length > 0
-                      ? enumValues.map((value) => ({ label: value, description: value }))
-                      : record?.type === "boolean"
-                        ? [
-                            { label: "true", description: "Yes" },
-                            { label: "false", description: "No" },
-                          ]
-                        : [];
-                  return {
-                    id,
-                    header: nonEmptyText(record?.title, `Question ${index + 1}`),
-                    question: nonEmptyText(record?.description, params.message),
-                    options,
-                  };
-                },
-              );
+              const questions: OrchestrationV2UserInputQuestion[] = [];
+              for (const [id, property] of Object.entries(properties)) {
+                const record = unknownRecord(property);
+                const options = record === undefined ? undefined : elicitationOptions(record);
+                if (record === undefined || options === undefined || id.trim().length === 0) {
+                  return { action: "decline" } as const;
+                }
+                questions.push({
+                  id,
+                  header: nonEmptyText(record.title, `Question ${questions.length + 1}`),
+                  question: nonEmptyText(record.description, params.message),
+                  options,
+                  multiSelect: record.type === "array",
+                  allowCustomAnswer: options.length === 0,
+                  required: required.has(id),
+                  ...(record.type === "array"
+                    ? {
+                        minSelections: typeof record.minItems === "number" ? record.minItems : 0,
+                        ...(typeof record.maxItems === "number"
+                          ? { maxSelections: record.maxItems }
+                          : {}),
+                      }
+                    : {}),
+                });
+              }
               const userInput = yield* requestUserInputWithAdmission(
                 handlerGeneration,
                 Effect.gen(function* () {
@@ -5872,16 +6006,16 @@ export function makeAcpAdapterV2(
                 }),
                 transportRequestId,
               );
+              const content =
+                userInput.answers === null
+                  ? undefined
+                  : elicitationContent(userInput.answers, properties, required);
               const response =
                 userInput.answers === null
                   ? ({ action: "cancel" } as const)
-                  : ({
-                      action: "accept",
-                      content: elicitationContent(
-                        userInput.answers,
-                        new Set(Object.keys(properties)),
-                      ),
-                    } as const);
+                  : content === undefined
+                    ? ({ action: "decline" } as const)
+                    : ({ action: "accept", content } as const);
               yield* userInput.acknowledgeNativeResponse;
               return response;
             }),
