@@ -570,3 +570,16 @@ it.effect("removes the folder when the repository cannot be made", () =>
     },
   ),
 );
+
+it("keeps the user's Home instructions while refreshing T3's section", () => {
+  const fresh = ManagedProjectFolders.refreshHomeAgents(null);
+  assert.isNotNull(fresh);
+  const edited = fresh!
+    .replace("You are Home", "You were Home")
+    .concat("\nAlways answer in French.\n");
+  const refreshed = ManagedProjectFolders.refreshHomeAgents(edited);
+  assert.include(refreshed!, "You are Home");
+  assert.include(refreshed!, "Always answer in French.");
+  assert.isNull(ManagedProjectFolders.refreshHomeAgents(refreshed));
+  assert.isNull(ManagedProjectFolders.refreshHomeAgents("# My own file\n"));
+});

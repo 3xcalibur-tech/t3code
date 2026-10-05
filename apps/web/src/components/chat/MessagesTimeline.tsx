@@ -21,6 +21,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type AssistantCitation,
   type EnvironmentId,
+  isHomeThreadId,
   type MessageId,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
@@ -2134,7 +2135,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               tone="muted"
               aria-label="Open sending thread"
             >
-              Sent by another agent
+              {isHomeThreadId(senderThreadId) ? "Sent by Home" : "Sent by another agent"}
             </InlineButton>
           ) : (
             "Sent by another agent"
