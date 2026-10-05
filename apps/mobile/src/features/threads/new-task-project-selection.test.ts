@@ -43,6 +43,9 @@ function makeProject(
 
 function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScope {
   return {
+    pinnedAt: null,
+    pinOrderKey: null,
+    archivedAt: null,
     key: "github.com/t3tools/t3code",
     title: "T3 Code",
     representative: projects[0]!,

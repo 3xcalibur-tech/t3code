@@ -3,7 +3,7 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { resolveEnvironmentMachineKind, type ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
-import { FolderPlusIcon, MessageSquareDashedIcon } from "lucide-react";
+import { FolderPlusIcon, MessageSquareDashedIcon, PinIcon } from "lucide-react";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -146,9 +146,10 @@ export function DraftHeroHeadline({
   const canChooseProject = projectPickerEntries.length > 0;
   const shouldShowProjectMenu = canChooseProject;
   // The project that hosts threads without a project appears once, as the
-  // "No project" item, not as a project row.
+  // "No project" item, not as a project row. Archived projects stay out.
   const menuEntries = projectPickerEntries.filter(
-    ({ targetProject }) =>
+    ({ group, targetProject }) =>
+      group.archivedAt == null &&
       !isScratchProject(targetProject, scratchWorkspaceRootFor(targetProject.environmentId)),
   );
   const activeProject =
@@ -294,6 +295,12 @@ export function DraftHeroHeadline({
                       group={group}
                       primaryEnvironmentId={primaryEnvironmentId}
                       machineByEnvironmentId={environmentMachineById}
+                    />
+                  ) : null}
+                  {group.pinnedAt != null ? (
+                    <PinIcon
+                      aria-label="Pinned"
+                      className="size-3 shrink-0 text-muted-foreground"
                     />
                   ) : null}
                 </span>
