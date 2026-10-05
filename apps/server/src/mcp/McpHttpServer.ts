@@ -20,7 +20,13 @@ import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
-import { agentToolProperties } from "../telemetry/ProviderDimensions.ts";
+import {
+  type AgentThread,
+  agentToolProperties,
+  handoffSettings,
+  MAX_REPORTED_DEPTH,
+  toolOutcome,
+} from "../telemetry/ProviderDimensions.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -683,10 +689,11 @@ const resultThreadIds = (content: unknown): ReadonlyArray<string> => {
 
 /**
  * Runs a tool registration against a server that records one anonymous
- * `mcp.tool.invoked` event per call. The event names the tool and the calling
- * agent's provider and model. A handoff tool also names the provider and model
- * of each thread that received the work, so delegation between providers is
- * visible. Arguments, results, ids, and text are never recorded.
+ * `mcp.tool.invoked` event per call: the tool, the calling agent's provider,
+ * the outcome with its failure code, and the duration. A handoff tool also
+ * reports the caller's model, origin, and delegation depth, the settings the
+ * agent chose, and the provider, model, and modes of each thread that received
+ * the work. Ids, prompts, and free text are never recorded.
  */
 const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
   Effect.gen(function* () {
@@ -695,39 +702,88 @@ const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
     if (Option.isNone(analytics)) return yield* registration;
     const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     const threads = yield* Effect.serviceOption(ThreadManagement.ThreadManagementService);
-    const modelSelectionOf = (threadId: string) =>
+    const shellOf = (threadId: string) =>
       Option.isNone(threads)
-        ? Effect.succeed(undefined)
-        : threads.value.getThreadShell(ThreadId.make(threadId)).pipe(
-            Effect.map((shell) => shell?.modelSelection),
-            Effect.orElseSucceed(() => undefined),
-          );
-    const record = (tool: string, result: McpSchema.CallToolResult | undefined) =>
+        ? Effect.succeed(null)
+        : threads.value
+            .getThreadShell(ThreadId.make(threadId))
+            .pipe(Effect.orElseSucceed(() => null));
+    // Delegation depth: parents walked from the caller, capped.
+    const depthOf = (thread: AgentThread) =>
+      Effect.gen(function* () {
+        let depth = 0;
+        let parentId =
+          thread.lineage.relationshipToParent === "subagent" ? thread.lineage.parentThreadId : null;
+        while (parentId !== null && depth < MAX_REPORTED_DEPTH) {
+          depth += 1;
+          const parent = yield* shellOf(parentId);
+          parentId =
+            parent?.lineage.relationshipToParent === "subagent"
+              ? parent.lineage.parentThreadId
+              : null;
+        }
+        return depth;
+      });
+    // Whether the caller's active run was started by a scheduled task.
+    const scheduledRunOf = (threadId: string, runId: string | null) =>
+      Option.isNone(threads) || runId === null
+        ? Effect.succeed(false)
+        : threads.value
+            .getThreadRecords(ThreadId.make(threadId), ["runs", "messages"], {
+              runIds: [runId as never],
+              messageRoles: ["user"],
+            })
+            .pipe(
+              Effect.map((records) => {
+                const run = records.runs.find((candidate) => candidate.id === runId);
+                return records.messages.some(
+                  (message) =>
+                    message.id === run?.userMessageId && message.scheduledTaskId !== undefined,
+                );
+              }),
+              Effect.orElseSucceed(() => false),
+            );
+    const record = (
+      tool: string,
+      args: unknown,
+      result: McpSchema.CallToolResult | undefined,
+      durationMs: number,
+    ) =>
       Effect.gen(function* () {
         const invocation = Option.getOrUndefined(
           yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
         );
         const providers = Option.isSome(registry) ? yield* registry.value.getProviders : [];
         // Only handoff tools pay for thread lookups; the rest report the
-        // caller's provider from the credential and skip its model.
+        // caller's provider from the credential.
         const handoff = HANDOFF_TOOLS.has(tool);
         const caller =
-          invocation === undefined
-            ? undefined
-            : handoff
-              ? yield* modelSelectionOf(invocation.threadId)
-              : { instanceId: invocation.providerInstanceId, model: "" };
+          handoff && invocation !== undefined
+            ? ((yield* shellOf(invocation.threadId)) ?? undefined)
+            : undefined;
         const targetIds = handoff
           ? [...new Set(resultThreadIds(result?.structuredContent))].filter(
               (threadId) => threadId !== invocation?.threadId,
             )
           : [];
-        const targets = yield* Effect.forEach(targetIds, modelSelectionOf);
+        const targets = yield* Effect.forEach(targetIds, shellOf);
         for (const properties of agentToolProperties({
           tool,
           providers,
           caller,
-          targets: targets.filter((selection) => selection !== undefined),
+          ...(invocation === undefined
+            ? {}
+            : { callerProviderInstanceId: invocation.providerInstanceId }),
+          ...(caller === undefined || invocation === undefined
+            ? {}
+            : {
+                callerDepth: yield* depthOf(caller),
+                callerScheduledRun: yield* scheduledRunOf(invocation.threadId, caller.activeRunId),
+              }),
+          targets: targets.filter((thread) => thread !== null),
+          outcome: toolOutcome(result),
+          ...(handoff ? { settings: handoffSettings(tool, args, result?.structuredContent) } : {}),
+          durationMs,
         })) {
           yield* analytics.value.record("mcp.tool.invoked", properties);
         }
@@ -738,13 +794,25 @@ const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
         server.addTool({
           ...options,
           handle: (payload) =>
-            options
-              .handle(payload)
-              .pipe(
-                Effect.onExit((exit) =>
-                  record(options.tool.name, exit._tag === "Success" ? exit.value : undefined),
-                ),
-              ),
+            Effect.gen(function* () {
+              const startedAt = yield* Clock.currentTimeMillis;
+              return yield* options
+                .handle(payload)
+                .pipe(
+                  Effect.onExit((exit) =>
+                    Clock.currentTimeMillis.pipe(
+                      Effect.flatMap((endedAt) =>
+                        record(
+                          options.tool.name,
+                          payload,
+                          exit._tag === "Success" ? exit.value : undefined,
+                          endedAt - startedAt,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+            }),
         }),
     });
     return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));

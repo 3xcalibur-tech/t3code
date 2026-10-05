@@ -1,7 +1,13 @@
-import { ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import { ProviderInstanceId, ThreadId, type ServerProvider } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 
-import { agentToolProperties } from "./ProviderDimensions.ts";
+import {
+  type AgentThread,
+  agentToolProperties,
+  handoffSettings,
+  callerOrigin,
+  toolOutcome,
+} from "./ProviderDimensions.ts";
 
 const provider = (
   instanceId: string,
@@ -23,49 +29,90 @@ const providers = [
   provider("opencode", "opencode", [{ slug: "ollama/acme-internal", isCustom: false }]),
 ];
 
-const selection = (instanceId: string, model: string) => ({
-  instanceId: ProviderInstanceId.make(instanceId),
-  model,
+const thread = (
+  instanceId: string,
+  model: string,
+  overrides: Partial<AgentThread> = {},
+): AgentThread => ({
+  modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  createdBy: "user",
+  creationSource: "web",
+  lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make("t") },
+  ...overrides,
 });
 
-it("relates the calling agent to each agent it acted on", () => {
+it("relates the calling agent to each agent that received work", () => {
   expect(
     agentToolProperties({
       tool: "create_threads",
       providers,
-      caller: selection("work-codex", "gpt-5.5"),
-      targets: [selection("claudeAgent", "claude-opus-5-5"), selection("work-codex", "gpt-5.5")],
+      caller: thread("work-codex", "gpt-5.5", { createdBy: "agent", creationSource: "mcp" }),
+      callerDepth: 1,
+      targets: [
+        thread("claudeAgent", "claude-opus-5-5", { interactionMode: "plan" }),
+        thread("work-codex", "gpt-5.5"),
+      ],
+      outcome: { outcome: "ok" },
+      settings: { batchSize: 2, targetChosen: true },
+      durationMs: 42,
     }),
   ).toEqual([
     {
       tool: "create_threads",
       callerProvider: "codex",
       callerModel: "gpt-5.5",
+      callerOrigin: "agent",
+      callerDepth: 1,
+      durationMs: 42,
+      outcome: "ok",
+      batchSize: 2,
+      targetChosen: true,
       targetProvider: "claudeAgent",
       targetModel: "claude-opus-5-5",
+      targetRuntimeMode: "full-access",
+      targetInteractionMode: "plan",
       crossProvider: true,
     },
     {
       tool: "create_threads",
       callerProvider: "codex",
       callerModel: "gpt-5.5",
+      callerOrigin: "agent",
+      callerDepth: 1,
+      durationMs: 42,
+      outcome: "ok",
+      batchSize: 2,
+      targetChosen: true,
       targetProvider: "codex",
       targetModel: "gpt-5.5",
+      targetRuntimeMode: "full-access",
+      targetInteractionMode: "default",
       crossProvider: false,
     },
   ]);
 });
 
-it("reports only the caller for tools that act on no other thread", () => {
+it("reports a non-handoff tool from the credential's provider alone", () => {
   expect(
     agentToolProperties({
       tool: "preview_click",
       providers,
-      caller: selection("claudeAgent", "claude-opus-5-5"),
+      caller: undefined,
+      callerProviderInstanceId: ProviderInstanceId.make("claudeAgent"),
       targets: [],
+      outcome: { outcome: "error", errorCode: "capability_denied" },
+      durationMs: 3,
     }),
   ).toEqual([
-    { tool: "preview_click", callerProvider: "claudeAgent", callerModel: "claude-opus-5-5" },
+    {
+      tool: "preview_click",
+      callerProvider: "claudeAgent",
+      durationMs: 3,
+      outcome: "error",
+      errorCode: "capability_denied",
+    },
   ]);
 });
 
@@ -74,30 +121,84 @@ it("omits custom, user-configured, and unknown models and instance names", () =>
     agentToolProperties({
       tool: "t3_thread_send",
       providers,
-      caller: selection("claudeAgent", "my-private-finetune"),
-      targets: [selection("opencode", "ollama/acme-internal")],
-    }),
+      caller: thread("claudeAgent", "my-private-finetune"),
+      targets: [thread("opencode", "ollama/acme-internal"), thread("removed-instance", "gpt-5.5")],
+      outcome: { outcome: "ok" },
+    }).map(({ callerProvider, callerModel, targetProvider, targetModel }) => ({
+      callerProvider,
+      callerModel,
+      targetProvider,
+      targetModel,
+    })),
   ).toEqual([
     {
-      tool: "t3_thread_send",
       callerProvider: "claudeAgent",
+      callerModel: undefined,
       targetProvider: "opencode",
-      crossProvider: true,
+      targetModel: undefined,
     },
-  ]);
-  expect(
-    agentToolProperties({
-      tool: "t3_thread_fork",
-      providers,
-      caller: undefined,
-      targets: [selection("removed-instance", "gpt-5.5")],
-    }),
-  ).toEqual([
     {
-      tool: "t3_thread_fork",
-      callerProvider: "unknown",
+      callerProvider: "claudeAgent",
+      callerModel: undefined,
       targetProvider: "unknown",
-      crossProvider: false,
+      targetModel: undefined,
     },
   ]);
+});
+
+it("reads handoff settings from enums and flags, never from prompts or ids", () => {
+  expect(
+    handoffSettings(
+      "delegate_task",
+      { task: "secret", mode: "wait", target: { driverKind: "claudeAgent" } },
+      { taskId: "t", waitTimedOut: true },
+    ),
+  ).toEqual({ targetChosen: true, mode: "wait", waitTimedOut: true });
+  expect(handoffSettings("delegate_task", { task: "secret" }, { waitTimedOut: false })).toEqual({
+    targetChosen: false,
+    mode: "async",
+  });
+  expect(
+    handoffSettings(
+      "t3_thread_launch",
+      { message: "secret", workspaceStrategy: { type: "worktree", branch: "private" } },
+      {},
+    ),
+  ).toEqual({ targetChosen: false, workspace: "worktree" });
+  expect(handoffSettings("t3_thread_launch", { scratch: true }, {})).toMatchObject({
+    workspace: "scratch",
+  });
+  expect(
+    handoffSettings(
+      "create_threads",
+      { threads: [{ prompt: "a" }, { prompt: "b", target: {} }] },
+      {},
+    ),
+  ).toEqual({ batchSize: 2, targetChosen: true });
+  expect(handoffSettings("t3_thread_send", { message: "secret" }, { delivery: "steered" })).toEqual(
+    { delivery: "steered" },
+  );
+});
+
+it("reads failure codes from declared tool errors even without isError", () => {
+  expect(
+    toolOutcome({
+      structuredContent: {
+        _tag: "OrchestratorMcpFailure",
+        code: "capability_denied",
+        message: "private detail",
+      },
+    }),
+  ).toEqual({ outcome: "error", errorCode: "capability_denied" });
+  expect(toolOutcome({ isError: false, structuredContent: { threadId: "t" } })).toEqual({
+    outcome: "ok",
+  });
+  expect(toolOutcome(undefined)).toEqual({ outcome: "error", errorCode: "exception" });
+});
+
+it("tells user, agent, system, and scheduled work apart", () => {
+  expect(callerOrigin({ thread: { createdBy: "user" }, scheduledRun: false })).toBe("user");
+  expect(callerOrigin({ thread: { createdBy: "agent" }, scheduledRun: false })).toBe("agent");
+  expect(callerOrigin({ thread: { createdBy: "system" }, scheduledRun: false })).toBe("system");
+  expect(callerOrigin({ thread: { createdBy: "user" }, scheduledRun: true })).toBe("scheduler");
 });

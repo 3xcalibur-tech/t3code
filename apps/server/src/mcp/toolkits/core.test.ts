@@ -172,6 +172,13 @@ it.effect("records the calling agent and the agent a tool acted on", () => {
       archivedAt: null,
       deletedAt: null,
       activeRunId: "mcp-core-run",
+      createdBy: "agent",
+      creationSource: "mcp",
+      lineage: {
+        parentThreadId: id === threadId ? ThreadId.make("mcp-core-parent") : null,
+        relationshipToParent: id === threadId ? "subagent" : null,
+        rootThreadId: ThreadId.make("mcp-core-parent"),
+      },
     }) as never;
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -181,19 +188,26 @@ it.effect("records the calling agent and the agent a tool acted on", () => {
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
         Effect.provideService(McpSchema.McpServerClient, client),
       );
-    expect(recorded).toEqual([
-      {
-        event: "mcp.tool.invoked",
-        properties: {
-          tool: "t3_thread_fork",
-          callerProvider: "codex",
-          callerModel: "gpt-5.5",
-          targetProvider: "claudeAgent",
-          targetModel: "claude-opus-5-5",
-          crossProvider: true,
-        },
-      },
-    ]);
+    expect(recorded).toHaveLength(1);
+    const [{ event, properties }] = recorded as [{ event: string; properties: object }];
+    expect(event).toBe("mcp.tool.invoked");
+    expect(properties).toMatchObject({
+      tool: "t3_thread_fork",
+      outcome: "ok",
+      callerProvider: "codex",
+      callerModel: "gpt-5.5",
+      callerOrigin: "agent",
+      callerDepth: 1,
+      targetProvider: "claudeAgent",
+      targetModel: "claude-opus-5-5",
+      targetRuntimeMode: "full-access",
+      targetInteractionMode: "default",
+      crossProvider: true,
+    });
+    expect(properties).toHaveProperty("durationMs");
+    expect(Object.values(properties).some((value) => String(value).includes("mcp-core"))).toBe(
+      false,
+    );
   }).pipe(
     Effect.provide(
       McpHttpServer.ThreadToolkitRegistrationLive.pipe(
@@ -207,6 +221,7 @@ it.effect("records the calling agent and the agent a tool acted on", () => {
                   ? shell(threadId, "codex", "gpt-5.5")
                   : shell(id, "claudeAgent", "claude-opus-5-5"),
               ),
+            getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
             getProjectThreadRecords: () =>
               Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
             dispatch: () => Effect.succeed({ sequence: 1 } as never),
