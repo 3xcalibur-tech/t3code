@@ -175,16 +175,37 @@ const make = Effect.gen(function* () {
 
   const withLock = <A, E>(effect: Effect.Effect<A, E>) => lock.withPermits(1)(effect);
 
+  /**
+   * Stops a former Home's active run once its grant is gone, so it does not
+   * keep working next to the new Home. Best effort: the grant already moved.
+   */
+  const stopFormerHome = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const shell = yield* liveShell(threadId);
+      if (shell === null || shell.activeRunId === null) return;
+      const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      yield* threads.interruptThread({
+        projectId: shell.projectId,
+        commandId: CommandId.make(`home-stop:${id}`),
+        threadId,
+        reason: "Home was turned off or started fresh.",
+      });
+    }).pipe(Effect.ignore);
+
   // Home's instructions follow the app version, so an update reaches the
   // current Home in its next provider session, not only after a fresh start.
   if (available && (yield* readHome.pipe(Effect.orElseSucceed(() => null)))?.threadId != null) {
     yield* folders.ensureHomeProject.pipe(Effect.ignore);
   }
 
+  // A read failure fails the report, so the reporter retries the batch and
+  // keeps its ended watches. A Home thread that is gone has nothing to wake.
   const deliver = (homeThreadId: ThreadId, events: ReadonlyArray<HomeWatchEvent>) =>
     Effect.gen(function* () {
-      const shell = yield* liveShell(homeThreadId);
-      if (shell === null) return;
+      const shell = yield* threads
+        .getThreadShell(homeThreadId)
+        .pipe(Effect.mapError(() => fail("Home could not be read.")));
+      if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null) return;
       const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       yield* threads
         .sendToThread({
@@ -221,7 +242,9 @@ const make = Effect.gen(function* () {
     disable: withLock(
       Effect.gen(function* () {
         yield* requireAvailable;
+        const { threadId } = yield* readHome;
         yield* writeHome(DEFAULT_HOME_SETTINGS);
+        if (threadId !== null) yield* stopFormerHome(threadId);
       }),
     ),
 
@@ -232,8 +255,11 @@ const make = Effect.gen(function* () {
         const current = home.threadId === null ? null : yield* liveShell(home.threadId);
         if (current === null) return yield* fail("Turn Home on first.");
         const threadId = yield* launchHome(current.modelSelection);
+        // The grant moves first; stopping the old run comes after.
         yield* writeHome({ ...home, threadId });
-        // The old Home stays in history, out of the active list.
+        yield* stopFormerHome(current.id);
+        // The old Home stays in history, out of the active list. Settling can
+        // fail while its interrupted run is still ending; it is then left active.
         const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
         yield* threads
           .dispatch({

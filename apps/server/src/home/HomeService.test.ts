@@ -29,6 +29,9 @@ const makeHome = () => {
   const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
   const sent: Array<ThreadManagement.ThreadManagementSendInput> = [];
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const interrupted: Array<ThreadId> = [];
+  // Threads with a running turn, to model a Home that is busy when it is replaced.
+  const running = new Set<string>();
   const shell = (threadId: ThreadId) =>
     ({
       id: threadId,
@@ -36,7 +39,8 @@ const makeHome = () => {
       modelSelection,
       deletedAt: null,
       archivedAt: null,
-    }) as OrchestrationV2ThreadShell;
+      activeRunId: running.has(threadId) ? "run" : null,
+    }) as unknown as OrchestrationV2ThreadShell;
   // provideMerge, so a test reads the same settings Home writes.
   const layer = HomeService.layer.pipe(
     Layer.provideMerge(
@@ -70,6 +74,10 @@ const makeHome = () => {
             sent.push(input);
             return Effect.succeed({} as ThreadManagement.ThreadManagementSendResult);
           },
+          interruptThread: (input) => {
+            interrupted.push(input.threadId);
+            return Effect.succeed({} as never);
+          },
           dispatch: (command) => {
             dispatched.push(command);
             return Effect.succeed({} as never);
@@ -78,7 +86,7 @@ const makeHome = () => {
       ),
     ),
   );
-  return { layer, launched, sent, dispatched, sendFailures };
+  return { layer, launched, sent, dispatched, sendFailures, interrupted, running };
 };
 
 const event = (threadId: string, kind: HomeWatchEvent["kind"]): HomeWatchEvent => ({
@@ -183,6 +191,17 @@ it.effect("a Home thread that a fresh start replaced cannot change watches", () 
       .updateWatches(old, (current) => ({ ...current, watchAll: true }))
       .pipe(Effect.flip);
     expect(error.message).toContain("no longer Home");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("turning Home off stops the run the old Home was doing", () => {
+  const { layer, interrupted, running } = makeHome();
+  return Effect.gen(function* () {
+    const home = yield* HomeService.HomeService;
+    const { threadId } = yield* home.enable({ modelSelection });
+    running.add(threadId);
+    yield* home.disable;
+    expect(interrupted).toEqual([threadId]);
   }).pipe(Effect.provide(layer));
 });
 
