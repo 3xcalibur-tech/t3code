@@ -1756,6 +1756,26 @@ export const layerWithOptions = (
                 }
               });
               const sessionScope = yield* Scope.make();
+              // sessionOpen serializes by providerSessionId, not threadId, so a
+              // second open for the same thread (a different providerSessionId)
+              // can run prepareMcpSession concurrently with this one and reuse
+              // the credential this open mints, holding its own reservation.
+              // Revoke it only if nothing else still depends on it: the same
+              // check releaseEntry uses before revoking a session's credential.
+              const revokeIfUnheld = Effect.gen(function* () {
+                if (!prepared.issued || mcpCredentialId === undefined) return;
+                const current = yield* Ref.get(sessions);
+                const heldElsewhere =
+                  isMcpCredentialReserved(input.threadId, mcpCredentialId) ||
+                  Array.from(current.values()).some(
+                    (other) =>
+                      other.attachedThreadIds.has(input.threadId) ||
+                      other.mcpCredentialIdByThread.get(input.threadId) === mcpCredentialId,
+                  );
+                if (!heldElsewhere) {
+                  yield* clearMcpSession(input.threadId, mcpCredentialId);
+                }
+              });
               // An open that fails or is interrupted (a start timeout, a Stop)
               // must not leave the provider process it spawned behind. Bound
               // the close the same way release does: a misbehaving adapter
@@ -1763,15 +1783,7 @@ export const layerWithOptions = (
               const abandonOpen = closeSessionScopeBounded(sessionScope, {
                 providerSessionId: input.providerSessionId,
                 reason: "open_abandoned",
-              }).pipe(
-                Effect.andThen(dropReservation),
-                // Revoke only a credential this open freshly minted: a reused
-                // credential is held by another live provider process and must
-                // survive this open's failure.
-                Effect.andThen(
-                  prepared.issued ? clearMcpSession(input.threadId, mcpCredentialId) : Effect.void,
-                ),
-              );
+              }).pipe(Effect.andThen(dropReservation), Effect.andThen(revokeIfUnheld));
               const runtime = yield* adapter
                 .openSession({
                   threadId: input.threadId,
@@ -1838,25 +1850,33 @@ export const layerWithOptions = (
               // The entry now guards the credential via its recorded id, so
               // the pre-open reservation can be dropped.
               yield* dropReservation;
-              yield* withActivityError(
-                input.providerSessionId,
-                writeProviderSessionEvents({
-                  runtime,
-                  threadIds: [input.threadId],
-                  type: "provider-session.attached",
-                  payload: runtime.providerSession,
-                }),
-              ).pipe(
-                Effect.tapError(() =>
-                  releaseEntry({
-                    providerSessionId: input.providerSessionId,
-                    reason: "runtime_error",
-                    detail: "Failed to persist the provider-session attachment.",
-                  }).pipe(logReleaseFailure(input.providerSessionId)),
-                ),
+              // From here the entry is live and visible to other callers
+              // (manager.get, close, idle release). A failure or an interrupt
+              // (a start timeout, a Stop) landing anywhere in this setup tail,
+              // including the persistence write, must release the entry it
+              // just recorded, the same way an abandoned pre-registration open
+              // releases its scope above.
+              const finishOpenSetup = releaseEntry({
+                providerSessionId: input.providerSessionId,
+                reason: "runtime_error",
+                detail: "Opening the provider session was abandoned before it finished setup.",
+              }).pipe(logReleaseFailure(input.providerSessionId));
+              yield* Effect.gen(function* () {
+                yield* withActivityError(
+                  input.providerSessionId,
+                  writeProviderSessionEvents({
+                    runtime,
+                    threadIds: [input.threadId],
+                    type: "provider-session.attached",
+                    payload: runtime.providerSession,
+                  }),
+                );
+                yield* startEventPump(entry);
+                yield* scheduleIdleRelease(input.providerSessionId);
+              }).pipe(
+                Effect.tapError(() => finishOpenSetup),
+                Effect.onInterrupt(() => finishOpenSetup),
               );
-              yield* startEventPump(entry);
-              yield* scheduleIdleRelease(input.providerSessionId);
               return exposedRuntime;
             }),
           ),

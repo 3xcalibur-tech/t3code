@@ -81,6 +81,35 @@ const FailingReleaseEventSinkLayer = Layer.effect(
   }),
 ).pipe(Layer.provide(TestEventSinkLayer));
 
+/**
+ * Pauses the write that attaches a just-opened session to its thread:
+ * signals `started`, then waits for `resume`. Lets a test interrupt `open()`
+ * while its entry is already recorded in `sessions` but setup has not
+ * finished, the window after `Ref.update(sessions, ...)` and before
+ * `startEventPump` / `scheduleIdleRelease`.
+ */
+const makeAttachWritePauseLayer = (gate: {
+  readonly started: Deferred.Deferred<void>;
+  readonly resume: Deferred.Deferred<void>;
+}) =>
+  Layer.effect(
+    EventSink.EventSinkV2,
+    Effect.gen(function* () {
+      const delegate = yield* EventSink.EventSinkV2;
+      return EventSink.EventSinkV2.of({
+        ...delegate,
+        write: (input) =>
+          Effect.gen(function* () {
+            if (input.events.some((event) => event.type === "provider-session.attached")) {
+              yield* Deferred.succeed(gate.started, undefined);
+              yield* Deferred.await(gate.resume);
+            }
+            return yield* delegate.write(input);
+          }),
+      });
+    }),
+  ).pipe(Layer.provide(TestEventSinkLayer));
+
 interface FlakyReleaseWrites {
   /** Which release writes fail right now. */
   readonly failing: Ref.Ref<"none" | "session" | "session-and-requests">;
@@ -412,6 +441,10 @@ function makeTestLayer(input: {
   }) => Effect.Effect<void>;
   readonly failReleaseEventWrites?: boolean;
   readonly flakyReleaseWrites?: FlakyReleaseWrites;
+  readonly attachWritePause?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly resume: Deferred.Deferred<void>;
+  };
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
   readonly afterOpen?: Effect.Effect<void>;
@@ -424,7 +457,9 @@ function makeTestLayer(input: {
       ? makeFlakyReleaseEventSinkLayer(input.flakyReleaseWrites)
       : input.failReleaseEventWrites
         ? FailingReleaseEventSinkLayer
-        : TestEventSinkLayer;
+        : input.attachWritePause !== undefined
+          ? makeAttachWritePauseLayer(input.attachWritePause)
+          : TestEventSinkLayer;
   const registryLayer = ProviderAdapterRegistry.makeSingleLayer(
     makeProviderAdapter(input.state, {
       failEventStream: input.failEventStream ?? false,
@@ -871,6 +906,149 @@ it.effect("ProviderSessionManagerV2 finishes an interrupted open when its scope 
       ),
     );
   }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 keeps a credential a concurrent open still holds when the first open is interrupted",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const openStartedCount = yield* Ref.make(0);
+      const firstStarted = yield* Deferred.make<void>();
+      const secondStarted = yield* Deferred.make<void>();
+      const releaseSecond = yield* Deferred.make<void>();
+      // sessionOpen serializes by providerSessionId, not threadId, so the
+      // first and second open below run concurrently. Each call's own
+      // prepareMcpSession (serialized per thread) finishes, and only then
+      // does it reach this hook, so call order here matches prepare order:
+      // the first call mints the credential, the second reuses it.
+      const beforeOpen = () =>
+        Effect.gen(function* () {
+          const callNumber = yield* Ref.modify(openStartedCount, (count) => [count + 1, count + 1]);
+          if (callNumber === 1) {
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Effect.never;
+          } else {
+            yield* Deferred.succeed(secondStarted, undefined);
+            yield* Deferred.await(releaseSecond);
+          }
+        });
+
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-open-credential-race");
+        const s1 = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const s2 = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+
+        const firstFiber = yield* manager
+          .open({ threadId, providerSessionId: s1, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(firstStarted);
+        const originalToken = McpProviderSession.readMcpProviderSession(
+          threadId,
+        )?.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(originalToken);
+
+        const secondFiber = yield* manager
+          .open({ threadId, providerSessionId: s2, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(secondStarted);
+
+        yield* Fiber.interrupt(firstFiber);
+        assert.isDefined(
+          yield* registry.resolve(originalToken!),
+          "interrupting s1 must not revoke the credential s2 is still configuring its process with",
+        );
+
+        yield* Deferred.succeed(releaseSecond, undefined);
+        yield* Fiber.join(secondFiber);
+        assert.isDefined(yield* registry.resolve(originalToken!));
+        yield* manager.close(s2);
+        assert.isUndefined(
+          yield* registry.resolve(originalToken!),
+          "closing the session that actually holds the credential still revokes it",
+        );
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            beforeOpen,
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 releases an entry when open is interrupted after it is recorded",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const gate = {
+        started: yield* Deferred.make<void>(),
+        resume: yield* Deferred.make<void>(),
+      };
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-interrupted-attach");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+
+        // Like a Stop landing after the session is recorded in `sessions`
+        // (so manager.get sees it) but before setup finishes persisting the
+        // attachment, starting the event pump, and scheduling idle release.
+        const fiber = yield* manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(gate.started);
+        assert.isTrue(
+          Option.isSome(yield* manager.get(providerSessionId)),
+          "the entry must already be recorded while the attach write is in flight",
+        );
+
+        yield* Fiber.interrupt(fiber);
+
+        assert.isTrue(
+          Option.isNone(yield* manager.get(providerSessionId)),
+          "an open interrupted after recording its entry must release it",
+        );
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            attachWritePause: gate,
+          }),
+        ),
+      );
+    }),
 );
 
 it.effect("ProviderSessionManagerV2 closes every live session for a provider instance", () =>
