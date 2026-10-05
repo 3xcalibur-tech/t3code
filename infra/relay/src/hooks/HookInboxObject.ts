@@ -143,7 +143,7 @@ export const HookInboxObjectLive = HookInboxObject.make(
               Effect.logWarning("Held webhook delivery run failed", { cause }).pipe(
                 Effect.andThen(Effect.annotateCurrentSpan({ "relay.inbox.run_result": "failed" })),
                 Effect.andThen(Clock.currentTimeMillis),
-                Effect.flatMap((now) => state.storage.setAlarm(now + RUN_FAILURE_RETRY_MS)),
+                Effect.flatMap((now) => scheduleBy(now + RUN_FAILURE_RETRY_MS)),
               ),
             ),
             withInboxSpan("relay.inbox.deliver", inboxId),
