@@ -203,6 +203,19 @@ describe("acpRegistrySnapshotReadiness", () => {
 
     expect(
       acpRegistrySnapshotReadiness({
+        status: "missing_runner",
+        version: null,
+        distribution: "local",
+      }),
+    ).toEqual({
+      installed: false,
+      version: null,
+      status: "error",
+      message: "Local ACP executable is not available on this environment's PATH.",
+    });
+
+    expect(
+      acpRegistrySnapshotReadiness({
         status: "unprepared",
         agentId: "zed-agent",
         version: "2.0.0",

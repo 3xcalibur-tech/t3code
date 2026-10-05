@@ -455,9 +455,14 @@ export type AcpRegistryInspection =
   | {
       readonly status: "missing_runner";
       readonly agentId: string;
-      readonly version: string | null;
-      readonly distribution: AcpRegistryDistributionKind | "local";
+      readonly version: string;
+      readonly distribution: AcpRegistryDistributionKind;
       readonly runner: string;
+    }
+  | {
+      readonly status: "missing_runner";
+      readonly version: null;
+      readonly distribution: "local";
     }
   | {
       readonly status: "unprepared";
@@ -1631,10 +1636,8 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         return executable === undefined
           ? ({
               status: "missing_runner",
-              agentId: command,
               version: null,
               distribution: "local",
-              runner: command,
             } as const)
           : ({ status: "ready", agentId: command, version: null, distribution: "local" } as const);
       }
@@ -1752,7 +1755,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         if (command === undefined) {
           return yield* new AcpRegistryError({
             reason: "runner_unavailable",
-            detail: `Local ACP executable '${executable}' is not available on this environment's PATH.`,
+            detail: "Local ACP executable is not available on this environment's PATH.",
           });
         }
         yield* validateLocalExecutable(command);

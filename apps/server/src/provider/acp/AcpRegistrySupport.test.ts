@@ -339,14 +339,17 @@ describe("AcpRegistrySupport", () => {
       yield* fileSystem.chmod(nonExecutable, 0o644);
       for (const commandPath of ["dsh", `${cacheDir}/missing`, cacheDir, nonExecutable]) {
         const localSettings = decodeAcpRegistrySettings({ source: "local", commandPath });
-        expect(yield* resolver.inspect(localSettings, environment)).toMatchObject({
+        expect(yield* resolver.inspect(localSettings, environment)).toEqual({
           status: "missing_runner",
+          version: null,
           distribution: "local",
-          runner: commandPath,
         });
         expect(
           yield* resolver.resolve(localSettings, "/workspace", environment).pipe(Effect.flip),
-        ).toMatchObject({ reason: "runner_unavailable" });
+        ).toMatchObject({
+          reason: "runner_unavailable",
+          detail: "Local ACP executable is not available on this environment's PATH.",
+        });
       }
     }).pipe(
       Effect.scoped,
