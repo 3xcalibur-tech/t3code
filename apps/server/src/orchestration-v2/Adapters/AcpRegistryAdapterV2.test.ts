@@ -121,6 +121,8 @@ describe("AcpRegistryAdapterV2", () => {
     assert.isTrue(BUILT_IN_PROVIDER_ADAPTER_DRIVER_KINDS_V2.has(ACP_REGISTRY_PROVIDER));
     assert.equal(AcpRegistryAdapterV2Driver.driverKind, ACP_REGISTRY_PROVIDER);
     assert.deepEqual(AcpRegistryAdapterV2Driver.defaultConfig(), {
+      source: "registry",
+      commandArgs: [],
       enabled: true,
       agentId: "",
       commandPath: "",

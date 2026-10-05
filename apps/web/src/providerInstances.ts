@@ -210,8 +210,8 @@ export function applyProviderInstanceSettings(
       explicitInstance.config !== null && typeof explicitInstance.config === "object"
         ? (explicitInstance.config as Readonly<Record<string, unknown>>)
         : null;
-    const agentId = config?.agentId;
-    const iconUrl = config?.registryIconUrl;
+    const agentId = config?.source === "local" ? undefined : config?.agentId;
+    const iconUrl = config?.source === "local" ? undefined : config?.registryIconUrl;
     return {
       ...entry,
       enabled,

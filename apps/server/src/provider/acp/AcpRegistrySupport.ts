@@ -439,8 +439,8 @@ export function resolveAcpRegistryDistribution(input: {
 }
 
 export interface ResolvedAcpRegistryAgent {
-  readonly agent: AcpRegistryAgent;
-  readonly distribution: AcpRegistryDistributionKind;
+  readonly agent?: AcpRegistryAgent;
+  readonly distribution: AcpRegistryDistributionKind | "local";
   readonly spawn: AcpSpawnInput;
 }
 
@@ -455,8 +455,8 @@ export type AcpRegistryInspection =
   | {
       readonly status: "missing_runner";
       readonly agentId: string;
-      readonly version: string;
-      readonly distribution: AcpRegistryDistributionKind;
+      readonly version: string | null;
+      readonly distribution: AcpRegistryDistributionKind | "local";
       readonly runner: string;
     }
   | {
@@ -469,7 +469,7 @@ export type AcpRegistryInspection =
       readonly status: "ready";
       readonly agentId: string;
       readonly version: string | null;
-      readonly distribution: AcpRegistryDistributionKind;
+      readonly distribution: AcpRegistryDistributionKind | "local";
       readonly documentationUrl?: string;
     };
 
@@ -1610,8 +1610,34 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       } satisfies AcpRegistryPrepareResult;
     });
 
+  const validateLocalExecutable = (command: string) =>
+    platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)
+      ? Effect.fail(
+          new AcpRegistryError({
+            reason: "runner_unavailable",
+            detail:
+              "Local ACP commands launch without a shell. For a Windows batch wrapper, configure the underlying executable (for example node.exe) and pass the script path as an argument.",
+          }),
+        )
+      : Effect.void;
+
   const inspect: AcpRegistryCatalog["Service"]["inspect"] = (settings, environment) =>
     Effect.gen(function* () {
+      if (settings.source === "local") {
+        const command = settings.commandPath.trim();
+        if (!command) return { status: "unconfigured" } as const;
+        const executable = resolveExecutable(command, platform, environment ?? hostEnvironment);
+        if (executable !== undefined) yield* validateLocalExecutable(executable);
+        return executable === undefined
+          ? ({
+              status: "missing_runner",
+              agentId: command,
+              version: null,
+              distribution: "local",
+              runner: command,
+            } as const)
+          : ({ status: "ready", agentId: command, version: null, distribution: "local" } as const);
+      }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) return { status: "unconfigured" } as const;
       const registry = yield* loadCachedRegistry();
@@ -1713,6 +1739,28 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
   const resolve: AcpRegistryCatalog["Service"]["resolve"] = (settings, cwd, environment) =>
     Effect.gen(function* () {
+      if (settings.source === "local") {
+        const executable = settings.commandPath.trim();
+        if (!executable) {
+          return yield* new AcpRegistryError({
+            reason: "agent_not_configured",
+            detail: "Local ACP provider requires an executable.",
+          });
+        }
+        const env = environment ?? hostEnvironment;
+        const command = resolveExecutable(executable, platform, env);
+        if (command === undefined) {
+          return yield* new AcpRegistryError({
+            reason: "runner_unavailable",
+            detail: `Local ACP executable '${executable}' is not available on this environment's PATH.`,
+          });
+        }
+        yield* validateLocalExecutable(command);
+        return {
+          distribution: "local",
+          spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
+        } satisfies ResolvedAcpRegistryAgent;
+      }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) {
         return yield* new AcpRegistryError({

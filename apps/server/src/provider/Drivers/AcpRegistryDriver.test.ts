@@ -312,49 +312,57 @@ describe("acpRegistrySnapshotReadiness", () => {
     expect(snapshot.models[0]?.isDefault).toBe(true);
   });
 
-  it("reports failed authentication without hiding successful local inspection", () => {
-    const snapshot = buildCheckedAcpRegistrySnapshot({
-      ...identity,
-      settings: decodeSettings({ agentId: "test-agent", authMethodId: "grok-login" }),
-      checkedAt: "2026-08-13T10:00:00.000Z",
-      inspection: {
-        status: "ready",
-        agentId: "test-agent",
-        version: "1.0.0",
-        distribution: "binary",
-      },
-      probeError: new AcpRegistryOperationError({
-        reason: "authentication_failed",
-        message: "Login required.",
-        authMethods: [
-          {
-            id: "api-key",
-            name: "API key",
-            description: null,
-            type: "env_var",
-          },
-          {
-            id: "grok-login",
-            name: "Log in with Grok",
-            description: null,
-            type: "agent",
-          },
-        ],
-      }),
-    });
+  it.each(["registry", "local"] as const)(
+    "reports failed authentication after successful %s inspection",
+    (source) => {
+      const snapshot = buildCheckedAcpRegistrySnapshot({
+        ...identity,
+        settings: decodeSettings({
+          source,
+          ...(source === "local" ? { commandPath: "test-agent" } : { agentId: "test-agent" }),
+          authMethodId: "grok-login",
+        }),
+        checkedAt: "2026-08-13T10:00:00.000Z",
+        inspection: {
+          status: "ready",
+          agentId: "test-agent",
+          version: source === "local" ? null : "1.0.0",
+          distribution: source === "local" ? "local" : "binary",
+        },
+        probeError: new AcpRegistryOperationError({
+          reason: "authentication_failed",
+          message: "Login required.",
+          authMethods: [
+            {
+              id: "api-key",
+              name: "API key",
+              description: null,
+              type: "env_var",
+            },
+            {
+              id: "grok-login",
+              name: "Log in with Grok",
+              description: null,
+              type: "agent",
+            },
+          ],
+        }),
+      });
 
-    expect(snapshot).toMatchObject({
-      installed: true,
-      version: "1.0.0",
-      status: "warning",
-      auth: {
-        status: "unauthenticated",
-        type: "agent",
-        label: "Log in with Grok",
-      },
-      message: 'Sign in in provider settings using "Log in with Grok".',
-    });
-  });
+      expect(snapshot).toMatchObject({
+        installed: true,
+        version: source === "local" ? null : "1.0.0",
+        status: "warning",
+        setup: { canAuthenticate: true },
+        auth: {
+          status: "unauthenticated",
+          type: "agent",
+          label: "Log in with Grok",
+        },
+        message: 'Sign in in provider settings using "Log in with Grok".',
+      });
+    },
+  );
 
   it.effect("runs the disposable probe only after local inspection is ready", () =>
     Effect.gen(function* () {
