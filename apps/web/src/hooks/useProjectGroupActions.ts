@@ -11,7 +11,8 @@ import {
 import type { ProjectIconOverride } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { create } from "zustand";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
@@ -35,6 +36,45 @@ type ProjectGroup = Pick<
 >;
 
 type GroupResult = AtomCommandResult<void, unknown>;
+
+// A write to every machine is not atomic, so writes to one project run one at
+// a time across the sidebar, palette and settings, and their controls stay
+// disabled until the last one finishes.
+const useProjectWriteCounts = create<{ readonly counts: ReadonlyMap<string, number> }>(() => ({
+  counts: new Map(),
+}));
+const projectWriteTails = new Map<string, Promise<unknown>>();
+
+function adjustProjectWrites(projectKeys: ReadonlyArray<string>, delta: number) {
+  useProjectWriteCounts.setState(({ counts }) => {
+    const next = new Map(counts);
+    for (const key of projectKeys) {
+      const count = (next.get(key) ?? 0) + delta;
+      if (count > 0) next.set(key, count);
+      else next.delete(key);
+    }
+    return { counts: next };
+  });
+}
+
+/** Runs `run` after earlier writes to any of the projects, marking them busy meanwhile. */
+function queueProjectWrite(
+  projectKeys: ReadonlyArray<string>,
+  run: () => Promise<GroupResult>,
+): Promise<GroupResult> {
+  adjustProjectWrites(projectKeys, 1);
+  // allSettled, so one failed earlier write does not start this one early.
+  const previous = Promise.allSettled(projectKeys.map((key) => projectWriteTails.get(key)));
+  const task = previous.then(run).finally(() => adjustProjectWrites(projectKeys, -1));
+  for (const key of projectKeys) projectWriteTails.set(key, task);
+  const forget = () => {
+    for (const key of projectKeys) {
+      if (projectWriteTails.get(key) === task) projectWriteTails.delete(key);
+    }
+  };
+  task.then(forget, forget);
+  return task;
+}
 
 /**
  * Edits one logical project. Its shared fields live on each machine's
@@ -149,42 +189,13 @@ export function useProjectGroupActions() {
   );
 
   /** Pins after every pinned project in `groups`, or unpins. */
-  // A write to every machine is not atomic, so writes to one project run one
-  // at a time, and its controls stay disabled until the last one finishes.
-  const [busyCounts, setBusyCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
-  const tails = useRef(new Map<string, Promise<unknown>>());
-  const whileBusy = useCallback(
-    (projectKeys: ReadonlyArray<string>, run: () => Promise<GroupResult>) => {
-      const adjust = (delta: number) =>
-        setBusyCounts((current) => {
-          const next = new Map(current);
-          for (const key of projectKeys) {
-            const count = (next.get(key) ?? 0) + delta;
-            if (count > 0) next.set(key, count);
-            else next.delete(key);
-          }
-          return next;
-        });
-      adjust(1);
-      const previous = Promise.all(projectKeys.map((key) => tails.current.get(key)));
-      const task = previous.then(run, run).finally(() => adjust(-1));
-      for (const key of projectKeys) tails.current.set(key, task);
-      const forget = () => {
-        for (const key of projectKeys) {
-          if (tails.current.get(key) === task) tails.current.delete(key);
-        }
-      };
-      task.then(forget, forget);
-      return task;
-    },
-    [],
-  );
+  const busyCounts = useProjectWriteCounts((state) => state.counts);
   /** True while a pin, archive or reorder write runs or waits for the project. */
   const isBusy = useCallback((projectKey: string) => busyCounts.has(projectKey), [busyCounts]);
 
   const setPinned = useCallback(
     (group: ProjectGroup, pinned: boolean, groups: ReadonlyArray<ProjectGroup>) =>
-      whileBusy([group.projectKey], () =>
+      queueProjectWrite([group.projectKey], () =>
         organizeGroup(
           group,
           pinned
@@ -193,13 +204,13 @@ export function useProjectGroupActions() {
           pinned ? `Failed to pin ${group.displayName}` : `Failed to unpin ${group.displayName}`,
         ),
       ),
-    [organizeGroup, whileBusy],
+    [organizeGroup],
   );
 
   /** Saves a dragged order of the pinned projects. */
   const reorderPinned = useCallback(
     (orderedGroups: ReadonlyArray<ProjectGroup>, movedKey: string): Promise<GroupResult> =>
-      whileBusy(
+      queueProjectWrite(
         orderedGroups.map((group) => group.projectKey),
         async () => {
           const groupByKey = new Map(orderedGroups.map((group) => [group.projectKey, group]));
@@ -223,18 +234,18 @@ export function useProjectGroupActions() {
           return AsyncResult.success(undefined);
         },
       ),
-    [organizeGroup, whileBusy],
+    [organizeGroup],
   );
 
   /** Archives with an Undo toast, or unarchives. Threads keep their state. */
   const setArchived = useCallback(
     async (group: ProjectGroup, archived: boolean): Promise<GroupResult> => {
       const unarchive = () =>
-        whileBusy([group.projectKey], () =>
+        queueProjectWrite([group.projectKey], () =>
           organizeGroup(group, { archived: false }, `Failed to unarchive ${group.displayName}`),
         );
       if (!archived) return unarchive();
-      const result = await whileBusy([group.projectKey], () =>
+      const result = await queueProjectWrite([group.projectKey], () =>
         organizeGroup(group, { archived: true }, `Failed to archive ${group.displayName}`),
       );
       if (result._tag === "Success") {
@@ -255,7 +266,7 @@ export function useProjectGroupActions() {
       }
       return result;
     },
-    [organizeGroup, whileBusy],
+    [organizeGroup],
   );
 
   return { updateGroup, canOrganize, isBusy, setPinned, reorderPinned, setArchived };
