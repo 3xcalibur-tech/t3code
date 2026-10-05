@@ -397,20 +397,23 @@ function pageIncludesTerminalTaskResult(input: {
   });
 }
 
-function latestTerminalResultRun(
-  projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs">,
-  delegatedRun: OrchestrationV2Run | undefined,
-): OrchestrationV2Run | undefined {
+function delegatedWorkRuns(projection: Pick<OrchestrationV2ThreadProjection, "messages" | "runs">) {
   const monitorRunIds = new Set(
     projection.messages
       .filter((message) => message.notification?.source.kind === "monitor")
       .map((message) => message.runId),
   );
-  return projection.runs
+  return projection.runs.filter((run) => !monitorRunIds.has(run.id));
+}
+
+function latestTerminalResultRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  delegatedRun: OrchestrationV2Run | undefined,
+): OrchestrationV2Run | undefined {
+  return runs
     .filter(
       (run) =>
         ThreadManagementService.isTerminalRunStatus(run.status) &&
-        !monitorRunIds.has(run.id) &&
         run.status !== "rolled_back" &&
         (run.id === delegatedRun?.id || run.startedAt !== null),
     )
@@ -1141,7 +1144,8 @@ const make = Effect.gen(function* () {
         )
         .pipe(Effect.mapError(threadManagementFailure));
       const childRun = delegatedTaskRun(childControls, task);
-      const terminalRun = latestTerminalResultRun(childControls, childRun);
+      const workRuns = delegatedWorkRuns(childControls);
+      const terminalRun = latestTerminalResultRun(workRuns, childRun);
       const progress = delegatedTaskProgress(childControls);
       const resultRunIds = [
         ...new Set(
@@ -1162,10 +1166,10 @@ const make = Effect.gen(function* () {
         turnItems: resultRecords.turnItems,
       };
       const currentRun =
-        childControls.runs.findLast((run) =>
+        workRuns.findLast((run) =>
           ["preparing", "starting", "running", "waiting"].includes(run.status),
         ) ??
-        childControls.runs.findLast((run) => run.status === "queued" && run.queueHeld !== true) ??
+        workRuns.findLast((run) => run.status === "queued" && run.queueHeld !== true) ??
         progress.resultRun ??
         childRun;
       // A restart-cut run is not a final result while its continuation is pending.
@@ -1213,7 +1217,7 @@ const make = Effect.gen(function* () {
         childNodeId: task.id,
         status,
         workState,
-        hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
+        hasPendingChildRuns: hasPendingChildRuns({ runs: workRuns }, childRun),
         providerInstanceId: task.providerInstanceId,
         model: task.model,
         summary: derivedResult,
