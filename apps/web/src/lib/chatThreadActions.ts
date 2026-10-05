@@ -1,4 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { isHomeProject } from "@t3tools/client-runtime/state/projects";
 import {
   type EnvironmentId,
   type ModelSelection,
@@ -68,6 +69,31 @@ export function hasExplicitComposerModelSelection(
     activeProvider !== undefined &&
     draft.modelSelectionByProvider[activeProvider] !== undefined
   );
+}
+
+/**
+ * The project a new thread starts in when nothing else picks one: the first in
+ * order that is not Home's folder, which belongs to Home alone.
+ */
+export function defaultNewThreadProjectRef(
+  projects: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly id: ProjectId;
+    readonly workspaceRoot: string;
+  }>,
+  home: {
+    readonly primaryEnvironmentId: EnvironmentId | null;
+    readonly homeWorkspaceRoot: string | null;
+  },
+): ScopedProjectRef | null {
+  const project = projects.find(
+    (candidate) =>
+      !(
+        candidate.environmentId === home.primaryEnvironmentId &&
+        isHomeProject(candidate, home.homeWorkspaceRoot)
+      ),
+  );
+  return project ? scopeProjectRef(project.environmentId, project.id) : null;
 }
 
 export function resolveThreadActionProjectRef(
