@@ -1,10 +1,13 @@
 import {
   EnvironmentId,
+  PeerGrantId,
   ProjectId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   type OrchestrationV2ServerCommand as OrchestrationCommand,
   type OrchestrationProjectShell,
+  type OrchestrationV2ThreadShell,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -132,6 +135,8 @@ interface HarnessOptions {
   readonly project?: OrchestrationProjectShell | null;
   /** A rejection the orchestrator reports as the dispatch error's cause. */
   readonly reject?: (command: OrchestrationCommand) => string | null;
+  /** Every thread the orchestrator knows, replacing the default single thread. */
+  readonly shells?: ReadonlyArray<OrchestrationV2ThreadShell>;
 }
 
 const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
@@ -158,7 +163,13 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
     }),
     Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (id) =>
-        Effect.succeed(id === THREAD_ID && thread ? v2PullRequestThread(thread) : null),
+        Effect.succeed(
+          options.shells !== undefined
+            ? (options.shells.find((shell) => shell.id === id) ?? null)
+            : id === THREAD_ID && thread
+              ? v2PullRequestThread(thread)
+              : null,
+        ),
       dispatch,
     }),
     Layer.succeed(Crypto.Crypto, testCrypto),
@@ -424,6 +435,46 @@ describe("pull request toolkit handlers", () => {
     );
     expect(result.pullRequests[0]?.host).toBe("forge.example:3000");
   });
+
+  it.effect("lets work a peer started change only its own grant's threads", () =>
+    Effect.gen(function* () {
+      const peerOrigin = {
+        grantId: PeerGrantId.make("grant:mainbook"),
+        label: "Mainbook",
+        claimedEnvironmentId: null,
+      };
+      const shell = (id: string, origin: typeof peerOrigin | null) => ({
+        ...v2PullRequestThread({ ...makeThread([]), id: ThreadId.make(id) }),
+        peerOrigin: origin,
+      });
+      const harness = yield* makeHarness({
+        shells: [
+          // The calling thread is peer work with a live run.
+          { ...shell(THREAD_ID, peerOrigin), activeRunId: RunId.make("run-1") },
+          shell("thread-trusted", null),
+          shell("thread-other-grant", { ...peerOrigin, grantId: PeerGrantId.make("grant:x") }),
+          shell("thread-same-grant", peerOrigin),
+        ],
+      });
+      const watch = (threadId: string) =>
+        harness.call("watch_pull_request", {
+          url: "https://github.com/t3tools/t3code/pull/9",
+          threadId: ThreadId.make(threadId),
+        });
+      for (const target of ["thread-trusted", "thread-other-grant"]) {
+        const error = yield* watch(target).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "PullRequestThreadAboveLimitsError",
+          threadId: target,
+        });
+      }
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
+      yield* watch("thread-same-grant");
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        { type: "thread.pull-request.watch", threadId: "thread-same-grant" },
+      ]);
+    }),
+  );
 
   it.effect("fails cleanly when the token's thread no longer exists", () =>
     Effect.gen(function* () {

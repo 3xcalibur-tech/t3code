@@ -26,6 +26,7 @@ import * as Option from "effect/Option";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { assertPeerWorkAccess } from "../../peerOrigin.ts";
 import { assertTargetWithinLimits } from "../../threadAccess.ts";
 import {
   type ListThreadPullRequestsResult,
@@ -190,7 +191,8 @@ const make = Effect.gen(function* () {
 
   /**
    * A thread whose pull requests the caller may change: its own, or one that
-   * runs within the caller's modes.
+   * runs within the caller's modes and, for work a peer started, belongs to
+   * the same grant. A watch sends comments into the thread, so it is a write.
    */
   const requireWritableThread = Effect.fn("PullRequestsToolkit.requireWritableThread")(function* (
     Failure:
@@ -202,27 +204,32 @@ const make = Effect.gen(function* () {
     const thread = yield* requireThread(Failure, requested);
     const scope = yield* McpInvocationContext.McpInvocationContext;
     if (thread.id === scope.thread?.threadId) return thread;
-    const limits =
+    const caller =
       scope.thread === undefined
+        ? undefined
+        : yield* engine
+            .getThreadShell(scope.thread.threadId)
+            .pipe(Effect.mapError((cause) => new Failure({ cause })));
+    // A thread caller changes other threads only while its own run is live.
+    if (
+      scope.thread !== undefined &&
+      (caller == null ||
+        caller.archivedAt !== null ||
+        caller.activeRunId === null ||
+        caller.providerInstanceId !== scope.thread.providerInstanceId)
+    ) {
+      return yield* new PullRequestThreadAboveLimitsError({ threadId: thread.id });
+    }
+    const limits =
+      caller == null
         ? {
             runtimeMode: scope.client?.runtimeModeCeiling ?? ("approval-required" as const),
             interactionMode: "default" as const,
           }
-        : yield* engine.getThreadShell(scope.thread.threadId).pipe(
-            Effect.mapError((cause) => new Failure({ cause })),
-            Effect.map((caller) =>
-              // A thread caller changes other threads only while its own run is live.
-              caller === null ||
-              caller.archivedAt !== null ||
-              caller.activeRunId === null ||
-              caller.providerInstanceId !== scope.thread?.providerInstanceId
-                ? undefined
-                : { runtimeMode: caller.runtimeMode, interactionMode: caller.interactionMode },
-            ),
-          );
-    if (limits === undefined) {
-      return yield* new PullRequestThreadAboveLimitsError({ threadId: thread.id });
-    }
+        : { runtimeMode: caller.runtimeMode, interactionMode: caller.interactionMode };
+    yield* assertPeerWorkAccess(caller ?? undefined, thread).pipe(
+      Effect.mapError(() => new PullRequestThreadAboveLimitsError({ threadId: thread.id })),
+    );
     yield* assertTargetWithinLimits(limits, thread).pipe(
       Effect.mapError(() => new PullRequestThreadAboveLimitsError({ threadId: thread.id })),
     );

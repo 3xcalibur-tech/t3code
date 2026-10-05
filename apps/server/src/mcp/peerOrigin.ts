@@ -11,7 +11,10 @@ interface WithPeerOrigin {
  * Grants differ in modes and setup-script permission, so one grant's work must
  * not steer another's. Other callers may act on anything. Reads are not gated.
  */
-export function assertPeerWorkAccess(caller: WithPeerOrigin | undefined, target: WithPeerOrigin) {
+export function assertPeerWorkAccess(
+  caller: WithPeerOrigin | undefined,
+  target: WithPeerOrigin,
+): Effect.Effect<void, OrchestratorMcpFailure> {
   const origin = caller?.peerOrigin;
   return origin != null && target.peerOrigin?.grantId !== origin.grantId
     ? Effect.fail(
@@ -27,7 +30,10 @@ export function assertPeerWorkAccess(caller: WithPeerOrigin | undefined, target:
  * Refuses an action that peer-origin work may never take, such as writing
  * persistent project or environment configuration or reaching another environment.
  */
-export function rejectPeerOriginCaller(caller: WithPeerOrigin | undefined, action: string) {
+export function rejectPeerOriginCaller(
+  caller: WithPeerOrigin | undefined,
+  action: string,
+): Effect.Effect<void, OrchestratorMcpFailure> {
   return caller?.peerOrigin != null
     ? Effect.fail(
         new OrchestratorMcpFailure({
