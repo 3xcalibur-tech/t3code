@@ -413,7 +413,7 @@ it.live(
     ),
 );
 
-it.live("offers one-click only to a browser session that holds the scopes it would grant", () =>
+it.live("one-click approves only access the browser session holds the scopes for", () =>
   withRoutes((handler, auth) =>
     Effect.gen(function* () {
       const clientId = yield* registeredClientId(handler);
@@ -458,6 +458,25 @@ it.live("offers one-click only to a browser session that holds the scopes it wou
       );
       expect(forged.status).toBe(400);
       expect(forged.message).toContain("Enter a pairing code instead");
+
+      // A session that can read but not operate threads may approve read-only access only.
+      const reader = yield* browserCookie(["access:write", "orchestration:read"]);
+      const readerDetails = yield* details(reader);
+      expect(readerDetails.csrfToken).toEqual(expect.any(String));
+      const tooBroad = yield* decide(
+        handler,
+        params,
+        { _tag: "browser-session", access: "auto", csrfToken: readerDetails.csrfToken! },
+        reader,
+      );
+      expect(tooBroad.status).toBe(400);
+      const readOnly = yield* decide(
+        handler,
+        params,
+        { _tag: "browser-session", access: "read-only", csrfToken: readerDetails.csrfToken! },
+        reader,
+      );
+      expect(new URL(readOnly.redirectTo!).searchParams.get("code")).toEqual(expect.any(String));
     }),
   ),
 );
