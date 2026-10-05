@@ -176,22 +176,41 @@ const make = Effect.gen(function* () {
   const withLock = <A, E>(effect: Effect.Effect<A, E>) => lock.withPermits(1)(effect);
 
   /**
-   * Stops a former Home's active run once its grant is gone, and holds its
-   * queued messages so none starts it again. Best effort: the grant already moved.
+   * Stops a former Home once its grant is gone, so it does not keep working
+   * next to the new Home. An active run is interrupted with its queue held;
+   * with no active run, queued turns that have not started yet are cancelled.
+   * Best effort: the grant already moved.
    */
   const stopFormerHome = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const shell = yield* liveShell(threadId);
-      if (shell === null || shell.activeRunId === null) return;
-      const id = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-      yield* threads.dispatch({
-        type: "run.interrupt",
-        commandId: CommandId.make(`home-stop:${id}`),
-        threadId,
-        runId: shell.activeRunId,
-        reason: "Home was turned off or started fresh.",
-        holdQueue: true,
-      });
+      if (shell === null) return;
+      const commandId = crypto.randomUUIDv4.pipe(
+        Effect.orDie,
+        Effect.map((id) => CommandId.make(`home-stop:${id}`)),
+      );
+      if (shell.activeRunId !== null) {
+        yield* threads.dispatch({
+          type: "run.interrupt",
+          commandId: yield* commandId,
+          threadId,
+          runId: shell.activeRunId,
+          reason: "Home was turned off or started fresh.",
+          holdQueue: true,
+        });
+        return;
+      }
+      const { runs } = yield* threads.getThreadRecords(threadId, ["runs"]);
+      for (const run of runs.filter((candidate) => candidate.status === "queued")) {
+        yield* threads
+          .dispatch({
+            type: "queued-run.cancel",
+            commandId: yield* commandId,
+            threadId,
+            runId: run.id,
+          })
+          .pipe(Effect.ignore);
+      }
     }).pipe(Effect.ignore);
 
   // Home's instructions follow the app version, so an update reaches the
@@ -312,10 +331,12 @@ const make = Effect.gen(function* () {
             events.filter((event) => event.kind === "ended").map((event) => watchKey(event)),
           );
           if (!home.watches.some((watch) => ended.has(watchKey(watch)))) return;
+          // The batch was delivered, so a failed save must not fail the report:
+          // a retry would wake Home twice. A watch left behind ends at the next start.
           yield* writeHome({
             ...home,
             watches: home.watches.filter((watch) => !ended.has(watchKey(watch))),
-          });
+          }).pipe(Effect.ignore);
         }),
       ),
   });
