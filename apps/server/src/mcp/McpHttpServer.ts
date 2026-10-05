@@ -11,13 +11,15 @@ import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
-import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
+import { McpProtocol, McpSchema, McpServer, Tool, type Toolkit } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { PreviewAutomationError } from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
+import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
@@ -647,61 +649,101 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
   );
 });
 
-const PreviewStandardToolkitRegistrationLive = McpServer.toolkit(PreviewStandardToolkit).pipe(
+/**
+ * Runs a tool registration against a server that records one anonymous
+ * `mcp.tool.invoked` event per call: the tool name and the calling agent's
+ * driver kind. Arguments, results, and ids are never recorded.
+ */
+const withToolAnalytics = <E, R>(registration: Effect.Effect<void, E, R>) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
+    if (Option.isNone(analytics)) return yield* registration;
+    const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+    const record = (tool: string) =>
+      Effect.gen(function* () {
+        const invocation = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+        const providers = Option.isSome(registry) ? yield* registry.value.getProviders : [];
+        const caller = Option.isSome(invocation)
+          ? providers.find(
+              (provider) => provider.instanceId === invocation.value.providerInstanceId,
+            )
+          : undefined;
+        yield* analytics.value.record("mcp.tool.invoked", {
+          tool,
+          provider: caller?.driver ?? "unknown",
+        });
+      }).pipe(Effect.ignoreCause);
+    const recordingServer = McpServer.McpServer.of({
+      ...server,
+      addTool: (options) =>
+        server.addTool({
+          ...options,
+          handle: (payload) =>
+            record(options.tool.name).pipe(Effect.andThen(options.handle(payload))),
+        }),
+    });
+    return yield* registration.pipe(Effect.provideService(McpServer.McpServer, recordingServer));
+  });
+
+const toolkit = <Tools extends Record<string, Tool.Any>>(tools: Toolkit.Toolkit<Tools>) =>
+  Layer.effectDiscard(withToolAnalytics(McpServer.registerToolkit(tools))).pipe(
+    Layer.provide(McpServer.McpServer.layer),
+  );
+
+const PreviewStandardToolkitRegistrationLive = toolkit(PreviewStandardToolkit).pipe(
   Layer.provide(PreviewStandardToolkitHandlersLive),
 );
 
-const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnapshot()).pipe(
-  Layer.provide(PreviewSnapshotToolkitHandlersLive),
-);
+const PreviewSnapshotRegistrationLive = Layer.effectDiscard(
+  withToolAnalytics(registerPreviewSnapshot()),
+).pipe(Layer.provide(PreviewSnapshotToolkitHandlersLive));
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
 );
 
-export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
+export const OrchestratorToolkitRegistrationLive = toolkit(OrchestratorToolkit).pipe(
   Layer.provide(OrchestratorToolkitHandlersLive),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(ThreadMetadataMcpService.layer),
 );
 
-export const ThreadToolkitRegistrationLive = McpServer.toolkit(ThreadToolkit).pipe(
+export const ThreadToolkitRegistrationLive = toolkit(ThreadToolkit).pipe(
   Layer.provide(ThreadToolkitHandlersLive),
 );
 
-const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
+const WorktreeToolkitRegistrationLive = toolkit(WorktreeToolkit).pipe(
   Layer.provide(WorktreeToolkitHandlersLive),
   Layer.provide(WorktreeMcpService.layer),
 );
 
-const PreviewControlsRegistrationLive = McpServer.toolkit(PreviewControlsToolkit).pipe(
+const PreviewControlsRegistrationLive = toolkit(PreviewControlsToolkit).pipe(
   Layer.provide(PreviewControlsHandlersLive),
 );
 
-const EnvironmentRegistrationLive = McpServer.toolkit(EnvironmentToolkit).pipe(
+const EnvironmentRegistrationLive = toolkit(EnvironmentToolkit).pipe(
   Layer.provide(EnvironmentHandlersLive),
 );
 
-const ProjectRegistrationLive = McpServer.toolkit(ProjectToolkit).pipe(
-  Layer.provide(ProjectHandlersLive),
-);
+const ProjectRegistrationLive = toolkit(ProjectToolkit).pipe(Layer.provide(ProjectHandlersLive));
 
-const AttachmentRegistrationLive = McpServer.toolkit(AttachmentToolkit).pipe(
+const AttachmentRegistrationLive = toolkit(AttachmentToolkit).pipe(
   Layer.provide(AttachmentHandlersLive),
 );
 
-export const PullRequestsToolkitRegistrationLive = McpServer.toolkit(PullRequestsToolkit).pipe(
+export const PullRequestsToolkitRegistrationLive = toolkit(PullRequestsToolkit).pipe(
   Layer.provide(PullRequestsToolkitHandlersLive),
 );
 
-const DeviceStandardToolkitRegistrationLive = McpServer.toolkit(DeviceStandardToolkit).pipe(
+const DeviceStandardToolkitRegistrationLive = toolkit(DeviceStandardToolkit).pipe(
   Layer.provide(DeviceStandardToolkitHandlersLive),
 );
 
-const DeviceScreenshotRegistrationLive = Layer.effectDiscard(registerDeviceScreenshot()).pipe(
-  Layer.provide(DeviceScreenshotToolkitHandlersLive),
-);
+const DeviceScreenshotRegistrationLive = Layer.effectDiscard(
+  withToolAnalytics(registerDeviceScreenshot()),
+).pipe(Layer.provide(DeviceScreenshotToolkitHandlersLive));
 
 export const DeviceToolkitRegistrationLive = Layer.mergeAll(
   DeviceStandardToolkitRegistrationLive,

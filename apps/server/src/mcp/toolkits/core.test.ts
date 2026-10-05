@@ -17,6 +17,8 @@ import { OrchestratorProjectionError } from "../../orchestration-v2/Orchestrator
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
+import * as ProviderRegistry from "../../provider/Services/ProviderRegistry.ts";
+import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
 import { PreviewToolkit } from "./preview/tools.ts";
 import { PreviewControlsToolkit } from "./previewControls/tools.ts";
@@ -156,6 +158,54 @@ it.effect("returns a bounded public failure without serializing storage causes",
     ),
   ),
 );
+
+it.effect("records one anonymous analytics event per tool call", () => {
+  const recorded: Array<{ event: string; properties: unknown }> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    yield* server
+      .callTool({ name: "t3_thread_organize", arguments: { action: "pin" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(recorded).toEqual([
+      {
+        event: "mcp.tool.invoked",
+        properties: { tool: "t3_thread_organize", provider: "codex" },
+      },
+    ]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.ThreadToolkitRegistrationLive.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(null),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({
+            getProviders: Effect.succeed([
+              { instanceId: ProviderInstanceId.make("codex"), driver: "codex" } as never,
+            ]),
+          }),
+        ),
+        Layer.provide(
+          Layer.succeed(
+            AnalyticsService.AnalyticsService,
+            AnalyticsService.AnalyticsService.of({
+              record: (event, properties) =>
+                Effect.sync(() => void recorded.push({ event, properties })),
+              flush: Effect.void,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+});
 
 it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
   const settings = {

@@ -69,6 +69,8 @@ import {
 } from "../orchestration-v2/SubagentProjection.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import { delegationProperties } from "../telemetry/ProviderDimensions.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
@@ -760,6 +762,14 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const providerAdapters = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
+  const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
+
+  const recordDelegation = (input: Parameters<typeof delegationProperties>[0]) =>
+    Option.isNone(analytics)
+      ? Effect.void
+      : analytics.value
+          .record("mcp.agent.delegated", delegationProperties(input))
+          .pipe(Effect.ignoreCause);
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1438,6 +1448,12 @@ const make = Effect.gen(function* () {
           );
         }
         const taskId = taskEvent.event.payload.id;
+        yield* recordDelegation({
+          tool: "delegate_task",
+          providers,
+          caller: parent.thread.modelSelection,
+          target: target.modelSelection,
+        });
 
         if (input.mode !== "wait") {
           return yield* readTask(scope, taskId, false, true);
@@ -1705,6 +1721,12 @@ const make = Effect.gen(function* () {
                     ),
                   ),
                 );
+              yield* recordDelegation({
+                tool: "create_threads",
+                providers,
+                caller: parent.thread.modelSelection,
+                target: target.modelSelection,
+              });
               return {
                 threadId,
                 runId: run?.id ?? null,
