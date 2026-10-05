@@ -1768,6 +1768,17 @@ export const layerWithOptions = (
               // open's holder check and its revoke: either prepare runs
               // first and the check sees its reservation, or this finishes
               // and releases the credential before prepare can reuse it.
+              // Compares only the credential id, not thread attachment: an
+              // older entry can be attached to this thread while recording a
+              // different credential (a stale record, or its own credential
+              // for a thread it also serves), and that must not veto
+              // revoking the credential this open minted and nothing holds.
+              // releaseEntry's own holder check also accepts bare thread
+              // attachment, but for a different reason: it runs without this
+              // lock, so it still needs to catch an in-flight attach whose
+              // credential isn't recorded yet. That gap can't happen here,
+              // since the lock excludes any concurrent prepare for this
+              // thread for the entire span of this check and this revoke.
               const revokeIfUnheld = mcpPrepareLock.withLock(
                 input.threadId,
                 Effect.gen(function* () {
@@ -1777,7 +1788,6 @@ export const layerWithOptions = (
                     isMcpCredentialReserved(input.threadId, mcpCredentialId) ||
                     Array.from(current.values()).some(
                       (other) =>
-                        other.attachedThreadIds.has(input.threadId) ||
                         other.mcpCredentialIdByThread.get(input.threadId) === mcpCredentialId,
                     );
                   if (!heldElsewhere) {
@@ -1785,104 +1795,117 @@ export const layerWithOptions = (
                   }
                 }),
               );
-              // An open that fails or is interrupted (a start timeout, a Stop)
-              // must not leave the provider process it spawned behind. Bound
-              // the close the same way release does: a misbehaving adapter
-              // finalizer must not turn the abandonment itself into a new hang.
-              const abandonOpen = closeSessionScopeBounded(sessionScope, {
-                providerSessionId: input.providerSessionId,
-                reason: "open_abandoned",
-              }).pipe(Effect.andThen(dropReservation), Effect.andThen(revokeIfUnheld));
-              const runtime = yield* adapter
-                .openSession({
-                  threadId: input.threadId,
+              // A failure or an interrupt anywhere from here through the end
+              // of setup, opening the provider session, constructing the
+              // entry, publishing it, dropping the reservation, persisting
+              // the attachment, must not leave the provider process this
+              // open spawned behind. Splitting that span across more than
+              // one handler-wrapped effect does not close this: the fiber
+              // is unprotected in the gap between one piece's wrapper
+              // ending and the next piece's wrapper attaching, and a Stop
+              // landing exactly there is not caught by either. One handler
+              // wrapping the whole span as a single effect removes the gap
+              // instead of racing to close it: abandonSetup adapts to
+              // whatever progress was made (the adapter call never
+              // finished, the entry was built but not published, or it was
+              // published) and cleans up accordingly, so it is correct no
+              // matter where in the span the interrupt lands.
+              //
+              // Identifies "still ours" by the adapter runtime reference,
+              // not the entry object: manager.get and idle scheduling
+              // legitimately replace the map's entry object (a spread with
+              // an updated lastActivityAtMs/idleFiber) on every touch, so
+              // comparing entry objects by identity would treat routine
+              // activity as "replaced by someone else" and skip releasing
+              // a session that is still this open's own.
+              let openedRuntime: ProviderAdapterV2SessionRuntime | undefined;
+              const abandonSetup = Effect.gen(function* () {
+                if (openedRuntime !== undefined) {
+                  const current = yield* Ref.get(sessions);
+                  if (current.get(key)?.runtime === openedRuntime) {
+                    yield* releaseEntry({
+                      providerSessionId: input.providerSessionId,
+                      reason: "runtime_error",
+                      detail:
+                        "Opening the provider session was abandoned before it finished setup.",
+                    }).pipe(logReleaseFailure(input.providerSessionId));
+                    return;
+                  }
+                }
+                // Bound the close the same way release does: a misbehaving
+                // adapter finalizer must not turn the abandonment itself
+                // into a new hang.
+                yield* closeSessionScopeBounded(sessionScope, {
                   providerSessionId: input.providerSessionId,
-                  modelSelection: input.modelSelection,
-                  runtimePolicy: input.runtimePolicy,
-                  ...(input.resumeFromSession === undefined
-                    ? {}
-                    : { resumeFromSession: input.resumeFromSession }),
-                  ...(input.initialNativeThreadId === undefined
-                    ? {}
-                    : { initialNativeThreadId: input.initialNativeThreadId }),
-                  ...(input.initialProviderItemIdentityVersion === undefined
-                    ? {}
-                    : {
-                        initialProviderItemIdentityVersion:
-                          input.initialProviderItemIdentityVersion,
-                      }),
-                })
-                .pipe(
-                  Effect.provideService(Scope.Scope, sessionScope),
-                  Effect.tapError(() => abandonOpen),
-                  Effect.onInterrupt(() => abandonOpen),
-                  Effect.mapError(
-                    (cause) =>
-                      new ProviderSessionOpenError({
-                        instanceId: input.modelSelection.instanceId,
-                        providerSessionId: input.providerSessionId,
-                        cause,
-                      }),
-                  ),
-                );
-              const eventSubscribers = yield* Ref.make<
-                ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
-              >(new Map());
-              const exposedRuntime = decorateRuntime(runtime, eventSubscribers);
-              const now = yield* Clock.currentTimeMillis;
-              const entry: LiveSessionEntry = {
-                attachedThreadIds: new Set([input.threadId]),
-                loadedProviderThreadKeyByThread: new Map(),
-                mcpCredentialIdByThread:
-                  mcpCredentialId === undefined
-                    ? new Map()
-                    : new Map([[input.threadId, mcpCredentialId]]),
-                supportsMultipleProviderThreads:
-                  runtime.providerSession.capabilities.sessions
-                    .supportsMultipleProviderThreadsPerSession,
-                runtime,
-                exposedRuntime,
-                eventSubscribers,
-                requestEventPermit: yield* Semaphore.make(1),
-                scope: sessionScope,
-                idleGeneration: 0,
-                busyCount: 0,
-                lastActivityAtMs: now,
-                idleFiber: null,
-                pinnedSinceMs: null,
-              };
-              // Publishing the entry and dropping the reservation must not
-              // straddle an interrupt: a Stop landing between them (after
-              // manager.get can see the entry, before the handler below is
-              // attached) would leave the entry, its process and its scope
-              // with no cleanup at all. Both steps are quick bookkeeping with
-              // no real suspension, so making them uninterruptible costs
-              // nothing and closes that gap the same way Effect's own
-              // acquireRelease makes "acquire, then attach release" atomic.
-              const finishOpenSetup = releaseEntry({
-                providerSessionId: input.providerSessionId,
-                reason: "runtime_error",
-                detail: "Opening the provider session was abandoned before it finished setup.",
-              }).pipe(logReleaseFailure(input.providerSessionId));
-              yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  yield* Ref.update(sessions, (current) => {
-                    const updated = new Map(current);
-                    updated.set(key, entry);
-                    return updated;
-                  });
-                  // The entry now guards the credential via its recorded id,
-                  // so the pre-open reservation can be dropped.
-                  yield* dropReservation;
-                }),
-              );
-              // From here the entry is live and visible to other callers
-              // (manager.get, close, idle release). A failure or an interrupt
-              // (a start timeout, a Stop) landing anywhere in this setup tail,
-              // including the persistence write, must release the entry it
-              // just recorded, the same way an abandoned pre-registration open
-              // releases its scope above.
-              yield* Effect.gen(function* () {
+                  reason: "open_abandoned",
+                }).pipe(Effect.andThen(dropReservation), Effect.andThen(revokeIfUnheld));
+              });
+              return yield* Effect.gen(function* () {
+                const runtime = yield* adapter
+                  .openSession({
+                    threadId: input.threadId,
+                    providerSessionId: input.providerSessionId,
+                    modelSelection: input.modelSelection,
+                    runtimePolicy: input.runtimePolicy,
+                    ...(input.resumeFromSession === undefined
+                      ? {}
+                      : { resumeFromSession: input.resumeFromSession }),
+                    ...(input.initialNativeThreadId === undefined
+                      ? {}
+                      : { initialNativeThreadId: input.initialNativeThreadId }),
+                    ...(input.initialProviderItemIdentityVersion === undefined
+                      ? {}
+                      : {
+                          initialProviderItemIdentityVersion:
+                            input.initialProviderItemIdentityVersion,
+                        }),
+                  })
+                  .pipe(
+                    Effect.provideService(Scope.Scope, sessionScope),
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderSessionOpenError({
+                          instanceId: input.modelSelection.instanceId,
+                          providerSessionId: input.providerSessionId,
+                          cause,
+                        }),
+                    ),
+                  );
+                const eventSubscribers = yield* Ref.make<
+                  ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
+                >(new Map());
+                const exposedRuntime = decorateRuntime(runtime, eventSubscribers);
+                const now = yield* Clock.currentTimeMillis;
+                const entry: LiveSessionEntry = {
+                  attachedThreadIds: new Set([input.threadId]),
+                  loadedProviderThreadKeyByThread: new Map(),
+                  mcpCredentialIdByThread:
+                    mcpCredentialId === undefined
+                      ? new Map()
+                      : new Map([[input.threadId, mcpCredentialId]]),
+                  supportsMultipleProviderThreads:
+                    runtime.providerSession.capabilities.sessions
+                      .supportsMultipleProviderThreadsPerSession,
+                  runtime,
+                  exposedRuntime,
+                  eventSubscribers,
+                  requestEventPermit: yield* Semaphore.make(1),
+                  scope: sessionScope,
+                  idleGeneration: 0,
+                  busyCount: 0,
+                  lastActivityAtMs: now,
+                  idleFiber: null,
+                  pinnedSinceMs: null,
+                };
+                yield* Ref.update(sessions, (current) => {
+                  const updated = new Map(current);
+                  updated.set(key, entry);
+                  return updated;
+                });
+                openedRuntime = runtime;
+                // The entry now guards the credential via its recorded id,
+                // so the pre-open reservation can be dropped.
+                yield* dropReservation;
                 yield* withActivityError(
                   input.providerSessionId,
                   writeProviderSessionEvents({
@@ -1894,11 +1917,11 @@ export const layerWithOptions = (
                 );
                 yield* startEventPump(entry);
                 yield* scheduleIdleRelease(input.providerSessionId);
+                return exposedRuntime;
               }).pipe(
-                Effect.tapError(() => finishOpenSetup),
-                Effect.onInterrupt(() => finishOpenSetup),
+                Effect.tapError(() => abandonSetup),
+                Effect.onInterrupt(() => abandonSetup),
               );
-              return exposedRuntime;
             }),
           ),
         get: (providerSessionId) =>

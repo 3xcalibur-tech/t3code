@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/unstable/http";
@@ -1156,21 +1157,28 @@ it.effect(
           Effect.forkScoped,
         );
         // Give the scheduler every chance to run s2 as far as it can go
-        // without the lock before asserting it is still blocked: a bare
-        // pollUnsafe right after forking can pass even on unfixed code
+        // without the lock before checking whether it is still blocked: a
+        // bare pollUnsafe right after forking can pass even on unfixed code
         // simply because s2 has not been scheduled yet.
         for (let i = 0; i < 200; i++) {
           yield* Effect.yieldNow;
         }
-        assert.isUndefined(
-          secondAdapterStartedWaiter.pollUnsafe(),
-          "s2's prepare must still be waiting on the per-thread lock while s1's revoke is in flight",
-        );
+        // Capture the result instead of asserting here: without the lock s2
+        // is not actually blocked, so an immediate assert would throw before
+        // the gate below ever releases s1's parked, uninterruptible revoke
+        // handler, and the whole fiber tree (and this test) would hang
+        // instead of failing cleanly.
+        const secondStillWaitingOnLock = secondAdapterStartedWaiter.pollUnsafe() === undefined;
 
         yield* Deferred.succeed(revokeGate.resume, undefined);
         yield* Fiber.join(stopping);
         yield* Fiber.join(secondAdapterStartedWaiter);
         yield* Fiber.join(second);
+
+        assert.isTrue(
+          secondStillWaitingOnLock,
+          "s2's prepare must still be waiting on the per-thread lock while s1's revoke is in flight",
+        );
 
         const current = McpProviderSession.readMcpProviderSession(threadId);
         assert.isDefined(current, "s2 must end up with its own valid credential");
@@ -1188,6 +1196,221 @@ it.effect(
             idleTimeoutMs: 60_000,
             beforeOpen,
             revokePause: revokeGate,
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 revokes an abandoned open's credential despite an unrelated older entry attached to the same thread",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const openBlocked = yield* Deferred.make<void>();
+      // Only the interrupted open (the second adapter call) blocks; the
+      // older entry's two opens (minting its own credential, then attaching
+      // to the contested thread) both complete normally.
+      const afterOpen = Ref.get(state).pipe(
+        Effect.flatMap((s) =>
+          s.openCount === 2
+            ? Deferred.succeed(openBlocked, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
+        ),
+      );
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const now = yield* DateTime.now;
+        const ownThreadId = ThreadId.make("thread-provider-session-manager-holder-own");
+        const sharedThreadId = ThreadId.make("thread-provider-session-manager-holder-shared");
+        const olderEntryId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId: ownThreadId,
+        });
+        const abandonedId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId: sharedThreadId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: ownThreadId, now }),
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: sharedThreadId, now }),
+          ],
+        });
+
+        // The older entry mints its own credential X on its own thread, then
+        // also attaches to the shared thread (recording a credential of its
+        // own there too, immaterial to the test other than that it is not
+        // the credential the abandoned open later mints).
+        yield* manager.open({
+          threadId: ownThreadId,
+          providerSessionId: olderEntryId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const ownToken = McpProviderSession.readMcpProviderSession(
+          ownThreadId,
+        )?.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(
+          ownToken,
+          "the older entry must hold its own credential on its own thread",
+        );
+        yield* manager.open({
+          threadId: sharedThreadId,
+          providerSessionId: olderEntryId,
+          modelSelection,
+          runtimePolicy,
+        });
+
+        // The credential the older entry recorded for the shared thread dies
+        // externally (e.g. expiry), so the next open for that thread rotates
+        // to a fresh credential instead of reusing it. The older entry stays
+        // attached to the shared thread with its now-stale record.
+        yield* registry.revokeThread(sharedThreadId);
+
+        const fiber = yield* manager
+          .open({
+            threadId: sharedThreadId,
+            providerSessionId: abandonedId,
+            modelSelection,
+            runtimePolicy,
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(openBlocked);
+        const abandonedToken = McpProviderSession.readMcpProviderSession(
+          sharedThreadId,
+        )?.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(abandonedToken, "the abandoned open must have minted its own credential");
+        assert.notEqual(abandonedToken, ownToken);
+
+        yield* Fiber.interrupt(fiber);
+
+        assert.isUndefined(
+          yield* registry.resolve(abandonedToken!),
+          "nothing holds the abandoned open's credential on the shared thread; it must be revoked despite the older entry's unrelated attachment there",
+        );
+        assert.isDefined(
+          yield* registry.resolve(ownToken!),
+          "the older entry's own credential on its own thread must survive",
+        );
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            afterOpen,
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 releases the entry when interrupted exactly as it publishes",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const parentScheduler = yield* Scheduler.Scheduler;
+      // Counts scheduler checks for the open() fiber specifically since the
+      // adapter call returned (armed, set from this test's own afterOpen
+      // hook, not from production code). shouldYield is called for whatever
+      // fiber the runtime is currently evaluating, including unrelated
+      // background fibers (event sink, stores, ...), so counting checks
+      // regardless of fiber identity can fire on the wrong one; filtering by
+      // the target fiber keeps the count meaningful. The exact delay value
+      // is not load-bearing: swept from 0 through 20 checks against the
+      // fixed code, every value passed, since one handler now covers the
+      // whole span from the adapter call through the end of setup with no
+      // gap anywhere in it for an interrupt to land unhandled.
+      let armed = false;
+      let targetFiber: Fiber.Fiber<unknown, unknown> | undefined;
+      let sinceArmed = 0;
+      const ARM_DELAY = 5;
+      let fired = false;
+      let pendingInterrupt: Fiber.Fiber<unknown, unknown> | undefined;
+      // Forces a real scheduler yield at the chosen point and hijacks the
+      // fiber's next dispatch to interrupt it there instead of letting it
+      // resume normally. A plain Deferred-signaled race cannot reliably land
+      // an interrupt in a window with no real suspension in it; forcing
+      // shouldYield to fire can, because it makes the runtime actually stop
+      // there before deciding what runs next.
+      const scheduler: Scheduler.Scheduler = {
+        executionMode: parentScheduler.executionMode,
+        shouldYield(fiber) {
+          if (armed && !fired && fiber === targetFiber) {
+            sinceArmed++;
+            if (sinceArmed > ARM_DELAY) {
+              fired = true;
+              pendingInterrupt = fiber;
+              return true;
+            }
+          }
+          return parentScheduler.shouldYield(fiber);
+        },
+        makeDispatcher() {
+          const delegate = parentScheduler.makeDispatcher();
+          return {
+            scheduleTask(task, priority) {
+              const target = pendingInterrupt;
+              pendingInterrupt = undefined;
+              delegate.scheduleTask(() => {
+                if (target !== undefined) target.interruptUnsafe();
+                task();
+              }, priority);
+            },
+            flush() {
+              delegate.flush();
+            },
+          };
+        },
+      };
+
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-publish-interrupt");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+
+        const fiber = yield* manager
+          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+          .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
+        targetFiber = fiber;
+        const exit = yield* Fiber.await(fiber);
+
+        assert.isTrue(fired, "the probe must have armed and forced the interrupt");
+        assert.isTrue(Exit.isFailure(exit));
+        assert.equal(
+          (yield* Ref.get(state)).closeCount,
+          1,
+          "interrupt must close the scope before leaving open",
+        );
+        assert.isTrue(
+          Option.isNone(yield* manager.get(providerSessionId)),
+          "interrupt must not leave a published entry with no cleanup",
+        );
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            afterOpen: Effect.sync(() => {
+              armed = true;
+            }),
           }),
         ),
       );
