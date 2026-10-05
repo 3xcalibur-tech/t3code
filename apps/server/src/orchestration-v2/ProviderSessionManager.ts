@@ -1820,6 +1820,18 @@ export const layerWithOptions = (
               // a session that is still this open's own.
               let openedRuntime: ProviderAdapterV2SessionRuntime | undefined;
               const abandonSetup = Effect.gen(function* () {
+                // Unconditional and first: the success path drops the
+                // reservation right after publishing the entry, but an
+                // interrupt can land in the gap between the entry going into
+                // the map (openedRuntime recorded) and that drop actually
+                // running. Landing there takes the releaseEntry branch below,
+                // which revokes the credential only if nothing holds it; the
+                // reservation this open never got to drop would make that
+                // check see the credential as still in use and skip revoking
+                // it, leaking it (and the reservation count) forever. Calling
+                // it here first, before either branch, closes that gap no
+                // matter where in this span the interrupt landed.
+                yield* dropReservation;
                 if (openedRuntime !== undefined) {
                   const current = yield* Ref.get(sessions);
                   if (current.get(key)?.runtime === openedRuntime) {
@@ -1838,7 +1850,7 @@ export const layerWithOptions = (
                 yield* closeSessionScopeBounded(sessionScope, {
                   providerSessionId: input.providerSessionId,
                   reason: "open_abandoned",
-                }).pipe(Effect.andThen(dropReservation), Effect.andThen(revokeIfUnheld));
+                }).pipe(Effect.andThen(revokeIfUnheld));
               });
               return yield* Effect.gen(function* () {
                 const runtime = yield* adapter

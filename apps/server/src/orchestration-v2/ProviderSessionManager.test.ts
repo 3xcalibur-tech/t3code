@@ -1310,110 +1310,142 @@ it.effect(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 releases the entry when interrupted exactly as it publishes",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const parentScheduler = yield* Scheduler.Scheduler;
-      // Counts scheduler checks for the open() fiber specifically since the
-      // adapter call returned (armed, set from this test's own afterOpen
-      // hook, not from production code). shouldYield is called for whatever
-      // fiber the runtime is currently evaluating, including unrelated
-      // background fibers (event sink, stores, ...), so counting checks
-      // regardless of fiber identity can fire on the wrong one; filtering by
-      // the target fiber keeps the count meaningful. The exact delay value
-      // is not load-bearing: swept from 0 through 20 checks against the
-      // fixed code, every value passed, since one handler now covers the
-      // whole span from the adapter call through the end of setup with no
-      // gap anywhere in it for an interrupt to land unhandled.
-      let armed = false;
-      let targetFiber: Fiber.Fiber<unknown, unknown> | undefined;
-      let sinceArmed = 0;
-      const ARM_DELAY = 5;
-      let fired = false;
-      let pendingInterrupt: Fiber.Fiber<unknown, unknown> | undefined;
-      // Forces a real scheduler yield at the chosen point and hijacks the
-      // fiber's next dispatch to interrupt it there instead of letting it
-      // resume normally. A plain Deferred-signaled race cannot reliably land
-      // an interrupt in a window with no real suspension in it; forcing
-      // shouldYield to fire can, because it makes the runtime actually stop
-      // there before deciding what runs next.
-      const scheduler: Scheduler.Scheduler = {
-        executionMode: parentScheduler.executionMode,
-        shouldYield(fiber) {
-          if (armed && !fired && fiber === targetFiber) {
-            sinceArmed++;
-            if (sinceArmed > ARM_DELAY) {
-              fired = true;
-              pendingInterrupt = fiber;
-              return true;
-            }
+// Forces an interrupt to land at a chosen scheduler check for open()'s own
+// fiber, counted from when this test's afterOpen hook runs (so armed starts
+// after the MCP credential is minted and the adapter call has returned, but
+// before setup finishes). A plain Deferred-signaled race cannot reliably
+// land an interrupt in a window with no real suspension in it; forcing
+// shouldYield to fire can, because it makes the runtime actually stop there
+// before deciding what runs next. delay is not meant to target a specific
+// line: it is swept across a range by the caller so the case is exercised
+// at every scheduler check in and around the publish, not just whichever
+// one happened to reproduce the bug first.
+function runPublishInterruptCase(delay: number) {
+  return Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const mcpConfigs = yield* Ref.make<
+      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+    >([]);
+    const parentScheduler = yield* Scheduler.Scheduler;
+    let armed = false;
+    let targetFiber: Fiber.Fiber<unknown, unknown> | undefined;
+    let sinceArmed = 0;
+    let fired = false;
+    let pendingInterrupt: Fiber.Fiber<unknown, unknown> | undefined;
+    const scheduler: Scheduler.Scheduler = {
+      executionMode: parentScheduler.executionMode,
+      shouldYield(fiber) {
+        if (armed && !fired && fiber === targetFiber) {
+          sinceArmed++;
+          if (sinceArmed > delay) {
+            fired = true;
+            pendingInterrupt = fiber;
+            return true;
           }
-          return parentScheduler.shouldYield(fiber);
-        },
-        makeDispatcher() {
-          const delegate = parentScheduler.makeDispatcher();
-          return {
-            scheduleTask(task, priority) {
-              const target = pendingInterrupt;
-              pendingInterrupt = undefined;
-              delegate.scheduleTask(() => {
-                if (target !== undefined) target.interruptUnsafe();
-                task();
-              }, priority);
-            },
-            flush() {
-              delegate.flush();
-            },
-          };
-        },
-      };
+        }
+        return parentScheduler.shouldYield(fiber);
+      },
+      makeDispatcher() {
+        const delegate = parentScheduler.makeDispatcher();
+        return {
+          scheduleTask(task, priority) {
+            const target = pendingInterrupt;
+            pendingInterrupt = undefined;
+            delegate.scheduleTask(() => {
+              if (target !== undefined) target.interruptUnsafe();
+              task();
+            }, priority);
+          },
+          flush() {
+            delegate.flush();
+          },
+        };
+      },
+    };
 
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const now = yield* DateTime.now;
-        const threadId = ThreadId.make("thread-provider-session-manager-publish-interrupt");
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
-
-        const fiber = yield* manager
-          .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
-          .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
-        targetFiber = fiber;
-        const exit = yield* Fiber.await(fiber);
-
-        assert.isTrue(fired, "the probe must have armed and forced the interrupt");
-        assert.isTrue(Exit.isFailure(exit));
-        assert.equal(
-          (yield* Ref.get(state)).closeCount,
-          1,
-          "interrupt must close the scope before leaving open",
-        );
-        assert.isTrue(
-          Option.isNone(yield* manager.get(providerSessionId)),
-          "interrupt must not leave a published entry with no cleanup",
-        );
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make(`thread-provider-session-manager-publish-interrupt-${delay}`);
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
       });
 
-      yield* effect.pipe(
-        Effect.provide(
-          makeTestLayer({
-            state,
-            idleTimeoutMs: 60_000,
-            afterOpen: Effect.sync(() => {
-              armed = true;
-            }),
-          }),
-        ),
+      const fiber = yield* manager
+        .open({ threadId, providerSessionId, modelSelection, runtimePolicy })
+        .pipe(Effect.provideService(Scheduler.Scheduler, scheduler), Effect.forkScoped);
+      targetFiber = fiber;
+      const exit = yield* Fiber.await(fiber);
+
+      assert.isTrue(fired, `delay=${delay}: the probe must have armed and forced the interrupt`);
+      assert.isTrue(Exit.isFailure(exit), `delay=${delay}`);
+      assert.equal(
+        (yield* Ref.get(state)).closeCount,
+        1,
+        `delay=${delay}: interrupt must close the scope before leaving open`,
       );
+      assert.isTrue(
+        Option.isNone(yield* manager.get(providerSessionId)),
+        `delay=${delay}: interrupt must not leave a published entry with no cleanup`,
+      );
+
+      // The adapter captures the credential the moment openSession is
+      // called, before this test's afterOpen hook (and so before armed is
+      // even set): whichever scheduler check the interrupt lands on, the
+      // credential was already minted and reserved by then.
+      const captured = (yield* Ref.get(mcpConfigs))[0];
+      assert.isDefined(captured, `delay=${delay}: the open must have minted a credential`);
+      const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
+      // clearMcpSession's credential-id branch, which performs both of
+      // these, only runs once the reservation count for this thread and
+      // credential has dropped back to 0 (releaseEntry's holder check
+      // otherwise treats the reservation itself as a holder and skips
+      // revoking). Observing both confirms the reservation was actually
+      // dropped, not just that cleanup ran some other way.
+      assert.isUndefined(
+        McpProviderSession.readMcpProviderSession(threadId),
+        `delay=${delay}: an abandoned open must not leave its credential in the thread's slot`,
+      );
+      assert.isUndefined(
+        yield* registry.resolve(token!),
+        `delay=${delay}: an abandoned open must revoke the credential it reserved, not just publish-and-leak it`,
+      );
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+          mcpConfigs,
+          afterOpen: Effect.sync(() => {
+            armed = true;
+          }),
+        }),
+      ),
+    );
+  });
+}
+
+it.effect(
+  "ProviderSessionManagerV2 releases the entry, and drops its MCP credential reservation, when interrupted exactly as it publishes",
+  () =>
+    Effect.gen(function* () {
+      // Sweeping every delay instead of a single fixed one demonstrates the
+      // fix holds at whichever scheduler check the interrupt lands on, not
+      // just the one value (7) that reproduced the bug before the fix. Each
+      // iteration is a few milliseconds of virtual scheduling, so the full
+      // sweep is cheap enough to keep as a committed regression test.
+      for (let delay = 0; delay <= 20; delay++) {
+        yield* runPublishInterruptCase(delay);
+      }
     }),
 );
 
