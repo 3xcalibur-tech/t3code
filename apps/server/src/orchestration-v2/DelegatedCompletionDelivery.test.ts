@@ -486,6 +486,7 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
         const dependencies = Layer.mergeAll(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: orchestrator.getThreadRecords,
+            getThreadShell: orchestrator.getThreadShell,
             getProjectThreadRecords: ({ threadId }, fields, filter) =>
               orchestrator.getThreadRecords(threadId, fields, filter).pipe(Effect.orDie),
             dispatch: orchestrator.dispatch,
@@ -509,9 +510,13 @@ it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
           return yield* service.readThread(
             {
               environmentId: EnvironmentId.make(`review:${racing}:env`),
-              threadId: parentId,
-              providerInstanceId: modelSelection.instanceId,
-              providerSessionId: `review:${racing}:session`,
+              requestNamespace: `review:${racing}:session`,
+              thread: {
+                threadId: parentId,
+                providerInstanceId: modelSelection.instanceId,
+                providerSessionId: `review:${racing}:session`,
+              },
+              client: undefined,
               capabilities: new Set(["orchestration"]),
               issuedAt: 1,
             },
