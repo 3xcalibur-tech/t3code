@@ -4,6 +4,8 @@ import { TaskList } from "@tiptap/extension-task-list";
 import { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { describe, expect, it } from "vite-plus/test";
 
+import { collapseExpandedComposerCursor } from "./composer-logic";
+
 import {
   buildDocJson,
   buildTiptapContent,
@@ -713,6 +715,51 @@ describe("composer rich text document model", () => {
     });
     expect(serializeEditorDoc(doc).value).toBe(expected);
     expect(roundTrip("-").value).toBe("-");
+  });
+
+  it("writes code holding a closing fence inside a longer fence", () => {
+    const doc = ProseMirrorNode.fromJSON(schema, {
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          attrs: { fence: "```", close: "\n```" },
+          content: [{ type: "text", text: "initial\n```\nsecret" }],
+        },
+      ],
+    });
+    const stored = serializeEditorDoc(doc).value;
+    expect(stored).toBe("````\ninitial\n```\nsecret\n````");
+    expect(buildDocJson(stored, () => ({ label: "", description: null })).content).toHaveLength(1);
+    expect(roundTrip(stored).value).toBe(stored);
+  });
+
+  it("closes an unclosed fence that has a block after it", () => {
+    const doc = ProseMirrorNode.fromJSON(schema, {
+      type: "doc",
+      content: [
+        { type: "codeBlock", attrs: { close: "" }, content: [{ type: "text", text: "code" }] },
+        { type: "paragraph", content: [{ type: "text", text: "after" }] },
+      ],
+    });
+    expect(serializeEditorDoc(doc).value).toBe("```\ncode\n```\nafter");
+    // At the end of the draft it stays unclosed, as it was written.
+    expect(roundTrip("```\ncode").value).toBe("```\ncode");
+  });
+
+  it("counts a chip's source in a fence as one cursor position, as the draft store does", () => {
+    const value = "```\nsee @b.md now\n```\nafter";
+    const map = roundTrip(value);
+    expect(map.value).toBe(value);
+    for (let flat = 0; flat <= map.docLength; flat += 1) {
+      expect(flatToCollapsed(map, flat)).toBe(
+        collapseExpandedComposerCursor(value, flatToMarkdown(map, flat)),
+      );
+    }
+    const afterChip = "see @b.md".length;
+    expect(collapsedToFlat(map, flatToCollapsed(map, afterChip))).toBe(afterChip);
+    const end = map.docLength;
+    expect(collapsedToFlat(map, flatToCollapsed(map, end))).toBe(end);
   });
 
   it("keeps fences literal in plain mode", () => {

@@ -24,9 +24,10 @@ included, and `#1234` without a space still looks up a pull request.
 Enter sends. In a list or quote, **Shift+Enter** continues it, and Shift+Enter
 on an empty line leaves it; **Tab** nests a list item. In a code block, Enter
 starts a new line at the current indentation, **Tab** and **Shift+Tab** indent
-the selected lines, and two blank lines at the end leave the block. Choose the
-language in a code block's corner to change it. Very large code blocks are
-shown without syntax highlighting.
+the selected lines, and a closing ` ``` ` followed by Enter, or two blank lines
+at the end, leave the block. **Backspace** at the start of a code block turns it
+back into plain lines. Choose the language in a code block's corner to change
+it. Very large code blocks are shown without syntax highlighting.
 
 ## Attach files
 

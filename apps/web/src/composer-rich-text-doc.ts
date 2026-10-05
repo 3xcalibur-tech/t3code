@@ -1,4 +1,5 @@
-import { Fragment, type Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { joinBackward, joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
+import { Fragment, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import { Code } from "@tiptap/extension-code";
 import { Blockquote } from "@tiptap/extension-blockquote";
 import { CodeBlock } from "@tiptap/extension-code-block";
@@ -8,7 +9,7 @@ import { type Command, type Editor, mergeAttributes } from "@tiptap/core";
 import { BulletList, ListItem, OrderedList } from "@tiptap/extension-list";
 import { TaskItem } from "@tiptap/extension-task-item";
 import { TaskList } from "@tiptap/extension-task-list";
-import type { Transaction } from "@tiptap/pm/state";
+import { Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
 import { nextOrderedMarkerText } from "~/composer-list-continuation";
@@ -76,6 +77,13 @@ function withoutBlockChords<Shortcuts extends Record<string, unknown>>(
   ) as Shortcuts;
 }
 
+/**
+ * What a list item may hold: its own line, then nested lists. That is all the
+ * Markdown can write, so ProseMirror refuses any join, wrap or paste that
+ * would put a second line or another block into an item.
+ */
+const LIST_ITEM_CONTENT = "paragraph list*";
+
 /** Task lists come from `- [ ]` alone; Mod-Shift-9 would nest one in a quote. */
 export const ComposerTaskListExtension = TaskList.extend({
   addKeyboardShortcuts() {
@@ -97,6 +105,7 @@ const LIST_NESTING_KEYS = ["Tab", "Shift-Tab"];
  * the same fixed-point deal as `__bold__` becoming `**bold**`.
  */
 export const ComposerTaskItemExtension = TaskItem.extend({
+  content: LIST_ITEM_CONTENT,
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -133,21 +142,66 @@ export const ComposerCodeBlockExtension = CodeBlock.extend({
     };
   },
   addKeyboardShortcuts() {
-    return withoutBlockChords(this.parent?.(), ["Mod-Alt-c"]);
+    return {
+      ...withoutBlockChords(this.parent?.(), ["Mod-Alt-c"]),
+      Backspace: () => unwrapCodeBlockAtStart(this.editor),
+    };
   },
 });
 
-/** The markdown a code block node serializes to, delimiters included. */
-function codeBlockSource(node: ProseMirrorNode): {
+/**
+ * Backspace at the start of a fence removes the fence and keeps its lines as
+ * paragraphs, the way it removes a list marker. Joining the code onto the line
+ * above instead would drop the fence from the draft and leave the rest of the
+ * code as stray lines.
+ */
+function unwrapCodeBlockAtStart(editor: Editor): boolean {
+  const { $from, empty } = editor.state.selection;
+  if (!empty || $from.parent.type.name !== "codeBlock" || $from.parentOffset !== 0) return false;
+  const { schema } = editor.state;
+  const paragraphs = $from.parent.textContent
+    .split("\n")
+    .map((line) => schema.nodes.paragraph!.create(null, line ? schema.text(line) : null));
+  const start = $from.before();
+  const tr = editor.state.tr.replaceWith(start, $from.after(), paragraphs);
+  editor.view.dispatch(tr.setSelection(TextSelection.create(tr.doc, start + 1)));
+  return true;
+}
+
+/**
+ * The markdown a code block node serializes to, delimiters included. `followed`
+ * says another block comes after it in the draft.
+ */
+function codeBlockSource(
+  node: ProseMirrorNode,
+  followed: boolean,
+): {
   open: string;
   content: string;
   close: string;
 } {
   const attrs = node.attrs as Record<string, unknown>;
-  const fence = typeof attrs.fence === "string" && attrs.fence ? attrs.fence : "```";
+  let fence = typeof attrs.fence === "string" && attrs.fence ? attrs.fence : "```";
   const language = typeof attrs.language === "string" ? attrs.language : "";
-  const close = typeof attrs.close === "string" ? attrs.close : "";
+  let close = typeof attrs.close === "string" ? attrs.close : "";
   const content = node.textContent;
+  // Code holding a line that would close the fence, such as a pasted fence,
+  // is written inside a longer one, so the agent reads all of it as code. A
+  // parsed block never holds such a line, so its source stays byte-identical.
+  const longest = Math.max(
+    0,
+    ...content
+      .split("\n")
+      .filter((line) => isClosingFence(line, fence))
+      .map((line) => /^[`~]+/.exec(line)![0].length),
+  );
+  if (longest > 0) {
+    fence = fence[0]!.repeat(longest + 1);
+    if (close) close = `\n${fence}`;
+  }
+  // An unclosed fence runs to the end of the draft, so with a block after it
+  // the fence is written closed, or the next rebuild would read that block as code.
+  if (!close && followed) close = `\n${fence}`;
   return { open: `${fence}${language}${content ? "\n" : ""}`, content, close };
 }
 
@@ -158,6 +212,7 @@ function codeBlockSource(node: ProseMirrorNode): {
  * Numbering is not renumbered: what the user typed is what the agent gets.
  */
 const ComposerListItemExtension = ListItem.extend({
+  content: LIST_ITEM_CONTENT,
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -167,7 +222,12 @@ const ComposerListItemExtension = ListItem.extend({
     };
   },
   addKeyboardShortcuts() {
-    return withoutBlockChords(this.parent?.(), LIST_NESTING_KEYS);
+    return {
+      ...withoutBlockChords(this.parent?.(), LIST_NESTING_KEYS),
+      // Task items share these: the list extensions are always loaded together.
+      Backspace: () => backspaceAcrossList(this.editor),
+      Delete: () => deleteAcrossList(this.editor),
+    };
   },
   // The source marker rides on the item so the composer draws `3)` and a
   // nested `7.` as written, rather than the browser own numbering.
@@ -198,6 +258,7 @@ export const ComposerListExtensions = [
  * inside a quote stay literal text: the composer quotes prose, not documents.
  */
 const ComposerBlockquoteExtension = Blockquote.extend({
+  content: "paragraph+",
   addAttributes() {
     return { ...this.parent?.(), prefix: { default: "> " } };
   },
@@ -287,7 +348,7 @@ export function parseOpeningFence(line: string): { fence: string; language: stri
 }
 
 /** A closing fence matches the opening run's character and is at least as long. */
-function isClosingFence(line: string, fence: string): boolean {
+export function isClosingFence(line: string, fence: string): boolean {
   const match = /^(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
   if (!match) return false;
   const run = match[1]!;
@@ -917,8 +978,8 @@ function alignListItemWithSiblings(tr: Transaction, itemType: string): void {
  */
 export function splitOrLiftListItem(editor: Editor): boolean {
   const $from = editor.state.selection.$from;
-  const itemType = $from.depth > 1 ? $from.node(-1).type.name : null;
-  if (itemType !== "listItem" && itemType !== "taskItem") return false;
+  const itemType = listItemTypeAt($from);
+  if (!itemType) return false;
   const empty = $from.parent.content.size === 0;
   // One transaction, so the split or lift and the realignment undo together.
   const move: Command = ({ commands, tr }) => {
@@ -932,6 +993,60 @@ export function splitOrLiftListItem(editor: Editor): boolean {
     return moved;
   };
   return editor.can().command(move) && editor.chain().command(move).run();
+}
+
+function listItemTypeAt($pos: ResolvedPos): "listItem" | "taskItem" | null {
+  const name = $pos.depth > 1 ? $pos.node(-1).type.name : null;
+  return name === "listItem" || name === "taskItem" ? name : null;
+}
+
+/**
+ * Backspace at the start of an item's text leaves one level of nesting, or
+ * the list itself at the top, written at its new depth. At the start of a
+ * line right after a list it joins that line onto the list's last line.
+ * Tiptap's list keymap, which StarterKit loads, does both by moving nodes
+ * without touching their indent or marker, so the composer turns it off.
+ */
+export function backspaceAcrossList(editor: Editor): boolean {
+  const { state } = editor;
+  const { $from, empty } = state.selection;
+  if (!empty || $from.parentOffset !== 0) return false;
+  const itemType = listItemTypeAt($from);
+  if (itemType && $from.index(-1) === 0) {
+    const lift: Command = ({ commands, tr }) => {
+      const moved = commands.liftListItem(itemType);
+      if (moved) alignListItemWithSiblings(tr, itemType);
+      return moved;
+    };
+    // Not `can()` first: a dry run of the lift skips the schema check, so it
+    // says yes to a task under a bullet, which has no list to lift into. Its
+    // text joins the line above instead.
+    return editor.chain().command(lift).run() || joinBackward(state, editor.view.dispatch);
+  }
+  const before = $from.depth === 1 ? $from.node(0).maybeChild($from.index(0) - 1) : null;
+  if (before && LIST_NODE_NAMES.has(before.type.name) && $from.parent.type.name !== "codeBlock") {
+    return joinTextblockBackward(state, editor.view.dispatch);
+  }
+  return false;
+}
+
+/**
+ * Delete at the end of a line next to list structure pulls the next line's
+ * text up onto it. Tiptap's default would instead nest the next item, or a
+ * whole list, under this one at its old indent. Before a fence, anywhere, it
+ * does nothing: pulling the code into the line would drop the fence from the
+ * draft and leave the rest of the code as stray lines.
+ */
+export function deleteAcrossList(editor: Editor): boolean {
+  const { state } = editor;
+  const { $from, empty } = state.selection;
+  if (!empty || !$from.parent.isTextblock || $from.depth === 0) return false;
+  if ($from.parentOffset !== $from.parent.content.size) return false;
+  const next = Selection.findFrom(state.doc.resolve($from.after()), 1, true);
+  if (!next) return false;
+  if (next.$from.parent.type.name === "codeBlock") return $from.parent.type.name !== "codeBlock";
+  if (!listItemTypeAt($from) && !listItemTypeAt(next.$from)) return false;
+  return joinTextblockForward(state, editor.view.dispatch);
 }
 
 /** The literal prefix an item serializes to. Empty items keep their exact spacing. */
@@ -1005,26 +1120,51 @@ function walkList(list: ProseMirrorNode, listStart: number, acc: RichAccumulator
  * every cursor rule that already clamps out of a style marker clamps out of a
  * fence too. `nodeName` keeps the marker decorations off it: a code block is
  * drawn as a block, not revealed a character at a time.
+ *
+ * The code is literal text in the editor, but the draft store still counts a
+ * chip's source in it as one cursor position, as it does everywhere. So the
+ * run splits at each chip source, which spans its characters in the document
+ * and one position in the collapsed space.
  */
-function appendCodeBlockRun(block: ProseMirrorNode, pmPos: number, acc: RichAccumulator): void {
-  const { open, content, close } = codeBlockSource(block);
-  acc.runs.push({
-    kind: "text",
-    flatStart: acc.flat,
-    docLen: content.length,
-    collapsedLen: open.length + content.length + close.length,
-    mdLen: open.length + content.length + close.length,
-    openLen: open.length,
-    closeLen: close.length,
-    pmPos,
-    mdStart: acc.md,
-    collapsedStart: acc.collapsed,
-    nodeName: "codeBlock",
+function appendCodeBlockRun(
+  block: ProseMirrorNode,
+  pmPos: number,
+  followed: boolean,
+  acc: RichAccumulator,
+): void {
+  const { open, content, close } = codeBlockSource(block, followed);
+  const pieces = content
+    ? splitPromptIntoComposerSegments(content).map((segment) =>
+        segment.type === "text"
+          ? { length: segment.text.length, collapsedLen: segment.text.length }
+          : { length: segment.source.length, collapsedLen: 1 },
+      )
+    : [{ length: 0, collapsedLen: 0 }];
+  let offset = 0;
+  pieces.forEach((piece, index) => {
+    const openLen = index === 0 ? open.length : 0;
+    const closeLen = index === pieces.length - 1 ? close.length : 0;
+    const collapsedLen = openLen + piece.collapsedLen + closeLen;
+    const mdLen = openLen + piece.length + closeLen;
+    acc.runs.push({
+      kind: "text",
+      flatStart: acc.flat,
+      docLen: piece.length,
+      collapsedLen,
+      mdLen,
+      openLen,
+      closeLen,
+      pmPos: pmPos + offset,
+      mdStart: acc.md,
+      collapsedStart: acc.collapsed,
+      nodeName: "codeBlock",
+    });
+    offset += piece.length;
+    acc.flat += piece.length;
+    acc.collapsed += collapsedLen;
+    acc.md += mdLen;
   });
   acc.value += open + content + close;
-  acc.flat += content.length;
-  acc.collapsed += open.length + content.length + close.length;
-  acc.md += open.length + content.length + close.length;
 }
 
 /** Each paragraph of a quote is one source line behind the quote's prefix. */
@@ -1093,7 +1233,7 @@ export function serializeEditorDoc(doc: ProseMirrorNode): RichDocMap {
     if (LIST_NODE_NAMES.has(block.type.name)) {
       walkList(block, pmBlockStart, acc);
     } else if (block.type.name === "codeBlock") {
-      appendCodeBlockRun(block, pmBlockStart + 1, acc);
+      appendCodeBlockRun(block, pmBlockStart + 1, blockIndex < blocks.length - 1, acc);
     } else if (block.type.name === "blockquote") {
       walkBlockquote(block, pmBlockStart, acc);
     } else if (block.type.name === "heading") {
@@ -1173,7 +1313,12 @@ export function flatToCollapsed(map: RichDocMap, flatOffset: number): number {
   for (const run of map.runs) {
     if (runOwnsOffset(run, bounded)) {
       if (run.kind === "text" || run.kind === "token") {
-        return run.collapsedStart + run.openLen + (bounded - run.flatStart);
+        // A chip's source in a fence spans its characters but one position.
+        const within = Math.min(
+          bounded - run.flatStart,
+          run.collapsedLen - run.openLen - run.closeLen,
+        );
+        return run.collapsedStart + run.openLen + within;
       }
       return run.collapsedStart + (bounded - run.flatStart);
     }
@@ -1202,9 +1347,10 @@ export function collapsedToFlat(map: RichDocMap, collapsedOffset: number): numbe
       if (run.kind === "prefix") return run.flatStart;
       if (run.kind === "text" || run.kind === "token") {
         const within = collapsedOffset - run.collapsedStart;
+        const contentLen = run.collapsedLen - run.openLen - run.closeLen;
         // Marker characters clamp to the styled edge: they are shown, never edited.
         if (within <= run.openLen) return run.flatStart;
-        if (within >= run.openLen + run.docLen) return run.flatStart + run.docLen;
+        if (within >= run.openLen + contentLen) return run.flatStart + run.docLen;
         return run.flatStart + (within - run.openLen);
       }
       return run.flatStart + (collapsedOffset - run.collapsedStart);

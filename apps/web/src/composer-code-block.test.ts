@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { Editor } from "@tiptap/core";
+import { Editor, Node } from "@tiptap/core";
 import { newlineInCode } from "@tiptap/pm/commands";
 import { TextSelection } from "@tiptap/pm/state";
 
@@ -8,6 +8,7 @@ import {
   indentCodeBlock,
   indentLines,
   convertCodeFenceOnEnter,
+  exitCodeBlockOnClosingFence,
   exitCodeBlockOnTrailingBlankLines,
   indentedNewlineInCodeBlock,
   leadingWhitespace,
@@ -15,12 +16,23 @@ import {
 } from "./composer-code-block";
 import StarterKit from "@tiptap/starter-kit";
 
-import { ComposerCodeBlockExtension, ComposerListExtensions } from "./composer-rich-text-doc";
+import {
+  ComposerCodeBlockExtension,
+  ComposerListExtensions,
+  serializeEditorDoc,
+} from "./composer-rich-text-doc";
 
 const extensions = [
   StarterKit.configure({ codeBlock: false, trailingNode: false }),
   ComposerCodeBlockExtension,
   ...ComposerListExtensions,
+  Node.create({
+    name: "composer-mention",
+    group: "inline",
+    inline: true,
+    atom: true,
+    addAttributes: () => ({ path: { default: "" }, source: { default: "" } }),
+  }),
 ];
 
 describe("leadingWhitespace", () => {
@@ -183,6 +195,36 @@ describe("exitCodeBlockOnTrailingBlankLines", () => {
   });
 });
 
+describe("exitCodeBlockOnClosingFence", () => {
+  const exit = (editor: Editor) =>
+    exitCodeBlockOnClosingFence(editor.state, (tr) => editor.view.dispatch(tr));
+
+  it("ends the block at a typed closing fence and starts a line after it", () => {
+    const editor = codeEditor("const a = 1\n```");
+    editor.view.dispatch(editor.state.tr.setNodeAttribute(0, "language", "ts"));
+    expect(exit(editor)).toBe(true);
+    editor.view.dispatch(editor.state.tr.insertText("explain this"));
+    expect(serializeEditorDoc(editor.state.doc).value).toBe(
+      "```ts\nconst a = 1\n```\nexplain this",
+    );
+  });
+
+  it("moves the lines after the fence out of the block", () => {
+    const editor = codeEditor("a\n```\nb", { from: "a\n```".length });
+    expect(exit(editor)).toBe(true);
+    expect(serializeEditorDoc(editor.state.doc).value).toBe("```\na\n```\n\nb");
+    expect(editor.state.selection.$from.parent.type.name).toBe("paragraph");
+    expect(editor.state.selection.$from.parent.textContent).toBe("");
+  });
+
+  it.each([
+    ["a line that cannot close the fence", "a\n``", undefined],
+    ["a caret before the end of the line", "a\n```", { from: "a\n``".length }],
+  ])("ignores %s", (_, code, at) => {
+    expect(exit(codeEditor(code, at))).toBe(false);
+  });
+});
+
 describe("indentCodeBlock", () => {
   it("inserts an indent at a collapsed caret", () => {
     const editor = codeEditor("ab", { from: 1 });
@@ -318,6 +360,27 @@ describe("convertCodeFenceOnEnter", () => {
     const before = editor.getJSON();
     expect(convertCodeFenceOnEnter(editor.state, (tr) => editor.view.dispatch(tr))).toBe(false);
     expect(editor.getJSON()).toEqual(before);
+  });
+
+  it("keeps a chip's source in the info string", () => {
+    const editor = new Editor({
+      extensions,
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              { type: "text", text: "```ts " },
+              { type: "composer-mention", attrs: { path: "a.md", source: "@a.md" } },
+            ],
+          },
+        ],
+      },
+    });
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.atEnd(editor.state.doc)));
+    expect(convertCodeFenceOnEnter(editor.state, (tr) => editor.view.dispatch(tr))).toBe(true);
+    expect(editor.state.doc.firstChild?.attrs.language).toBe("ts @a.md");
   });
 
   it("ignores a fence with the caret before its end", () => {

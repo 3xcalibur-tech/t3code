@@ -3,7 +3,7 @@ import type { EditorState, Transaction } from "@tiptap/pm/state";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 
-import { parseOpeningFence } from "~/composer-rich-text-doc";
+import { isClosingFence, parseOpeningFence, serializeSelection } from "~/composer-rich-text-doc";
 
 /**
  * Spaces rather than a tab: the fence round-trips through Markdown on its way
@@ -120,6 +120,48 @@ export function exitCodeBlockOnTrailingBlankLines(view: EditorView): boolean {
 }
 
 /**
+ * Enter at the end of a line that would close the fence, such as ```` ``` ````
+ * typed under the code, ends the block there. That line becomes the closing
+ * fence, and any lines after it continue as paragraphs after a new empty one,
+ * which is how the stored draft reads them.
+ */
+export function exitCodeBlockOnClosingFence(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  const block = codeBlockRange(state);
+  if (!block || !state.selection.empty) return false;
+  const caret = state.selection.from - block.from;
+  const lineStart = block.text.lastIndexOf("\n", caret - 1) + 1;
+  const newlineAfter = block.text.indexOf("\n", caret);
+  const lineEnd = newlineAfter === -1 ? block.text.length : newlineAfter;
+  const line = block.text.slice(lineStart, lineEnd);
+  const node = state.selection.$from.parent;
+  if (caret !== lineEnd || !isClosingFence(line, String(node.attrs.fence))) return false;
+
+  if (dispatch) {
+    const { schema } = state;
+    const paragraph = (text: string) =>
+      schema.nodes.paragraph!.create(null, text ? schema.text(text) : null);
+    const code = block.text.slice(0, Math.max(0, lineStart - 1));
+    const rest = newlineAfter === -1 ? [] : block.text.slice(newlineAfter + 1).split("\n");
+    const closed = node.type.create(
+      { ...node.attrs, close: `\n${line}` },
+      code ? schema.text(code) : null,
+    );
+    const start = state.selection.$from.before();
+    const transaction = state.tr.replaceWith(start, start + node.nodeSize, [
+      closed,
+      paragraph(""),
+      ...rest.map(paragraph),
+    ]);
+    transaction.setSelection(TextSelection.create(transaction.doc, start + closed.nodeSize + 1));
+    dispatch(transaction.scrollIntoView());
+  }
+  return true;
+}
+
+/**
  * Tab and Shift+Tab inside a fence. A collapsed cursor indents at the caret so
  * Tab works mid-line the way typing does; any selection spanning text indents
  * the whole lines it touches, which is what makes re-indenting a block possible.
@@ -190,9 +232,10 @@ export function convertCodeFenceOnEnter(
   // to write a fence into, so one created inside them would vanish.
   if (!empty || $from.parent.type.name !== "paragraph" || $from.depth !== 1) return false;
   if ($from.parentOffset !== $from.parent.content.size) return false;
-  // The parser's own grammar, so a line Enter turns into a fence is exactly
-  // one the stored draft reads back as a fence, info string and all.
-  const opening = parseOpeningFence($from.parent.textContent);
+  // The parser's own grammar, read from the line's stored source, so a line
+  // Enter turns into a fence is exactly one the stored draft reads back as a
+  // fence, info string and all, including any chip's source in it.
+  const opening = parseOpeningFence(serializeSelection(state.doc, $from.start(), $from.end()));
   const codeBlock = state.schema.nodes.codeBlock;
   if (!opening || !codeBlock) return false;
 

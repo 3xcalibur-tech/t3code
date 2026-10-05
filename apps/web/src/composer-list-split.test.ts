@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { Editor } from "@tiptap/core";
 import { TaskList } from "@tiptap/extension-task-list";
 import { TextSelection } from "@tiptap/pm/state";
@@ -5,9 +7,14 @@ import StarterKit from "@tiptap/starter-kit";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  backspaceAcrossList,
   buildDocJson,
+  buildTiptapContent,
+  ComposerBlockExtensions,
+  ComposerCodeBlockExtension,
   ComposerListExtensions,
   ComposerTaskItemExtension,
+  deleteAcrossList,
   serializeEditorDoc,
   splitOrLiftListItem,
 } from "./composer-rich-text-doc";
@@ -26,11 +33,17 @@ function makeEditor(value: string) {
         orderedList: false,
         listItem: false,
         codeBlock: false,
+        blockquote: false,
+        heading: false,
+        horizontalRule: false,
         trailingNode: false,
+        listKeymap: false,
       }),
       ...ComposerListExtensions,
       TaskList,
       ComposerTaskItemExtension,
+      ComposerCodeBlockExtension,
+      ...ComposerBlockExtensions,
     ],
     content: buildDocJson(value, (name) => ({ label: name, description: null })),
   });
@@ -61,6 +74,24 @@ describe("splitting a list item", () => {
   });
 });
 
+/** Puts the caret `offset` characters into the first text node holding `text`. */
+function placeCaret(editor: Editor, text: string, offset = 0) {
+  let caret = -1;
+  editor.state.doc.descendants((node, pos) => {
+    if (caret < 0 && node.isText && node.text!.includes(text)) {
+      caret = pos + node.text!.indexOf(text) + offset;
+    }
+  });
+  editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, caret)));
+}
+
+/** The stored draft, after checking a rebuild from it gives back the same document. */
+function storedDraft(editor: Editor) {
+  const stored = serializeEditorDoc(editor.state.doc).value;
+  expect(makeEditor(stored).state.doc.toString()).toBe(editor.state.doc.toString());
+  return stored;
+}
+
 describe("Shift+Enter twice on an item", () => {
   // The second Shift+Enter lifts the new empty item one level. The stored
   // draft must write it at its new depth, so a rebuild from that draft gives
@@ -89,5 +120,82 @@ describe("Shift+Enter twice on an item", () => {
     expect(stored).toBe(expected);
     // Same nesting after a rebuild; spacing defaults may differ but write the same.
     expect(makeEditor(stored).state.doc.toString()).toBe(editor.state.doc.toString());
+  });
+});
+
+describe("Shift+Enter on an empty task under a bullet", () => {
+  // There is no task list one level up to move it into, and the item cannot
+  // hold a second line, so the draft stays what the editor shows.
+  it.each(["- a\n  - [ ] x", "- [ ] a\n  - x"])("in %j keeps the draft honest", (value) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "x", 1);
+    splitOrLiftListItem(editor);
+    splitOrLiftListItem(editor);
+    storedDraft(editor);
+  });
+});
+
+describe("Backspace at the start of a line", () => {
+  it.each([
+    ["- a\n  - x", "x", "- a\n- x"],
+    ["- a\n  - x\n  - y", "x", "- a\n- x\n  - y"],
+    ["- [ ] a\n  - [ ] x", "x", "- [ ] a\n- [ ] x"],
+    ["- a\n- b\n- c", "b", "- a\nb\n- c"],
+    // A task under a bullet has no task list to move into, so it joins up.
+    ["- a\n  - [ ] x", "x", "- ax"],
+    ["- a\n  - x\nb", "b", "- a\n  - xb"],
+    ["1. a\nb", "b", "1. ab"],
+  ])("in %j at %s writes %j", (value, at, expected) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, at);
+    expect(backspaceAcrossList(editor)).toBe(true);
+    expect(storedDraft(editor)).toBe(expected);
+  });
+
+  it.each([
+    ["- a\n```\nl1\nl2\n```", "- a\nl1\nl2"],
+    ["p\n```ts\nl1\n```", "p\nl1"],
+  ])("removes the fence of %j rather than joining its code up", (value, expected) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "l1");
+    editor.commands.keyboardShortcut("Backspace");
+    expect(storedDraft(editor)).toBe(expected);
+  });
+});
+
+describe("Delete at the end of a line", () => {
+  it.each([
+    ["- a\n- b", "- ab"],
+    ["- a\n  - x\n- c", "- ax\n- c"],
+    ["- a\n\nb", "- a\nb"],
+  ])("in %j writes %j", (value, expected) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "a", 1);
+    expect(deleteAcrossList(editor)).toBe(true);
+    expect(storedDraft(editor)).toBe(expected);
+  });
+
+  it.each(["- a\n```\nl1\n```", "a\n```\nl1\n```"])("leaves the fence in %j alone", (value) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "a", 1);
+    editor.commands.keyboardShortcut("Delete");
+    expect(storedDraft(editor)).toBe(value);
+  });
+});
+
+describe("blocks that a list item or quote cannot hold", () => {
+  it("puts lines pasted at the end of an item after the list", () => {
+    const editor = makeEditor("- a");
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.atEnd(editor.state.doc)));
+    const lines = buildTiptapContent("one\ntwo", (name) => ({ label: name, description: null }));
+    editor.commands.insertContent(lines);
+    expect(storedDraft(editor)).toBe("- a\none\ntwo");
+  });
+
+  it("will not make a task list inside a quote", () => {
+    const editor = makeEditor("> q");
+    placeCaret(editor, "q");
+    expect(editor.commands.wrapInList("taskList")).toBe(false);
+    expect(storedDraft(editor)).toBe("> q");
   });
 });

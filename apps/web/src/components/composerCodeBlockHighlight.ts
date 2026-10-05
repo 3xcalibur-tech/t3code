@@ -32,9 +32,14 @@ function blockSignature(node: ProseMirrorNode, theme: DiffThemeName): string {
   return [theme, String(node.attrs.language ?? ""), node.textContent].join("\u0000");
 }
 
+/**
+ * The composer's code blocks, which are always top-level: list items and
+ * quotes cannot hold one. Scanning only the top level keeps a keystroke in a
+ * long draft from walking every node in it.
+ */
 function collectCodeBlocks(state: EditorState): Array<{ node: ProseMirrorNode; pos: number }> {
   const blocks: Array<{ node: ProseMirrorNode; pos: number }> = [];
-  state.doc.descendants((node, pos) => {
+  state.doc.forEach((node, pos) => {
     if (node.type.name === "codeBlock") blocks.push({ node, pos });
   });
   return blocks;

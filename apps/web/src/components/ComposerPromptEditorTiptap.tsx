@@ -3,9 +3,9 @@ import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tip
 import StarterKit from "@tiptap/starter-kit";
 import { type Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { newlineInCode, splitBlockKeepMarks } from "@tiptap/pm/commands";
-import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
+import { NodeSelection, Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
-import type { ResolvedPos } from "@tiptap/pm/model";
+import type { NodeType, ResolvedPos } from "@tiptap/pm/model";
 import type {
   AssistantCitation,
   ComposerContextClipboardFragment,
@@ -64,6 +64,7 @@ import {
 } from "~/composer-rich-text-doc";
 import {
   convertCodeFenceOnEnter,
+  exitCodeBlockOnClosingFence,
   exitCodeBlockOnTrailingBlankLines,
   indentCodeBlock,
   indentedNewlineInCodeBlock,
@@ -552,8 +553,10 @@ function listMarkerInputRule(find: RegExp, listType: "bulletList" | "orderedList
       const marker = match.groups?.marker ?? "-";
       const space = match.groups?.space ?? " ";
       const carried = match.groups?.carried ?? "";
+      // Top-level paragraphs only: inside an item or a quote the new list
+      // would nest under a line the stored draft writes flat.
       const $from = state.doc.resolve(range.from);
-      if ($from.parent.type.name !== "paragraph" || hasAncestor($from, "blockquote")) return null;
+      if ($from.parent.type.name !== "paragraph" || $from.depth !== 1) return null;
       const command = chain()
         .deleteRange(range)
         .wrapInList(
@@ -590,6 +593,20 @@ const bulletToTaskInputRule = new InputRule({
     return undefined;
   },
 });
+
+/** `- [ ] ` or `- [x] ` at a top-level paragraph, for the same reason as the list markers. */
+function taskInputRule(type: NodeType): InputRule {
+  const rule = wrappingInputRule({
+    find: /^- \[([ xX])\] $/,
+    type,
+    getAttributes: (match) => ({ checked: match[1]?.toLowerCase() === "x" }),
+  });
+  return new InputRule({
+    find: rule.find,
+    handler: (props) =>
+      props.state.doc.resolve(props.range.from).depth === 1 ? rule.handler(props) : null,
+  });
+}
 
 function hasAncestor($pos: ResolvedPos, name: string): boolean {
   for (let depth = $pos.depth; depth > 0; depth -= 1) {
@@ -978,6 +995,8 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
           gapcursor: false,
           trailingNode: false,
           code: false,
+          // The list extensions handle Backspace and Delete themselves.
+          listKeymap: false,
           undoRedo: { newGroupDelay: COMPOSER_UNDO_GROUP_DELAY },
           // Plain mode has no marks: typed markers stay literal characters.
           ...(richText ? {} : { bold: false, italic: false, strike: false }),
@@ -1062,14 +1081,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
               ComposerTaskListExtension,
               ComposerTaskItemExtension.extend({
                 addInputRules() {
-                  return [
-                    wrappingInputRule({
-                      find: /^- \[([ xX])\] $/,
-                      type: this.type,
-                      getAttributes: (match) => ({ checked: match[1]?.toLowerCase() === "x" }),
-                    }),
-                    bulletToTaskInputRule,
-                  ];
+                  return [taskInputRule(this.type), bulletToTaskInputRule];
                 },
               }),
             ]
@@ -1228,6 +1240,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
               event.stopPropagation();
               const dispatch = (tr: typeof view.state.tr) => view.dispatch(tr.scrollIntoView());
               return (
+                exitCodeBlockOnClosingFence(view.state, dispatch) ||
                 exitCodeBlockOnTrailingBlankLines(view) ||
                 indentedNewlineInCodeBlock(view.state, dispatch) ||
                 newlineInCode(view.state, dispatch)
@@ -1368,6 +1381,20 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
                     return true;
                   })
                   .insertContent(content)
+                  .command(({ tr }) => {
+                    // A paste ending in a rule leaves the rule selected, and
+                    // the next keystroke would replace it. The caret goes to
+                    // the line after it, which is added when there is none.
+                    const { selection } = tr;
+                    if (!(selection instanceof NodeSelection) || !selection.node.isBlock) {
+                      return true;
+                    }
+                    if (!tr.doc.resolve(selection.to).nodeAfter?.isTextblock) {
+                      tr.insert(selection.to, tr.doc.type.schema.nodes.paragraph!.create());
+                    }
+                    tr.setSelection(TextSelection.create(tr.doc, selection.to + 1));
+                    return true;
+                  })
                   .run();
               },
             );
