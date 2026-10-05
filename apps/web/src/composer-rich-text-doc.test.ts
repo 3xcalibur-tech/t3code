@@ -501,7 +501,22 @@ describe("composer rich text document model", () => {
       "horizontalRule",
       "paragraph",
       "horizontalRule",
+      // The empty line a final rule keeps for the caret.
+      "paragraph",
     ]);
+  });
+
+  it.each([
+    ["---", "---"],
+    ["a\n---", "a\n---"],
+    // That line and a trailing newline are the same document; the newline goes.
+    ["---\n", "---"],
+  ])("gives the caret a line after the final rule of %j, written %j", (value, expected) => {
+    const map = roundTrip(value);
+    expect(map.value).toBe(expected);
+    const json = buildDocJson(value, () => ({ label: "", description: null }));
+    const doc = ProseMirrorNode.fromJSON(schema, json);
+    expect(doc.resolve(flatToPm(map, map.docLength)).parent.isTextblock).toBe(true);
   });
 
   it("parses rules ahead of lists and emphasis", () => {

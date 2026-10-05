@@ -209,6 +209,7 @@ describe("[ ] typed at the start of a bullet item", () => {
     ["- a\n  * [ ]x", "- a\n  - [ ] x"],
     ["- a\n  - [ ]x\n  - y", "- a\n  - [ ] x\n  - y"],
     ["- [ ]x\n  - y", "- [ ] x\n  - y"],
+    ["-   [ ]x", "-   [ ] x"],
   ])("makes the item in %j a task where it stands", (value, expected) => {
     const editor = makeEditor(value);
     placeCaret(editor, "[ ]x");
@@ -222,5 +223,20 @@ describe("[ ] typed at the start of a bullet item", () => {
     expect(editor.state.selection.$from.parent.textContent).toBe("x");
     expect(editor.state.selection.$from.parentOffset).toBe(0);
     expect(storedDraft(editor)).toBe(expected);
+  });
+});
+
+describe("a rule at the end of the draft", () => {
+  it("keeps an empty line after it to type on", () => {
+    const editor = makeEditor("a\n---");
+    // Removing the line after the rule puts one straight back.
+    editor.view.dispatch(
+      editor.state.tr.delete(editor.state.doc.content.size - 2, editor.state.doc.content.size),
+    );
+    expect(editor.state.doc.lastChild?.type.name).toBe("paragraph");
+    expect(storedDraft(editor)).toBe("a\n---");
+    editor.view.dispatch(editor.state.tr.setSelection(TextSelection.atEnd(editor.state.doc)));
+    editor.view.dispatch(editor.state.tr.insertText("b"));
+    expect(storedDraft(editor)).toBe("a\n---\nb");
   });
 });

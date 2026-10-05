@@ -9,7 +9,7 @@ import { type Command, type Editor, mergeAttributes } from "@tiptap/core";
 import { BulletList, ListItem, OrderedList } from "@tiptap/extension-list";
 import { TaskItem } from "@tiptap/extension-task-item";
 import { TaskList } from "@tiptap/extension-task-list";
-import { Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
+import { Plugin, Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
 import { nextOrderedMarkerText } from "~/composer-list-continuation";
@@ -271,12 +271,41 @@ const ComposerBlockquoteExtension = Blockquote.extend({
  * A rule keeps the exact line it was written as (`---`, `* * *`, `_____`), so
  * it round-trips byte-identically. It owns no document characters: offsets
  * inside its source clamp to the block after it.
+ *
+ * A rule cannot hold the caret, so a document never ends in one: an empty
+ * line follows it, which the draft does not write (see `isTrailingLineAfterRule`).
+ * A draft ending in `---\n` reads back the same way and so loses that newline,
+ * the same fixed-point deal as `__bold__` becoming `**bold**`.
  */
 const ComposerHorizontalRuleExtension = HorizontalRule.extend({
   addAttributes() {
     return { ...this.parent?.(), source: { default: "---" } };
   },
+  addProseMirrorPlugins() {
+    return [
+      ...(this.parent?.() ?? []),
+      new Plugin({
+        appendTransaction: (transactions, _, state) => {
+          if (!transactions.some((tr) => tr.docChanged)) return null;
+          if (state.doc.lastChild?.type.name !== "horizontalRule") return null;
+          return state.tr.insert(state.doc.content.size, state.schema.nodes.paragraph!.create());
+        },
+      }),
+    ];
+  },
 });
+
+/** The empty line after a rule that ends the document, which writes nothing. */
+function isTrailingLineAfterRule(doc: ProseMirrorNode, index: number): boolean {
+  const block = doc.child(index);
+  return (
+    index === doc.childCount - 1 &&
+    index > 0 &&
+    block.type.name === "paragraph" &&
+    block.content.size === 0 &&
+    doc.child(index - 1).type.name === "horizontalRule"
+  );
+}
 
 /**
  * A heading keeps the exact whitespace between its `#`s and its text. The
@@ -721,7 +750,10 @@ export function buildDocJson(
   skillLabelFor: (name: string) => SkillMeta,
   options?: { styling?: boolean },
 ) {
-  return { type: "doc", content: buildTiptapContent(value, skillLabelFor, options) };
+  const content = buildTiptapContent(value, skillLabelFor, options);
+  // The empty line the rule extension keeps after a final rule.
+  if (content.at(-1)?.type === "horizontalRule") content.push({ type: "paragraph" });
+  return { type: "doc", content };
 }
 
 export interface RichRun {
@@ -1020,7 +1052,13 @@ export function convertBulletItemToTask(
     if (childIndex < index) before.push(child);
     else if (childIndex > index) after.push(child);
   });
-  const task = schema.nodes.taskItem!.create({ checked, indent: item.attrs.indent }, item.content);
+  // The spacing after the bullet stays between the dash and the box, as typed.
+  const markerSpace =
+    typeof item.attrs.space === "string" && item.attrs.space ? item.attrs.space : " ";
+  const task = schema.nodes.taskItem!.create(
+    { checked, indent: item.attrs.indent, markerSpace },
+    item.content,
+  );
   const lists = [
     ...(before.length > 0 ? [list.copy(Fragment.from(before))] : []),
     schema.nodes.taskList!.create(null, task),
@@ -1267,7 +1305,7 @@ export function serializeEditorDoc(doc: ProseMirrorNode): RichDocMap {
 
   let pmBlockStart = 0;
   blocks.forEach((block, blockIndex) => {
-    if (blockIndex > 0) pushBreakRun(acc);
+    if (blockIndex > 0 && !isTrailingLineAfterRule(doc, blockIndex)) pushBreakRun(acc);
     if (LIST_NODE_NAMES.has(block.type.name)) {
       walkList(block, pmBlockStart, acc);
     } else if (block.type.name === "codeBlock") {
