@@ -232,7 +232,8 @@ export const make = Effect.gen(function* () {
     if (Exit.isFailure(read)) {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
       // A rate limit stops every read on the host until it resets, so it says nothing about this
-      // pull request. Giving up would wake the agent to re-watch into the same limit.
+      // pull request: it neither counts toward giving up nor clears the count. Giving up would
+      // wake the agent to re-watch into the same limit.
       if (isRateLimited(read.cause)) return;
       const failures = (readFailures.get(key) ?? 0) + 1;
       readFailures.set(key, failures);
