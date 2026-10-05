@@ -94,9 +94,11 @@ describe("groupedAfterFirst", () => {
   );
 
   it.effect("delivers the last group when the source ends", () =>
-    withGroupedSource(({ source, batches, fiber }) =>
+    withGroupedSource(({ source, batches, sleeps, fiber }) =>
       Effect.gen(function* () {
         yield* Queue.offer(source, 1);
+        // The window is open; the end flushes the group without waiting it out.
+        yield* Queue.take(sleeps);
         yield* Queue.end(source);
         assert.deepEqual(yield* Queue.take(batches), [1]);
         yield* Fiber.join(fiber);
@@ -105,9 +107,10 @@ describe("groupedAfterFirst", () => {
   );
 
   it.effect("delivers the group in hand before the source's defect", () =>
-    withGroupedSource(({ source, batches, fiber }) =>
+    withGroupedSource(({ source, batches, sleeps, fiber }) =>
       Effect.gen(function* () {
         yield* Queue.offerAll(source, [1, 2]);
+        yield* Queue.take(sleeps);
         yield* Queue.failCause(source, Cause.die("projection failed"));
         const exit = yield* Fiber.await(fiber);
         assert.isTrue(Exit.hasDies(exit));
