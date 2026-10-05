@@ -33,6 +33,8 @@ const makeHome = () => {
   const running = new Set<string>();
   // Threads with a turn queued that has not started yet.
   const queued = new Set<string>();
+  // Threads where cancelling a queued turn lets the next queued turn start.
+  const startsNextOnCancel = new Set<string>();
   const shell = (threadId: ThreadId) =>
     ({
       id: threadId,
@@ -81,13 +83,17 @@ const makeHome = () => {
             } as never),
           dispatch: (command) => {
             dispatched.push(command);
+            if (command.type === "queued-run.cancel") {
+              queued.delete(command.threadId);
+              if (startsNextOnCancel.has(command.threadId)) running.add(command.threadId);
+            }
             return Effect.succeed({} as never);
           },
         }),
       ),
     ),
   );
-  return { layer, launched, sent, dispatched, sendFailures, running, queued };
+  return { layer, launched, sent, dispatched, sendFailures, running, queued, startsNextOnCancel };
 };
 
 const event = (threadId: string, kind: HomeWatchEvent["kind"]): HomeWatchEvent => ({
@@ -204,6 +210,21 @@ it.effect("turning Home off cancels a turn the old Home has queued but not start
     yield* home.disable;
     expect(dispatched).toMatchObject([
       { type: "queued-run.cancel", threadId, runId: "queued-run" },
+    ]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("a queued turn that starts while the old Home is cancelled is interrupted too", () => {
+  const { layer, dispatched, queued, startsNextOnCancel } = makeHome();
+  return Effect.gen(function* () {
+    const home = yield* HomeService.HomeService;
+    const { threadId } = yield* home.enable({ modelSelection });
+    queued.add(threadId);
+    startsNextOnCancel.add(threadId);
+    yield* home.disable;
+    expect(dispatched).toMatchObject([
+      { type: "queued-run.cancel", threadId },
+      { type: "run.interrupt", threadId, holdQueue: true },
     ]);
   }).pipe(Effect.provide(layer));
 });
