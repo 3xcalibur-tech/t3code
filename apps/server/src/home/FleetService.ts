@@ -15,6 +15,8 @@ import {
   type FleetInvokeInput,
   type FleetOperation,
   type FleetResult,
+  isHomeLaunchedThreadId,
+  ProviderRequestKind,
   MessageId,
   type ProjectId,
   type OrchestrationV2Command,
@@ -30,6 +32,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import {
   listItemFromShell,
@@ -180,7 +183,8 @@ const make = Effect.gen(function* () {
 
     "threads.list": (input, actor) =>
       Effect.gen(function* () {
-        const includeSubagents = input.includeSubagents === true;
+        // The same default as the regular thread list: subagents unless turned off.
+        const includeSubagents = input.includeSubagents !== false;
         const shells =
           input.projectId === undefined
             ? yield* threads.getShellSnapshot().pipe(
@@ -240,6 +244,13 @@ const make = Effect.gen(function* () {
 
     "threads.launch": (input, actor) =>
       Effect.gen(function* () {
+        // Home picks the id so its watch exists first; no caller may pick another kind of id.
+        if (input.threadId !== undefined && !isHomeLaunchedThreadId(input.threadId)) {
+          return yield* failure(
+            "invalid_request",
+            "A launched thread id must be a Home launch id.",
+          );
+        }
         if (
           input.scratch === true &&
           (input.projectId !== undefined || input.workspaceStrategy !== undefined)
@@ -477,6 +488,13 @@ const make = Effect.gen(function* () {
           return yield* failure("invalid_request", "The pending request was not found.");
         }
         const isQuestion = request.kind === "user_input";
+        // Tool calls and auth refreshes are answered by the runtime, never by a decision.
+        if (!isQuestion && !isApprovalKind(request.kind)) {
+          return yield* failure(
+            "invalid_request",
+            "This request does not take an answer or decision.",
+          );
+        }
         if (isQuestion ? input.answers === undefined : input.decision === undefined) {
           return yield* failure(
             "invalid_request",
@@ -511,14 +529,7 @@ const make = Effect.gen(function* () {
 });
 
 /** Approvals are the provider permission kinds; questions and tool calls are not. */
-export function isApprovalKind(kind: string): boolean {
-  return (
-    kind === "command" ||
-    kind === "file-read" ||
-    kind === "file-change" ||
-    kind === "mcp-elicitation" ||
-    kind === "permission"
-  );
-}
+/** Approval requests take a decision; other provider requests do not. */
+const isApprovalKind = Schema.is(ProviderRequestKind);
 
 export const layer = Layer.effect(FleetService, make);

@@ -45,6 +45,8 @@ function HomeHub({ environmentId }: { readonly environmentId: EnvironmentId }) {
   const on = home.threadId !== null;
   useEffect(() => {
     void window.desktopBridge?.setKeepAliveOnClose?.(on);
+    // Without a relay running, closing the window should quit as usual.
+    return () => void window.desktopBridge?.setKeepAliveOnClose?.(false);
   }, [on]);
   if (!on) return null;
   return (

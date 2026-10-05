@@ -134,6 +134,7 @@ describe("chatThreadActions", () => {
     const projectRef = resolveThreadActionProjectRef(
       createContext({
         activeThread: { id: "home:current", environmentId: ENVIRONMENT_ID, projectId: PROJECT_ID },
+        activeDraftThread: { environmentId: ENVIRONMENT_ID, projectId: PROJECT_ID },
       }),
     );
 

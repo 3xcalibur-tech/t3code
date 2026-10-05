@@ -53,7 +53,13 @@ export class HomeService extends Context.Service<
     /** Points Home at a new thread with the same model and settles the old one. */
     readonly startFresh: Effect.Effect<HomeThreadResult, HomeUnavailableError>;
     readonly isHome: (threadId: ThreadId) => Effect.Effect<boolean>;
+    /**
+     * Changes Home's watches for the Home thread `homeThreadId`. Fails when
+     * that thread is no longer Home, so a run that a fresh start replaced
+     * cannot change the new Home's watches.
+     */
     readonly updateWatches: (
+      homeThreadId: ThreadId,
       update: (home: HomeSettings) => HomeSettings,
     ) => Effect.Effect<HomeSettings, HomeUnavailableError>;
     /** Wakes Home with the watched events in one message. */
@@ -61,7 +67,7 @@ export class HomeService extends Context.Service<
   }
 >()("t3/home/HomeService") {}
 
-export const watchKey = (watch: Pick<HomeWatch, "environmentId" | "threadId">) =>
+const watchKey = (watch: Pick<HomeWatch, "environmentId" | "threadId">) =>
   `${watch.environmentId}\u0000${watch.threadId}`;
 
 /** Adds a watch, keeping the stronger "launched" reason when one exists. */
@@ -97,7 +103,7 @@ const EVENT_LABELS: Record<Exclude<HomeWatchEvent["kind"], "ended">, string> = {
 };
 
 /** The text Home receives for one batch of watched events. */
-export function formatWatchReport(events: ReadonlyArray<HomeWatchEvent>): string {
+function formatWatchReport(events: ReadonlyArray<HomeWatchEvent>): string {
   const lines = events.flatMap((event) => {
     if (event.kind === "ended") return [];
     const where = event.environmentLabel ?? event.environmentId;
@@ -248,43 +254,42 @@ const make = Effect.gen(function* () {
           )
         : Effect.succeed(false),
 
-    updateWatches: (update) =>
+    updateWatches: (homeThreadId, update) =>
       withLock(
         Effect.gen(function* () {
           const home = yield* readHome;
           if (home.threadId === null) return yield* fail("Home is off.");
+          if (home.threadId !== homeThreadId) return yield* fail("This thread is no longer Home.");
           return yield* writeHome(update(home));
         }),
       ),
 
+    // Under the lock, so turning Home off or starting fresh cannot slip in
+    // between choosing the Home thread and waking it.
     report: ({ events }) =>
-      Effect.gen(function* () {
-        const home = yield* readHome;
-        if (home.threadId === null) return;
-        const watched = new Set(home.watches.map(watchKey));
-        const wake = events.filter(
-          (event) =>
-            event.kind !== "ended" &&
-            event.threadId !== home.threadId &&
-            (home.watchAll || watched.has(watchKey(event))),
-        );
-        if (wake.length > 0) yield* deliver(home.threadId, wake);
-        // Watches end only after delivery, so a retried batch is still eligible.
-        const ended = new Set(
-          events.filter((event) => event.kind === "ended").map((event) => watchKey(event)),
-        );
-        if (ended.size === 0) return;
-        yield* withLock(
-          Effect.gen(function* () {
-            const current = yield* readHome;
-            if (!current.watches.some((watch) => ended.has(watchKey(watch)))) return;
-            yield* writeHome({
-              ...current,
-              watches: current.watches.filter((watch) => !ended.has(watchKey(watch))),
-            });
-          }),
-        );
-      }),
+      withLock(
+        Effect.gen(function* () {
+          const home = yield* readHome;
+          if (home.threadId === null) return;
+          const watched = new Set(home.watches.map(watchKey));
+          const wake = events.filter(
+            (event) =>
+              event.kind !== "ended" &&
+              event.threadId !== home.threadId &&
+              (home.watchAll || watched.has(watchKey(event))),
+          );
+          if (wake.length > 0) yield* deliver(home.threadId, wake);
+          // Watches end only after delivery, so a retried batch is still eligible.
+          const ended = new Set(
+            events.filter((event) => event.kind === "ended").map((event) => watchKey(event)),
+          );
+          if (!home.watches.some((watch) => ended.has(watchKey(watch)))) return;
+          yield* writeHome({
+            ...home,
+            watches: home.watches.filter((watch) => !ended.has(watchKey(watch))),
+          });
+        }),
+      ),
   });
 });
 

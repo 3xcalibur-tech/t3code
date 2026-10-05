@@ -27,7 +27,6 @@ import {
 } from "../lib/chatThreadActions";
 import { readT3ProjectFile } from "../lib/t3ProjectFileDefaults";
 import { environmentServerConfigsAtom, primaryServerConfigAtom } from "../state/server";
-import { usePrimaryEnvironmentId } from "../state/environments";
 import { defaultNewThreadProjectRef } from "../lib/chatThreadActions";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -462,7 +461,10 @@ export function useHandleNewThread() {
     });
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = useAtomValue(
+    primaryServerConfigAtom,
+    (config) => config?.environment.environmentId ?? null,
+  );
   const homeWorkspaceRoot = useAtomValue(
     primaryServerConfigAtom,
     (config) => config?.homeWorkspaceRoot ?? null,

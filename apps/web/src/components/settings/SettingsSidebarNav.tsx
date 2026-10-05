@@ -119,7 +119,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   // Only a desktop app's own server can run Home.
   const canRunHome = useAtomValue(
     primaryServerConfigAtom,
-    (config) => isElectron && config?.homeWorkspaceRoot !== undefined,
+    (config) => isElectron && config?.homeWorkspaceRoot != null,
   );
   const navItems = SETTINGS_NAV_ITEMS.filter(
     (item) =>

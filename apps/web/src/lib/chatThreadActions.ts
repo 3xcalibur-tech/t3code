@@ -1,5 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { isHomeProject } from "@t3tools/client-runtime/state/projects";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import {
   type EnvironmentId,
   type ModelSelection,
@@ -86,12 +86,15 @@ export function defaultNewThreadProjectRef(
     readonly homeWorkspaceRoot: string | null;
   },
 ): ScopedProjectRef | null {
+  const homeRoot =
+    home.homeWorkspaceRoot === null
+      ? ""
+      : normalizeProjectPathForComparison(home.homeWorkspaceRoot);
   const project = projects.find(
     (candidate) =>
-      !(
-        candidate.environmentId === home.primaryEnvironmentId &&
-        isHomeProject(candidate, home.homeWorkspaceRoot)
-      ),
+      homeRoot.length === 0 ||
+      candidate.environmentId !== home.primaryEnvironmentId ||
+      normalizeProjectPathForComparison(candidate.workspaceRoot) !== homeRoot,
   );
   return project ? scopeProjectRef(project.environmentId, project.id) : null;
 }
@@ -99,8 +102,12 @@ export function defaultNewThreadProjectRef(
 export function resolveThreadActionProjectRef(
   context: ChatThreadActionContext,
 ): ScopedProjectRef | null {
-  // Home's folder belongs to Home alone, so a new thread from Home uses the default project.
-  if (context.activeThread && !isHomeThreadId(context.activeThread.id ?? "")) {
+  // Home's folder belongs to Home alone, so a new thread from Home, or from a
+  // draft in Home's composer, uses the default project.
+  if (context.activeThread && isHomeThreadId(context.activeThread.id ?? "")) {
+    return context.defaultProjectRef;
+  }
+  if (context.activeThread) {
     return scopeProjectRef(context.activeThread.environmentId, context.activeThread.projectId);
   }
   if (context.activeDraftThread) {

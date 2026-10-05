@@ -610,7 +610,7 @@ export function threadSettlement(
   };
 }
 
-export function threadSnooze(
+function threadSnooze(
   thread: Parameters<typeof isSnoozed>[0],
   nowMs: number,
 ): Pick<OrchestratorMcpThreadListItem, "snoozed" | "snoozedUntil"> {

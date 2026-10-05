@@ -1239,16 +1239,20 @@ function useMarkdownStyles(
           );
         }
         const linkHref = presentation.href;
+        // A thread link opens the thread in the app, through the feed's link handler.
+        const isThreadLink = parseThreadLinkHref(href) !== null;
         return (
           <MarkdownLinkLabelContext.Provider value="other">
             <NativeText
               className="underline"
               onPress={
-                linkHref
-                  ? () => {
-                      void tryOpenExternalUrl(linkHref, "markdown-link");
-                    }
-                  : undefined
+                isThreadLink
+                  ? () => onLinkPress(href)
+                  : linkHref
+                    ? () => {
+                        void tryOpenExternalUrl(linkHref, "markdown-link");
+                      }
+                    : undefined
               }
               style={{ color: markdownLinkColor }}
             >

@@ -30,6 +30,7 @@ const actor = { environmentId: EnvironmentId.make("hub"), threadId: ThreadId.mak
 const threadId = ThreadId.make("worker");
 const approvalId = RuntimeRequestId.make("approval");
 const questionId = RuntimeRequestId.make("question");
+const toolCallId = RuntimeRequestId.make("tool-call");
 
 const shell = (
   id: string,
@@ -109,6 +110,7 @@ const setup = () => {
               runtimeRequests: [
                 { id: approvalId, kind: "command", status: "pending" },
                 { id: questionId, kind: "user_input", status: "pending" },
+                { id: toolCallId, kind: "dynamic_tool_call", status: "pending" },
               ],
               turnItems: [],
             } as never),
@@ -248,5 +250,40 @@ it.effect("keys a retried rename by its target thread", () => {
     const ids = dispatched.map((command) => command.commandId);
     expect(ids[0]).toBe(ids[1]);
     expect(ids[2]).not.toBe(ids[0]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses a decision for a request that is not an approval", () => {
+  const { layer, dispatched } = setup();
+  return Effect.gen(function* () {
+    const fleet = yield* FleetService.FleetService;
+    const error = yield* fleet
+      .execute({
+        actor,
+        request: {
+          op: "requests.respond",
+          input: { threadId, requestId: toolCallId, decision: "accept" },
+        },
+      })
+      .pipe(Effect.asVoid, Effect.flip);
+    expect(error.code).toBe("invalid_request");
+    expect(dispatched).toHaveLength(0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("only launches with a Home launch id it was given", () => {
+  const { layer } = setup();
+  return Effect.gen(function* () {
+    const fleet = yield* FleetService.FleetService;
+    const error = yield* fleet
+      .execute({
+        actor,
+        request: {
+          op: "threads.launch",
+          input: { threadId: ThreadId.make("home:fake"), scratch: true, title: "Worker" },
+        },
+      })
+      .pipe(Effect.asVoid, Effect.flip);
+    expect(error.code).toBe("invalid_request");
   }).pipe(Effect.provide(layer));
 });

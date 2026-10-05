@@ -211,7 +211,7 @@ it.effect("makes Home name a project and watches the thread before launching it"
       Layer.mock(HomeService.HomeService)({
         available: true,
         isHome: () => Effect.succeed(true),
-        updateWatches: (update) => {
+        updateWatches: (_homeThreadId, update) => {
           home = update(home);
           steps.push(`watch ${home.watches.map((watch) => watch.threadId).join()}`);
           return Effect.succeed(home);

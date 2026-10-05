@@ -28,7 +28,10 @@ import { toastManager } from "./ui/toast";
 export function ThreadNotificationCoordinator() {
   const environmentIds = useEnvironmentIds();
   // Home answers for the threads it launched; it reaches the user through its own thread.
-  const homeOn = useAtomValue(primaryServerSettingsAtom).home.threadId !== null;
+  const homeOn = useAtomValue(
+    primaryServerSettingsAtom,
+    (settings) => settings.home.threadId !== null,
+  );
   const mode = useClientSettings((settings) => settings.notificationMode);
   const inAppNotificationsEnabled = useClientSettings(
     (settings) => settings.inAppNotificationsEnabled,

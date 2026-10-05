@@ -15,7 +15,7 @@ const LINK_LABEL_MAX_CHARS = 120;
 const decodeEnvironmentId = Schema.decodeUnknownOption(EnvironmentId);
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
-export function formatThreadLinkHref(environmentId: string, threadId: string): string {
+function formatThreadLinkHref(environmentId: string, threadId: string): string {
   return `${THREAD_LINK_HREF_PREFIX}${encodeURIComponent(environmentId)}/${encodeURIComponent(threadId)}`;
 }
 

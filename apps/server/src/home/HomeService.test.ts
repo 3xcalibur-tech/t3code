@@ -107,7 +107,7 @@ it.effect("turning Home off revokes its reach at once", () => {
   return Effect.gen(function* () {
     const home = yield* HomeService.HomeService;
     const { threadId } = yield* home.enable({ modelSelection });
-    yield* home.updateWatches((current) =>
+    yield* home.updateWatches(threadId, (current) =>
       HomeService.addWatch(current, {
         environmentId,
         threadId: ThreadId.make("a"),
@@ -127,7 +127,7 @@ it.effect("wakes Home only for watched threads and ends watches on settle", () =
     const home = yield* HomeService.HomeService;
     const { threadId } = yield* home.enable({ modelSelection });
     for (const id of ["watched", "ending"]) {
-      yield* home.updateWatches((current) =>
+      yield* home.updateWatches(threadId, (current) =>
         HomeService.addWatch(current, {
           environmentId,
           threadId: ThreadId.make(id),
@@ -146,7 +146,7 @@ it.effect("wakes Home only for watched threads and ends watches on settle", () =
     expect(sent[0]).toMatchObject({ threadId, mode: "auto", createdBy: "system" });
     expect(sent[0]!.text).toContain("[Thread watched](t3-thread://v1/hub/watched)");
     expect(sent[0]!.text).not.toContain("unwatched");
-    const after = yield* home.updateWatches((current) => current);
+    const after = yield* home.updateWatches(threadId, (current) => current);
     expect(after.watches.map((watch) => watch.threadId)).toEqual(["watched"]);
   }).pipe(Effect.provide(layer));
 });
@@ -155,8 +155,8 @@ it.effect("keeps a watch that ends in a batch until the batch is delivered", () 
   const { layer, sent, sendFailures } = makeHome();
   return Effect.gen(function* () {
     const home = yield* HomeService.HomeService;
-    yield* home.enable({ modelSelection });
-    yield* home.updateWatches((current) =>
+    const { threadId } = yield* home.enable({ modelSelection });
+    yield* home.updateWatches(threadId, (current) =>
       HomeService.addWatch(current, {
         environmentId,
         threadId: ThreadId.make("done"),
@@ -166,10 +166,23 @@ it.effect("keeps a watch that ends in a batch until the batch is delivered", () 
     const batch = { events: [event("done", "completed"), event("done", "ended")] };
     sendFailures.remaining = 1;
     yield* home.report(batch).pipe(Effect.flip);
-    expect((yield* home.updateWatches((current) => current)).watches).toHaveLength(1);
+    expect((yield* home.updateWatches(threadId, (current) => current)).watches).toHaveLength(1);
     yield* home.report(batch);
     expect(sent).toHaveLength(1);
-    expect((yield* home.updateWatches((current) => current)).watches).toHaveLength(0);
+    expect((yield* home.updateWatches(threadId, (current) => current)).watches).toHaveLength(0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("a Home thread that a fresh start replaced cannot change watches", () => {
+  const { layer } = makeHome();
+  return Effect.gen(function* () {
+    const home = yield* HomeService.HomeService;
+    const { threadId: old } = yield* home.enable({ modelSelection });
+    yield* home.startFresh;
+    const error = yield* home
+      .updateWatches(old, (current) => ({ ...current, watchAll: true }))
+      .pipe(Effect.flip);
+    expect(error.message).toContain("no longer Home");
   }).pipe(Effect.provide(layer));
 });
 
@@ -178,7 +191,7 @@ it.effect("watching everything never wakes Home for its own thread", () => {
   return Effect.gen(function* () {
     const home = yield* HomeService.HomeService;
     const { threadId } = yield* home.enable({ modelSelection });
-    yield* home.updateWatches((current) => ({ ...current, watchAll: true }));
+    yield* home.updateWatches(threadId, (current) => ({ ...current, watchAll: true }));
     yield* home.report({ events: [event(threadId, "completed")] });
     expect(sent).toHaveLength(0);
     yield* home.report({ events: [event("anything", "failed")] });

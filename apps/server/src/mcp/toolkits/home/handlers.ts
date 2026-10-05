@@ -48,6 +48,12 @@ export const HomeHandlersLive = HomeToolkit.toLayer({
           message: "Only Home can watch threads.",
         });
       const { scope } = yield* readHomeChangeCaller();
+      const homeThreadId = scope.thread?.threadId;
+      if (homeThreadId === undefined)
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Only Home can watch threads.",
+        });
       const home = yield* HomeService.HomeService;
       const environmentId = input.environmentId ?? scope.environmentId;
       const { threadId } = input;
@@ -57,7 +63,7 @@ export const HomeHandlersLive = HomeToolkit.toLayer({
           message: `${input.action} needs threadId.`,
         });
       const next = yield* home
-        .updateWatches((current) => {
+        .updateWatches(homeThreadId, (current) => {
           switch (input.action) {
             case "watch_all":
               return { ...current, watchAll: true };

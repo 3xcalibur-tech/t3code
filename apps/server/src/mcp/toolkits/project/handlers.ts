@@ -56,10 +56,10 @@ const mutation = Effect.gen(function* () {
  * thread was not created, and a watch whose thread never appears ends at the
  * next start.
  */
-const watchLaunched = (environmentId: EnvironmentId, threadId: ThreadId) =>
+const watchLaunched = (homeThreadId: ThreadId, environmentId: EnvironmentId, threadId: ThreadId) =>
   HomeService.HomeService.pipe(
     Effect.flatMap((home) =>
-      home.updateWatches((current) =>
+      home.updateWatches(homeThreadId, (current) =>
         HomeService.addWatch(current, { environmentId, threadId, reason: "launched" }),
       ),
     ),
@@ -91,7 +91,9 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         limits.runtimeMode,
         input.runtimeMode ?? caller?.runtimeMode,
       );
-      const isHome = yield* callerIsHome();
+      // Home is always a thread caller; its id scopes the watches it saves.
+      const homeThreadId = (yield* callerIsHome()) ? caller?.id : undefined;
+      const isHome = homeThreadId !== undefined;
       const targetEnvironmentId = input.environmentId ?? scope.environmentId;
       const remote = targetEnvironmentId !== scope.environmentId;
       // Home's folder carries Home's own instructions, so nothing launches there.
@@ -141,9 +143,11 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
         isHome ? `${HOME_LAUNCHED_THREAD_ID_PREFIX}${commandId}` : commandId,
       );
       const messageId = MessageId.make(commandId);
-      if (isHome && attachments.length === 0) {
-        const modelSelection = input.modelSelection ?? caller?.modelSelection;
-        yield* watchLaunched(targetEnvironmentId, threadId);
+      if (homeThreadId !== undefined && attachments.length === 0) {
+        // Provider instances differ per machine, so another machine uses its own default.
+        const modelSelection =
+          input.modelSelection ?? (remote ? undefined : caller?.modelSelection);
+        yield* watchLaunched(homeThreadId, targetEnvironmentId, threadId);
         return yield* runAsHome(input.environmentId, "threads.launch", {
           threadId,
           ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
@@ -187,7 +191,8 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
           message:
             "Pass modelSelection: the project has no default model. orchestrator_capabilities lists providers and models.",
         });
-      if (isHome) yield* watchLaunched(scope.environmentId, threadId);
+      if (homeThreadId !== undefined)
+        yield* watchLaunched(homeThreadId, scope.environmentId, threadId);
       const result = yield* ThreadMessageIntake.launchThread({
         commandId,
         threadId,
