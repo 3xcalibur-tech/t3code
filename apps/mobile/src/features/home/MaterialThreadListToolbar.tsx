@@ -16,6 +16,10 @@ import { AndroidAnchoredMenu } from "../../components/AndroidAnchoredMenu";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { MaterialSearchField } from "../../components/MaterialSearchField";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
+import {
+  AndroidPinnedViewToggleButton,
+  type ThreadListPinnedViewToggle,
+} from "../threads/thread-list-pinned-view-toggle";
 import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import { useWorkspaceState } from "../../state/workspace";
 import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
@@ -30,6 +34,7 @@ export function MaterialThreadListToolbar(props: {
   readonly onFilterAction: NonNullable<ComponentProps<typeof ControlPillMenu>["onPressAction"]>;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironments: () => void;
+  readonly pinnedViewToggle: ThreadListPinnedViewToggle;
   readonly sidebar?: boolean;
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
@@ -113,6 +118,7 @@ export function MaterialThreadListToolbar(props: {
                 icon="magnifyingglass"
                 onPress={openSearch}
               />
+              <AndroidPinnedViewToggleButton toggle={props.pinnedViewToggle} />
               <AndroidHeaderIconButton
                 accessibilityLabel="Open settings"
                 icon="gearshape"
