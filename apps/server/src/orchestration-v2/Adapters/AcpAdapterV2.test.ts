@@ -107,6 +107,7 @@ const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
 const testLayer = Layer.mergeAll(NodeServices.layer, IdAllocator.layer, serverConfigLayer);
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const encodeElicitationSchemaJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("acpProjectedCommandExitCode", () => {
   const successOutput = { type: "Bash", exit_code: 0 };
@@ -3879,6 +3880,267 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(responseFiber.pollUnsafe());
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(responseFiber);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live.each([
+    { name: "wrapped scalar answers", overrides: {}, accept: true },
+    {
+      name: "scalar and native primitive answers",
+      overrides: { choice: " opaque ", legacy: "", approved: true, ratio: 1.25, count: 3 },
+      accept: true,
+    },
+    {
+      name: "false boolean answers",
+      overrides: { approved: ["false"] },
+      accept: true,
+      expectedApproved: false,
+    },
+    { name: "exponent numbers", overrides: { ratio: "1.25e0" }, accept: true },
+    { name: "missing required answers", overrides: {}, missing: "choice", accept: false },
+    {
+      name: "choice labels instead of opaque values",
+      overrides: { choice: "Primary" },
+      accept: false,
+    },
+    { name: "trimmed opaque values", overrides: { choice: "opaque" }, accept: false },
+    {
+      name: "multiple scalar choices",
+      overrides: { choice: [" opaque ", "other"] },
+      accept: false,
+    },
+    { name: "unknown boolean values", overrides: { approved: "yes" }, accept: false },
+    { name: "non-decimal numbers", overrides: { ratio: "0x1" }, accept: false },
+    { name: "non-finite numbers", overrides: { ratio: Number.POSITIVE_INFINITY }, accept: false },
+    { name: "numbers outside the bounds", overrides: { ratio: "11" }, accept: false },
+    { name: "fractional integers", overrides: { count: "1.5" }, accept: false },
+    { name: "non-string answers", overrides: { code: 1 }, accept: false },
+    { name: "strings outside the length bounds", overrides: { code: "TOOLONG" }, accept: false },
+    { name: "strings outside the pattern", overrides: { code: "no" }, accept: false },
+    { name: "non-array multi-select answers", overrides: { scopes: "read" }, accept: false },
+    {
+      name: "unknown multi-select values",
+      overrides: { scopes: ["read", "admin"] },
+      accept: false,
+    },
+    { name: "wrong multi-select item types", overrides: { scopes: ["read", true] }, accept: false },
+    { name: "too few multi-select values", overrides: { scopes: [] }, accept: false },
+    {
+      name: "too many multi-select values",
+      overrides: { scopes: ["read", " write ", "read"] },
+      accept: false,
+    },
+  ])("handles ACP form elicitation with $name", (testCase) =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const response = yield* Deferred.make<unknown>();
+      const instanceId = ProviderInstanceId.make("acp-test-typed-elicitation");
+      const requestedSchema = {
+        type: "object",
+        properties: {
+          choice: {
+            type: "string",
+            oneOf: [
+              { const: " opaque ", title: "Primary", description: "Keep this ID" },
+              { const: "other", title: "Other" },
+            ],
+          },
+          legacy: {
+            type: "string",
+            enum: ["", "secondary"],
+          },
+          approved: { type: "boolean" },
+          ratio: { type: "number", minimum: 0, maximum: 10 },
+          count: { type: "integer", minimum: 1, maximum: 4 },
+          scopes: {
+            type: "array",
+            minItems: 1,
+            maxItems: 2,
+            items: { type: "string", enum: ["read", " write "] },
+          },
+          code: { type: "string", minLength: 2, maxLength: 4, pattern: "^[A-Z]+$" },
+          optional: { type: "string" },
+        },
+        required: ["choice", "legacy", "approved", "ratio", "count", "scopes", "code"],
+      } as const;
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: {
+              T3_ACP_EMIT_ELICITATION: "1",
+              T3_ACP_ELICITATION_SCHEMA: encodeElicitationSchemaJson(requestedSchema),
+            },
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleElicitation: (handler) =>
+                runtime.handleElicitation((params, requestContext) =>
+                  handler(params, requestContext).pipe(
+                    Effect.tap((result) => Deferred.succeed(response, result)),
+                  ),
+                ),
+            }),
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+        selfInvocation,
+      });
+      const threadId = ThreadId.make("thread-acp-typed-elicitation");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-typed-elicitation"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const pending = Option.getOrThrow(
+        yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+          ),
+          Stream.runHead,
+        ),
+      );
+      if (pending.type !== "turn_item.updated" || pending.turnItem.type !== "user_input_request") {
+        return yield* Effect.die("Expected a pending user-input form");
+      }
+      assert.deepEqual(
+        pending.turnItem.questions.map(
+          ({ id, options, multiSelect, allowCustomAnswer, required }) => ({
+            id,
+            options,
+            multiSelect,
+            allowCustomAnswer,
+            required,
+          }),
+        ),
+        [
+          {
+            id: "choice",
+            options: [
+              { label: "Primary", description: "Keep this ID", value: " opaque " },
+              { label: "Other", description: "Other", value: "other" },
+            ],
+            multiSelect: false,
+            allowCustomAnswer: false,
+            required: true,
+          },
+          {
+            id: "legacy",
+            options: [
+              { label: "Option 1", description: "Option 1", value: "" },
+              { label: "secondary", description: "secondary", value: "secondary" },
+            ],
+            multiSelect: false,
+            allowCustomAnswer: false,
+            required: true,
+          },
+          {
+            id: "approved",
+            options: [
+              { label: "true", description: "Yes", value: "true" },
+              { label: "false", description: "No", value: "false" },
+            ],
+            multiSelect: false,
+            allowCustomAnswer: false,
+            required: true,
+          },
+          { id: "ratio", options: [], multiSelect: false, allowCustomAnswer: true, required: true },
+          { id: "count", options: [], multiSelect: false, allowCustomAnswer: true, required: true },
+          {
+            id: "scopes",
+            options: [
+              { label: "read", description: "read", value: "read" },
+              { label: "write", description: "write", value: " write " },
+            ],
+            multiSelect: true,
+            allowCustomAnswer: false,
+            required: true,
+          },
+          { id: "code", options: [], multiSelect: false, allowCustomAnswer: true, required: true },
+          {
+            id: "optional",
+            options: [],
+            multiSelect: false,
+            allowCustomAnswer: true,
+            required: false,
+          },
+        ],
+      );
+      const answers: Record<string, unknown> = {
+        choice: [" opaque "],
+        legacy: [""],
+        approved: ["true"],
+        ratio: ["1.25"],
+        count: ["3"],
+        scopes: ["read", " write "],
+        code: "OK",
+        ignored: "Never return undeclared properties",
+        ...testCase.overrides,
+      };
+      if ("missing" in testCase && typeof testCase.missing === "string") {
+        delete answers[testCase.missing];
+      }
+      yield* runtime.respondToRuntimeRequest({ requestId: pending.turnItem.requestId, answers });
+      assert.deepEqual(
+        yield* Deferred.await(response),
+        testCase.accept
+          ? {
+              action: "accept",
+              content: {
+                choice: " opaque ",
+                legacy: "",
+                approved: testCase.expectedApproved ?? true,
+                ratio: 1.25,
+                count: 3,
+                scopes: ["read", " write "],
+                code: "OK",
+              },
+            }
+          : { action: "decline" },
+      );
+      const terminal = Option.getOrThrow(
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        ),
+      );
+      assert.equal(terminal.type, "turn.terminal");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 

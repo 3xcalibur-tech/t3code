@@ -12,7 +12,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 
 import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
-import type * as AcpSchema from "effect-acp/schema";
+import * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
 
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
@@ -34,6 +34,10 @@ const emitBackgroundToolDuringAnswer =
   process.env.T3_ACP_EMIT_BACKGROUND_TOOL_DURING_ANSWER === "1";
 const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitElicitation = process.env.T3_ACP_EMIT_ELICITATION === "1";
+const elicitationSchemaJson = process.env.T3_ACP_ELICITATION_SCHEMA;
+const decodeElicitationSchema = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(AcpSchema.ElicitationSchema),
+);
 const emitMcpToolApprovalElicitation =
   process.env.T3_ACP_EMIT_MCP_TOOL_APPROVAL_ELICITATION === "1";
 const emitUrlElicitation = process.env.T3_ACP_EMIT_URL_ELICITATION === "1";
@@ -1781,12 +1785,19 @@ const program = Effect.gen(function* () {
           sessionId: requestedSessionId,
           message: "Approve this request?",
           mode: "form",
-          requestedSchema: {
-            type: "object",
-            properties: {
-              approved: { type: "boolean", title: "Approved" },
-            },
-          },
+          requestedSchema:
+            elicitationSchemaJson === undefined
+              ? {
+                  type: "object",
+                  properties: {
+                    approved: { type: "boolean", title: "Approved" },
+                  },
+                }
+              : yield* decodeElicitationSchema(elicitationSchemaJson).pipe(
+                  Effect.mapError(() =>
+                    AcpError.AcpRequestError.invalidParams("Invalid elicitation schema"),
+                  ),
+                ),
           ...(emitMcpToolApprovalElicitation
             ? { _meta: { codex_approval_kind: "mcp_tool_call" } }
             : {}),
