@@ -26,7 +26,8 @@ export interface BootstrapGrant {
   readonly subject: string;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
-  readonly expiresAt: DateTime.DateTime;
+  /** Null for a grant that lives as long as the server process. */
+  readonly expiresAt: DateTime.DateTime | null;
 }
 
 export class UnknownBootstrapCredentialError extends Schema.TaggedError<UnknownBootstrapCredentialError>()(
@@ -237,22 +238,12 @@ type ConsumeResult =
     };
 
 const DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES = Duration.minutes(5);
-// The desktop-bootstrap grant rides on a trusted IPC channel (fd3 or
-// stdin) at backend launch, so it doesn't have to be short-lived the
-// way a user-facing pairing link does. Letting it live for the
-// lifetime of the backend process (24h is more than long enough for
-// practical desktop use, and well under "forever" in case the seed
-// gets logged anywhere by accident) means a page reload past the 5-min
-// window can still recover by re-bootstrapping rather than locking
-// the user out of the backend.
-const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
 // A dev server's startup token is read off a log by whoever (or whatever) is
 // driving the session, often minutes later — after a `node --watch` restart, a
 // detour into another task, or a hand-off to the person actually doing the
 // testing. Five minutes turns that into a restart-the-server loop for no
 // security benefit: the token only unlocks a local dev backend, and its holder
-// could read the log anyway. Same reasoning (and duration) as the desktop
-// bootstrap grant above. Only applies when a dev URL is configured; user-issued
+// could read the log anyway. Only applies when a dev URL is configured; user-issued
 // pairing links and real servers keep the 5-minute default.
 const DEV_STARTUP_TTL_HOURS = Duration.hours(24);
 const PAIRING_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -310,14 +301,16 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.asVoid);
 
   if (config.desktopBootstrapToken) {
-    const now = yield* DateTime.now;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
       scopes: AuthAdministrativeScopes,
       subject: "desktop-bootstrap",
-      expiresAt: DateTime.add(now, {
-        milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
-      }),
+      // The grant rides on a trusted IPC channel (fd3 or stdin) at backend
+      // launch and lives as long as this process. The desktop hands the
+      // renderer one token for its whole lifetime, so an expiry would leave a
+      // running desktop holding a dead credential that it re-presents on
+      // every topology poll.
+      expiresAt: null,
       // Unbounded uses so the renderer can re-exchange the seed for a
       // fresh bearer session after a page reload (or after the prior
       // bearer expires). The seed itself stays inside the desktop
@@ -448,7 +441,7 @@ export const make = Effect.gen(function* () {
           }
 
           const next = new Map(current);
-          if (DateTime.isGreaterThanOrEqualTo(now, grant.expiresAt)) {
+          if (grant.expiresAt !== null && DateTime.isGreaterThanOrEqualTo(now, grant.expiresAt)) {
             next.delete(credential);
             return [
               {

@@ -168,21 +168,16 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
     ),
   );
 
-  it.effect("reports seeded desktop bootstrap credentials as expired after their ttl", () =>
+  it.effect("keeps the seeded desktop bootstrap credential valid for the life of the server", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
 
-      // The desktop-bootstrap grant lives for 24h. Within that window
-      // it stays reusable.
-      yield* TestClock.adjust(Duration.hours(12));
-      const stillValid = yield* bootstrapCredentials.consume("desktop-bootstrap-token");
-      expect(stillValid.method).toBe("desktop-bootstrap");
+      // A desktop left running for days keeps the token it was launched
+      // with, and the renderer re-exchanges it on every topology poll.
+      yield* TestClock.adjust(Duration.days(30));
+      const grant = yield* bootstrapCredentials.consume("desktop-bootstrap-token");
 
-      yield* TestClock.adjust(Duration.hours(13));
-      const expired = yield* Effect.flip(bootstrapCredentials.consume("desktop-bootstrap-token"));
-
-      expect(expired._tag).toBe("ExpiredBootstrapCredentialError");
-      expect(expired.message).toContain("Bootstrap credential expired");
+      expect(grant.method).toBe("desktop-bootstrap");
     }).pipe(
       Effect.provide(
         Layer.merge(
