@@ -136,6 +136,7 @@ it.effect("knows which paths are Home's folder or inside it", () =>
       const home = path.resolve(baseDir, "home");
       assert.isTrue(yield* folders.isInHomeFolder(home));
       assert.isTrue(yield* folders.isInHomeFolder(path.join(home, "notes")));
+      assert.isTrue(yield* folders.isInHomeFolder(path.join(home, "..notes")));
       assert.isFalse(yield* folders.isInHomeFolder(`${home}work`));
       assert.isFalse(yield* folders.isInHomeFolder(baseDir));
     }),

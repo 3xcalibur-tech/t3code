@@ -644,7 +644,9 @@ const make = Effect.gen(function* () {
     isInHomeFolder: (candidate) =>
       Effect.sync(() => {
         const relative = path.relative(path.resolve(homeFolder), path.resolve(candidate));
-        return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+        // Only a leading ".." segment leaves the folder; "..notes" is a name inside it.
+        const leaves = relative === ".." || relative.startsWith(`..${path.sep}`);
+        return !leaves && !path.isAbsolute(relative);
       }),
     ensureHomeProject,
   });
