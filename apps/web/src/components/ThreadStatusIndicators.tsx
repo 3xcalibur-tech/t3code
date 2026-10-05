@@ -9,13 +9,14 @@ import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull
 import {
   resolveEnvironmentMachineKind,
   type EnvironmentId,
+  type ScopedThreadRef,
   type ThreadLinkedPullRequest,
   type ThreadPullRequestLink,
   type VcsStatusResult,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { FolderGit2Icon, TerminalIcon } from "lucide-react";
-import { useCallback, useMemo } from "react";
+import { EyeIcon, EyeOffIcon, FolderGit2Icon, TerminalIcon } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -34,6 +35,8 @@ import { parseChangeRequestUrl } from "../lib/openPullRequestLink";
 import { useEnvironmentQuery } from "../state/query";
 import { linkedPullRequestDetailAtom, useSharedPullRequestSummary } from "../state/pullRequests";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
+import { threadEnvironment } from "../state/threads";
+import { useAtomCommand } from "../state/use-atom-command";
 import { vcsEnvironment } from "../state/vcs";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
@@ -47,6 +50,7 @@ import {
 
 import type { SidebarThreadSummary } from "../types";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
+import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { pullRequestListLines } from "./pullRequest/pullRequestListLines";
 import {
@@ -218,6 +222,7 @@ export function resolveThreadPullRequestBadgePresentation({
  */
 export function ThreadPullRequestBadgeControl({
   render,
+  threadRef,
   badge,
   pullRequests,
   number,
@@ -227,6 +232,7 @@ export function ThreadPullRequestBadgeControl({
   onOpenPullRequest,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
+  threadRef: ScopedThreadRef;
   badge: ThreadPullRequestBadge | null;
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   number?: number | undefined;
@@ -240,6 +246,7 @@ export function ThreadPullRequestBadgeControl({
   return (
     <PullRequestBadge
       render={render}
+      threadRef={threadRef}
       presentation={presentation}
       opensList={badge !== null && (badge.kind === "stack" || badge.others > 0)}
       url={url}
@@ -254,6 +261,7 @@ export function ThreadPullRequestBadgeControl({
 
 function PullRequestBadge({
   render,
+  threadRef,
   presentation,
   opensList,
   url,
@@ -264,6 +272,7 @@ function PullRequestBadge({
   onOpenPullRequest,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
+  threadRef: ScopedThreadRef;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
   opensList: boolean;
   url: string | undefined;
@@ -317,6 +326,7 @@ function PullRequestBadge({
         {visibleThreadPullRequests(pullRequests).length > 0 ? (
           <ThreadPullRequestsMiniList
             pullRequests={pullRequests}
+            threadRef={threadRef}
             onOpenPullRequest={onOpenPullRequest}
           />
         ) : number !== undefined && url !== undefined ? (
@@ -337,13 +347,16 @@ function PullRequestBadge({
 
 /**
  * A miniature of the pull-requests panel for the thread tooltip: same order, same indentation,
- * so the hover answers "what is in here" without opening the surface.
+ * so the hover answers "what is in here" without opening the surface. Watched pull requests
+ * show an eye. With `threadRef`, the popup is interactive and the eye stops the watch.
  */
 export function ThreadPullRequestsMiniList({
   pullRequests,
+  threadRef,
   onOpenPullRequest,
 }: {
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
+  threadRef?: ScopedThreadRef;
   onOpenPullRequest?: (event: MouseEvent<HTMLAnchorElement>, url: string) => void;
 }) {
   const lines = useMemo(
@@ -360,6 +373,9 @@ export function ThreadPullRequestsMiniList({
           snapshot === null
             ? null
             : resolvePullRequestState({ state: snapshot.state, isDraft: snapshot.isDraft });
+        // Same rule as the panel: a watch only matters while the pull request is open.
+        const watching =
+          line.link.watch !== undefined && (snapshot === null || snapshot.state === "open");
         return (
           <ThreadPullRequestMiniListItem
             key={`${line.link.host}/${line.link.repository}#${line.link.number}`}
@@ -369,6 +385,17 @@ export function ThreadPullRequestsMiniList({
             presentation={presentation}
             depth={line.depth}
             onOpenPullRequest={onOpenPullRequest}
+            action={
+              !watching ? null : threadRef ? (
+                <StopWatchingButton threadRef={threadRef} link={line.link} />
+              ) : (
+                <EyeIcon
+                  role="img"
+                  aria-label="Watching"
+                  className="size-3 shrink-0 text-foreground/75"
+                />
+              )
+            }
           >
             {line.stack ? (
               <span className="ml-auto shrink-0 pl-1 text-3xs">
@@ -389,6 +416,7 @@ function ThreadPullRequestMiniListItem({
   presentation,
   depth = 0,
   onOpenPullRequest,
+  action,
   children,
 }: {
   number: number;
@@ -397,6 +425,8 @@ function ThreadPullRequestMiniListItem({
   presentation: Pick<ThreadPullRequestBadgePresentation, "Icon" | "toneClassName"> | null;
   depth?: number;
   onOpenPullRequest?: ((event: MouseEvent<HTMLAnchorElement>, url: string) => void) | undefined;
+  /** Trails the row, outside the link so it can be its own control. */
+  action?: ReactNode;
   children?: ReactNode;
 }) {
   const Icon = presentation?.Icon ?? PullRequestGlyph.pullRequest;
@@ -412,22 +442,70 @@ function ThreadPullRequestMiniListItem({
     </>
   );
   return (
-    <li style={{ paddingLeft: `${Math.min(depth, 3) * 0.75}rem` }}>
+    <li
+      className="flex min-w-0 items-center gap-1"
+      style={{ paddingLeft: `${Math.min(depth, 3) * 0.75}rem` }}
+    >
       {onOpenPullRequest ? (
         <a
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex min-w-0 items-center gap-2 rounded-sm px-1 py-1 hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-1 py-1 hover:bg-accent focus-visible:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => onOpenPullRequest(event, url)}
         >
           {content}
         </a>
       ) : (
-        <div className="flex min-w-0 items-center gap-2">{content}</div>
+        <div className="flex min-w-0 flex-1 items-center gap-2">{content}</div>
       )}
+      {action}
     </li>
+  );
+}
+
+/**
+ * The eye on a watched pull request in an interactive popup. Hover shows the crossed eye, and a
+ * click stops the watch; the row loses the eye once the server records it.
+ */
+function StopWatchingButton({
+  threadRef,
+  link,
+}: {
+  threadRef: ScopedThreadRef;
+  link: ThreadPullRequestLink;
+}) {
+  const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
+  const [stopping, setStopping] = useState(false);
+  return (
+    <Button
+      variant="ghost"
+      size="icon-micro"
+      aria-label={`Stop watching #${link.number}`}
+      disabled={stopping}
+      className="group/watch shrink-0"
+      // The popup portals out, but React still bubbles to the sidebar row behind it.
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setStopping(true);
+        void watch({
+          environmentId: threadRef.environmentId,
+          input: {
+            threadId: threadRef.threadId,
+            host: link.host,
+            repository: link.repository,
+            number: link.number,
+            watching: false,
+          },
+        }).finally(() => setStopping(false));
+      }}
+    >
+      <EyeIcon aria-hidden className="size-3 group-hover/watch:hidden" />
+      <EyeOffIcon aria-hidden className="hidden size-3 group-hover/watch:block" />
+    </Button>
   );
 }
 
