@@ -150,6 +150,12 @@ export class PullRequestNotOpenError extends Schema.TaggedError<PullRequestNotOp
   }
 }
 
+/** The text is a field, not a getter, so it reaches the agent in the encoded tool result. */
+export class PullRequestSubagentWatchError extends Schema.TaggedError<PullRequestSubagentWatchError>()(
+  "PullRequestSubagentWatchError",
+  { message: Schema.String },
+) {}
+
 export class PullRequestListFailedError extends Schema.TaggedError<PullRequestListFailedError>()(
   "PullRequestListFailedError",
   { cause: Schema.Defect() },
@@ -172,6 +178,7 @@ export const PullRequestToolError = Schema.Union([
   PullRequestListFailedError,
   PullRequestWatchFailedError,
   PullRequestNotOpenError,
+  PullRequestSubagentWatchError,
 ]);
 export type PullRequestToolError = typeof PullRequestToolError.Type;
 

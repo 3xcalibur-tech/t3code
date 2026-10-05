@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
@@ -24,7 +25,11 @@ import {
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { listThreadPullRequests, PullRequestsToolkitHandlersLive } from "./handlers.ts";
-import { PullRequestLinkFailedError, PullRequestsToolkit } from "./tools.ts";
+import {
+  PullRequestLinkFailedError,
+  PullRequestSubagentWatchError,
+  PullRequestsToolkit,
+} from "./tools.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const THREAD_ID = ThreadId.make("thread-1");
@@ -275,6 +280,36 @@ describe("pull request toolkit handlers", () => {
       ).toMatchObject({ wasWatching: true });
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         { type: "thread.pull-request.watch", number: 3, watching: false },
+      ]);
+    }),
+  );
+
+  it.effect("tells a subagent it cannot watch, and still lets it unwatch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        thread: {
+          ...makeThread([]),
+          lineage: {
+            rootThreadId: ThreadId.make("thread:parent"),
+            parentThreadId: ThreadId.make("thread:parent"),
+            relationshipToParent: "subagent",
+          },
+        },
+      });
+      const error = yield* harness
+        .call("watch_pull_request", { repository: "t3tools/t3code", number: 9 })
+        .pipe(Effect.flip);
+      const isRefusal = Schema.is(PullRequestSubagentWatchError);
+      expect(isRefusal(error)).toBe(true);
+      if (!isRefusal(error)) return;
+      // The agent reads the encoded failure, so the reason must survive encoding.
+      expect(yield* Schema.encodeEffect(PullRequestSubagentWatchError)(error)).toMatchObject({
+        _tag: "PullRequestSubagentWatchError",
+        message: expect.stringContaining("the thread that delegated you can watch it"),
+      });
+      yield* harness.call("unwatch_pull_request", { repository: "t3tools/t3code", number: 9 });
+      expect(yield* Ref.get(harness.commands)).toMatchObject([
+        { type: "thread.pull-request.watch", number: 9, watching: false },
       ]);
     }),
   );

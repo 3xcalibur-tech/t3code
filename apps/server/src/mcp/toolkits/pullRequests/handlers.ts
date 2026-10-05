@@ -36,6 +36,7 @@ import {
   PullRequestUnlinkFailedError,
   PullRequestListFailedError,
   PullRequestNotOpenError,
+  PullRequestSubagentWatchError,
   type PullRequestTargetInput,
   PullRequestWatchFailedError,
   PullRequestThreadNotFoundError,
@@ -267,6 +268,13 @@ const make = Effect.gen(function* () {
     watching: boolean,
   ) {
     const thread = yield* requireWritableThread(PullRequestWatchFailedError, input.threadId);
+    // The orchestrator refuses too; this says why in words the agent sees.
+    if (watching && thread.lineage.relationshipToParent === "subagent") {
+      return yield* new PullRequestSubagentWatchError({
+        message:
+          "Subagents cannot watch pull requests. Include the pull request in your result and end your turn; the thread that delegated you can watch it.",
+      });
+    }
     const project = yield* projectOf(thread, PullRequestWatchFailedError);
     const target = yield* resolveTarget(input, project);
     const watchedLink = (shell: OrchestrationV2ThreadShell) =>

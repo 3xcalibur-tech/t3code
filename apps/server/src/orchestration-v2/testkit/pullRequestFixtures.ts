@@ -28,6 +28,7 @@ export interface PullRequestTestThread {
   readonly archivedAt: string | null;
   readonly settledOverride: OrchestrationV2ThreadShell["settledOverride"];
   readonly settledAt: string | null;
+  readonly lineage?: OrchestrationV2ThreadShell["lineage"];
 }
 
 export function v2PullRequestThread(thread: PullRequestTestThread): OrchestrationV2ThreadShell {
@@ -47,7 +48,11 @@ export function v2PullRequestThread(thread: PullRequestTestThread): Orchestratio
     createdBy: "user",
     creationSource: "web",
     activeProviderThreadId: null,
-    lineage: { rootThreadId: thread.id, parentThreadId: null, relationshipToParent: null },
+    lineage: thread.lineage ?? {
+      rootThreadId: thread.id,
+      parentThreadId: null,
+      relationshipToParent: null,
+    },
     forkedFrom: null,
     latestRunId: null,
     activeRunId: null,
