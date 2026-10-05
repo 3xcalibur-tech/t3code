@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import type * as HttpClientResponse from "effect/http/HttpClientResponse";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
@@ -37,6 +38,8 @@ const DROPPED_REQUEST_HEADERS = new Set([
 const DROPPED_REQUEST_HEADER_PREFIXES = ["proxy-", "cf-", "x-forwarded-"];
 // Cloudflare answers 530 when the tunnel for a hostname has no connected origin.
 const TUNNEL_OFFLINE_STATUS = 530;
+/** The environment answers with a small JSON status; anything past this is cut off. */
+const MAX_RESPONSE_BYTES = 64 * 1024;
 
 export const isRelayHookPath = (url: string): boolean => url.startsWith(RELAY_HOOK_PATH_PREFIX);
 
@@ -93,6 +96,7 @@ export class HookForwarder extends Context.Service<
 >()("t3code-relay/hooks/HookForwarder") {}
 
 class HookBodyTooLarge extends Schema.TaggedError<HookBodyTooLarge>()("HookBodyTooLarge", {}) {}
+class ResponseTooLarge extends Schema.TaggedError<ResponseTooLarge>()("ResponseTooLarge", {}) {}
 
 const errorResponse = (status: number, error: string, headers?: Record<string, string>) =>
   HttpServerResponse.jsonUnsafe({ error }, { status, ...(headers ? { headers } : {}) });
@@ -152,18 +156,20 @@ function forwardedHeaders(headers: Readonly<Record<string, string>>): Record<str
 const hasNoBody = (request: HttpServerRequest.HttpServerRequest) =>
   request.source instanceof Request && request.source.body === null;
 
-const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
+/** Collects a byte stream, failing with `tooLarge` once it passes `maxBytes` rather than buffering it all. */
+const collectCapped = <E, R, E2>(
+  stream: Stream.Stream<Uint8Array, E, R>,
+  maxBytes: number,
+  tooLarge: () => E2,
+) =>
   Effect.suspend(() => {
-    if (hasNoBody(request)) {
-      return Effect.succeed(new Uint8Array(0));
-    }
     const chunks: Array<Uint8Array> = [];
     let total = 0;
-    return request.stream.pipe(
+    return stream.pipe(
       Stream.runForEach((chunk) => {
         total += chunk.length;
-        if (total > RELAY_HOOK_MAX_BODY_BYTES) {
-          return Effect.fail(new HookBodyTooLarge());
+        if (total > maxBytes) {
+          return Effect.fail(tooLarge());
         }
         chunks.push(chunk);
         return Effect.void;
@@ -179,6 +185,20 @@ const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
       }),
     );
   });
+
+const readCappedBody = (request: HttpServerRequest.HttpServerRequest) =>
+  hasNoBody(request)
+    ? Effect.succeed(new Uint8Array(0))
+    : collectCapped(request.stream, RELAY_HOOK_MAX_BODY_BYTES, () => new HookBodyTooLarge());
+
+const readCappedResponse = (response: HttpClientResponse.HttpClientResponse) =>
+  collectCapped(response.stream, MAX_RESPONSE_BYTES, () => new ResponseTooLarge()).pipe(
+    // A response without a body, such as a redirect, has no stream at all.
+    Effect.catchIf(
+      (error) => error._tag === "HttpClientError" && error.reason._tag === "EmptyBodyError",
+      () => Effect.succeed(new Uint8Array(0)),
+    ),
+  );
 
 const make = Effect.gen(function* () {
   const links = yield* EnvironmentLinks.EnvironmentLinks;
@@ -273,11 +293,11 @@ const make = Effect.gen(function* () {
 
     const upstream = yield* httpClient.execute(upstreamRequest).pipe(
       Effect.flatMap((response) =>
-        response.arrayBuffer.pipe(
-          Effect.map((bytes) => ({
+        readCappedResponse(response).pipe(
+          Effect.map((body) => ({
             status: response.status,
             contentType: response.headers["content-type"],
-            body: new Uint8Array(bytes),
+            body,
           })),
         ),
       ),

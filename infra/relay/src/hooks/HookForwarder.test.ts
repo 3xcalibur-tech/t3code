@@ -323,6 +323,23 @@ describe("HookForwarder", () => {
     }),
   );
 
+  it.effect("does not relay an upstream response larger than the cap", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        execute: (request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(new Uint8Array(64 * 1024 + 1), { status: 200 }),
+            ),
+          ),
+      });
+      const response = yield* harness.send(new Request(hookUrl(), { method: "POST" }));
+      expect(response.status).toBe(503);
+      expect(yield* readJson(response)).toEqual({ error: "environment_unavailable" });
+    }),
+  );
+
   it.effect("maps an upstream timeout to 504", () =>
     Effect.gen(function* () {
       // Advance the clock only once the request is waiting on the environment;
