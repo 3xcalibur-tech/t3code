@@ -42,6 +42,7 @@ import {
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { requestConfirmDialog } from "../../confirmDialog";
+import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import {
   useEnvironment,
@@ -62,7 +63,6 @@ import {
   scheduleFromDraft,
   scheduledTaskDefaultModel,
   taskToDraft,
-  webhookUrl,
   type DraftState,
   type ScheduleMode,
   type WorkspaceMode,
@@ -671,7 +671,7 @@ function WebhookEndpointField({
   if (!task || !endpoint) {
     return <p className="text-sm text-muted-foreground">The URL appears after you save.</p>;
   }
-  const url = webhookUrl(endpoint, httpBaseUrl);
+  const { address: url, copyable, note } = webhookAddress(endpoint, httpBaseUrl);
   const rotateUrl = async () => {
     const confirmed =
       (await requestConfirmDialog("Rotate this webhook URL?\nThe current URL stops working.", {
@@ -708,7 +708,7 @@ function WebhookEndpointField({
           variant="outline"
           type="button"
           // A bare path is not a URL a sender can call.
-          disabled={!url.startsWith("http")}
+          disabled={!copyable}
           onClick={() => copyToClipboard(url, undefined)}
         >
           <CopyIcon />
@@ -724,12 +724,7 @@ function WebhookEndpointField({
           Rotate
         </Button>
       </div>
-      {endpoint.url === null ? (
-        <p className="text-xs text-muted-foreground">
-          Link this environment to T3 Connect for a public URL. This address works wherever the
-          environment is reachable.
-        </p>
-      ) : null}
+      {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
     </div>
   );
 }
