@@ -422,7 +422,11 @@ export function QueuedRunsControl({
                                 size="icon-xs"
                                 variant="ghost-muted"
                                 aria-label="Edit queued message"
-                                disabled={item.runId === null || busyRunId !== null}
+                                disabled={
+                                  item.runId === null ||
+                                  busyRunId !== null ||
+                                  props.editingRunId !== null
+                                }
                                 onClick={() => {
                                   if (item.runId !== null && item.messageId !== null) {
                                     props.onEditQueuedRun({
@@ -439,7 +443,9 @@ export function QueuedRunsControl({
                             <PencilIcon />
                           </TooltipTrigger>
                           <TooltipPopup>
-                            {`Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
+                            {props.editingRunId !== null
+                              ? "Save or cancel the current edit first"
+                              : `Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
                         <Tooltip>
