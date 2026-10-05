@@ -4,7 +4,7 @@ import { Editor } from "@tiptap/core";
 import { TaskList } from "@tiptap/extension-task-list";
 import { TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
   backspaceAcrossList,
@@ -20,6 +20,13 @@ import {
   splitOrLiftListItem,
 } from "./composer-rich-text-doc";
 
+// ProseMirror's DOM observer can flush on a timer after a test ends, which
+// throws once jsdom is torn down, so every editor is destroyed after its test.
+const editors: Editor[] = [];
+afterEach(() => {
+  for (const editor of editors.splice(0)) editor.destroy();
+});
+
 /**
  * Splits the last item of `value` the way Shift+Enter does, types `b`, and
  * returns the stored Markdown. Tiptap carries every attribute left at the
@@ -27,7 +34,7 @@ import {
  * top, so the new item must keep the source marker, indent and spacing.
  */
 function makeEditor(value: string) {
-  return new Editor({
+  const editor = new Editor({
     extensions: [
       StarterKit.configure({
         bulletList: false,
@@ -48,6 +55,8 @@ function makeEditor(value: string) {
     ],
     content: buildDocJson(value, (name) => ({ label: name, description: null })),
   });
+  editors.push(editor);
+  return editor;
 }
 
 function splitLastItem(value: string, type: "listItem" | "taskItem", overrides: object) {
