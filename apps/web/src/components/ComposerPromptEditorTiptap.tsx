@@ -59,6 +59,7 @@ import {
   pmToFlat,
   serializeEditorDoc,
   serializeSelection,
+  splitOrLiftListItem,
   type SkillMeta,
 } from "~/composer-rich-text-doc";
 import {
@@ -68,7 +69,6 @@ import {
   indentedNewlineInCodeBlock,
   selectionInOneCodeBlock,
 } from "~/composer-code-block";
-import { nextOrderedMarkerText } from "~/composer-list-continuation";
 import {
   COMPOSER_UNDO_GROUP_DELAY,
   type ComposerChangeKind,
@@ -1251,13 +1251,7 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
               return true;
             }
             event.preventDefault();
-            if (
-              isTaskItem &&
-              instance &&
-              (instance.commands.splitListItem("taskItem", { checked: false }) ||
-                (view.state.selection.$from.parent.content.size === 0 &&
-                  instance.commands.liftListItem("taskItem")))
-            ) {
+            if ((isTaskItem || isListItem) && instance && splitOrLiftListItem(instance)) {
               return true;
             }
             if (
@@ -1268,23 +1262,6 @@ function ComposerPromptEditorTiptapInner(props: ComposerPromptEditorProps) {
               instance.commands.lift("blockquote")
             ) {
               return true;
-            }
-            if (isListItem && instance) {
-              const item = view.state.selection.$from.node(-1);
-              const marker = typeof item?.attrs.marker === "string" ? item.attrs.marker : "-";
-              const isOrdered = /^\d+[.)]$/.test(marker);
-              if (
-                instance.commands.splitListItem(
-                  "listItem",
-                  isOrdered
-                    ? { marker: nextOrderedMarkerText(marker), space: " " }
-                    : { space: " " },
-                ) ||
-                (view.state.selection.$from.parent.content.size === 0 &&
-                  instance.commands.liftListItem("listItem"))
-              ) {
-                return true;
-              }
             }
             // Split the paragraph so a single newline visibly advances the caret.
             return splitBlockKeepMarks(view.state, (tr) => {

@@ -4,12 +4,14 @@ import { Blockquote } from "@tiptap/extension-blockquote";
 import { CodeBlock } from "@tiptap/extension-code-block";
 import { Heading } from "@tiptap/extension-heading";
 import { HorizontalRule } from "@tiptap/extension-horizontal-rule";
-import { mergeAttributes } from "@tiptap/core";
+import { type Command, type Editor, mergeAttributes } from "@tiptap/core";
 import { BulletList, ListItem, OrderedList } from "@tiptap/extension-list";
 import { TaskItem } from "@tiptap/extension-task-item";
 import { TaskList } from "@tiptap/extension-task-list";
+import type { Transaction } from "@tiptap/pm/state";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
+import { nextOrderedMarkerText } from "~/composer-list-continuation";
 import { parseInlineMarkdown, RICH_TEXT_DELIMITERS, type RichTextMark } from "~/composer-rich-text";
 import { collectInlineContextIds } from "~/lib/composerContextReferences";
 
@@ -57,17 +59,13 @@ const TIPTAP_TO_MARK: Record<string, RichTextMark> = {
 export const ComposerCodeExtension = Code.extend({ excludes: "code" });
 
 /**
- * Task list items keep their exact source indent in an attribute so nesting
- * round-trips byte-identically. Checkbox case (`[X]`) normalizes to `[x]` —
- * the same fixed-point deal as `__bold__` becoming `**bold**`.
- */
-/**
  * Tiptap's block extensions each bind a chord that turns the current block
  * into their node (Mod-Shift-8 for a list, Mod-Alt-c for a fence, and so on).
  * The composer does not offer them, and they are not harmless: run inside a
  * quote they nest a block the quote serializer cannot write, and the text in
- * it drops out of the stored draft. `keep` names the keys the composer does
- * rely on, such as Backspace and the arrows at a block's edge; the rest go.
+ * it drops out of the stored draft. `drop` names the chords to remove; the
+ * keys the composer relies on, such as Backspace and the arrows at a block's
+ * edge, stay.
  */
 function withoutBlockChords<Shortcuts extends Record<string, unknown>>(
   shortcuts: Shortcuts | undefined,
@@ -93,6 +91,11 @@ export const ComposerTaskListExtension = TaskList.extend({
  */
 const LIST_NESTING_KEYS = ["Tab", "Shift-Tab"];
 
+/**
+ * Task list items keep their exact source indent in an attribute so nesting
+ * round-trips byte-identically. Checkbox case (`[X]`) normalizes to `[x]` —
+ * the same fixed-point deal as `__bold__` becoming `**bold**`.
+ */
 export const ComposerTaskItemExtension = TaskItem.extend({
   addAttributes() {
     return {
@@ -879,6 +882,57 @@ function appendInlineRuns(
 
 const LIST_NODE_NAMES = new Set(["taskList", "bulletList", "orderedList"]);
 const LIST_ITEM_NODE_NAMES = new Set(["taskItem", "listItem"]);
+
+/**
+ * Gives the list item at the caret the indent and marker of the sibling it
+ * follows, or of the one after it when it is first. Tiptap moves items between
+ * lists without touching these attributes, so without this the stored draft
+ * keeps an outdented item at its old depth, and the next rebuild nests it again.
+ */
+function alignListItemWithSiblings(tr: Transaction, itemType: string): void {
+  const $pos = tr.selection.$from;
+  // A lift out of the list leaves the caret in a paragraph, possibly inside
+  // an item of another kind, which did not move.
+  if ($pos.depth < 3 || $pos.node(-1).type.name !== itemType) return;
+  const item = $pos.node(-1);
+  const list = $pos.node(-2);
+  const index = $pos.index(-2);
+  const sibling =
+    index > 0 ? list.child(index - 1) : index + 1 < list.childCount ? list.child(index + 1) : null;
+  if (!sibling) return;
+  const attrs: Record<string, unknown> = { ...item.attrs, indent: sibling.attrs.indent };
+  if (item.type.name === "taskItem") {
+    attrs.markerSpace = sibling.attrs.markerSpace;
+  } else {
+    const marker = typeof sibling.attrs.marker === "string" ? sibling.attrs.marker : "-";
+    attrs.marker = index > 0 && /^\d+[.)]$/.test(marker) ? nextOrderedMarkerText(marker) : marker;
+  }
+  tr.setNodeMarkup($pos.before(-1), undefined, attrs);
+}
+
+/**
+ * Shift+Enter in a list or task item: split it, or on an empty item leave one
+ * level of nesting. Either way the item at the caret ends up written with the
+ * indent and marker of its new siblings.
+ */
+export function splitOrLiftListItem(editor: Editor): boolean {
+  const $from = editor.state.selection.$from;
+  const itemType = $from.depth > 1 ? $from.node(-1).type.name : null;
+  if (itemType !== "listItem" && itemType !== "taskItem") return false;
+  const empty = $from.parent.content.size === 0;
+  // One transaction, so the split or lift and the realignment undo together.
+  const move: Command = ({ commands, tr }) => {
+    const moved =
+      commands.splitListItem(
+        itemType,
+        itemType === "taskItem" ? { checked: false } : { space: " " },
+      ) ||
+      (empty && commands.liftListItem(itemType));
+    if (moved) alignListItemWithSiblings(tr, itemType);
+    return moved;
+  };
+  return editor.can().command(move) && editor.chain().command(move).run();
+}
 
 /** The literal prefix an item serializes to. Empty items keep their exact spacing. */
 function listItemPrefix(item: ProseMirrorNode, empty: boolean): string {

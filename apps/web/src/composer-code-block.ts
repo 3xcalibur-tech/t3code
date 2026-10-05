@@ -40,18 +40,18 @@ export function indentLines(lines: ReadonlyArray<string>, direction: "in" | "out
   });
 }
 
-/**
- * Where the code block containing the selection starts, or null when the
- * selection is outside a fence or spans out of one. Both ends must sit in the
- * same block: a selection that reaches past the fence belongs to the document,
- * not to the code.
- */
 /** Whether every endpoint of the selection sits in the same code block. */
 export function selectionInOneCodeBlock(state: EditorState): boolean {
   const { $from, $to } = state.selection;
   return $from.parent.type.spec.code === true && $from.sameParent($to);
 }
 
+/**
+ * The code block containing the selection, or null when the selection is
+ * outside a fence or spans out of one. Both ends must sit in the same block: a
+ * selection that reaches past the fence belongs to the document, not to the
+ * code.
+ */
 function codeBlockRange(
   state: EditorState,
 ): { readonly from: number; readonly to: number; readonly text: string } | null {
