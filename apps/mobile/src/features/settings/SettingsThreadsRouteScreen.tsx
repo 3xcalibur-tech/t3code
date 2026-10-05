@@ -90,6 +90,7 @@ function AutoSettleSettingsRows() {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      enableHtmlRenders?: boolean;
     },
   ) => {
     if (writeInFlight.current) return;
@@ -186,6 +187,23 @@ function AutoSettleSettingsRows() {
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
           />
         </SettingsSection>
+      ) : null}
+      {!projectSelected ? (
+        <View className="gap-3">
+          <SettingsSection title="Agents">
+            <SettingsSwitchRow
+              icon="chart.bar.xaxis"
+              label="Visual replies (beta)"
+              value={uniformMobileSetting(displayTargets, "enableHtmlRenders")}
+              disabled={disabled}
+              onValueChange={(value) => writeToAll({ enableHtmlRenders: value })}
+            />
+          </SettingsSection>
+          <Text className="px-2 text-sm text-foreground-muted">
+            Let agents answer with charts, tables, and diagrams shown inline in the thread. Applies
+            when an agent session next starts.
+          </Text>
+        </View>
       ) : null}
       <SettingsSection title="Auto-settle">
         <SettingsSwitchRow

@@ -510,6 +510,7 @@ function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
   readonly deviceOverride?: boolean;
+  readonly enableHtmlRenders?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
 }) {
@@ -555,6 +556,9 @@ function runBrowserAccessScenario(input: {
           projectServiceLayer,
           serverSettingsLayer: ServerSettings.layerTest({
             enableAgentBrowserAccess: input.enableAgentBrowserAccess,
+            ...(input.enableHtmlRenders === undefined
+              ? {}
+              : { enableHtmlRenders: input.enableHtmlRenders }),
             projectSettingsOverrides: {
               [projectId]: {
                 enableAgentBrowserAccess: input.projectOverride,
@@ -3477,4 +3481,20 @@ it.effect(
       });
       assert.isFalse(denied?.capabilities?.has("device"));
     }),
+);
+
+it.effect("ProviderSessionManagerV2 grants HTML tools only when visual replies are on", () =>
+  Effect.gen(function* () {
+    const off = yield* runBrowserAccessScenario({
+      enableAgentBrowserAccess: true,
+      projectOverride: true,
+    });
+    assert.isFalse(off?.capabilities?.has("html"));
+    const on = yield* runBrowserAccessScenario({
+      enableAgentBrowserAccess: true,
+      projectOverride: true,
+      enableHtmlRenders: true,
+    });
+    assert.isTrue(on?.capabilities?.has("html"));
+  }),
 );

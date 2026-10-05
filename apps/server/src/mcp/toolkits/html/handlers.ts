@@ -19,15 +19,29 @@ const toFailure = (error: { readonly _tag: string; readonly message: string }) =
     message: error.message,
   });
 
+/**
+ * HTML pages are a beta the user turns on in Settings. Every MCP session lists
+ * these tools, so a session without the capability refuses the call and tells
+ * the agent to stop trying.
+ */
+const requireHtmlRenders = McpInvocationContext.McpInvocationContext.pipe(
+  Effect.filterOrFail(
+    (scope) => scope.capabilities.has("html"),
+    () =>
+      new OrchestratorMcpFailure({
+        code: "capability_denied",
+        message:
+          'HTML pages are off for this thread. Do not call html_preview or html_render again; answer in text. The user can turn on "Visual replies (beta)" in Settings; it applies when the agent session next starts.',
+      }),
+  ),
+);
+
 const handlers = {
   html_preview: (input) =>
     Effect.gen(function* () {
       // The headless browser runs on the host and can open local files, so
       // only agents T3 launched, which already work on this machine, get it.
-      yield* McpInvocationContext.requireThreadScope(
-        yield* McpInvocationContext.McpInvocationContext,
-        "html_preview",
-      );
+      yield* McpInvocationContext.requireThreadScope(yield* requireHtmlRenders, "html_preview");
       const htmlRender = yield* HtmlRender.HtmlRender;
       const { png, ...preview } = yield* htmlRender.preview(input).pipe(Effect.mapError(toFailure));
       return {
@@ -42,6 +56,7 @@ const handlers = {
     }),
   html_render: (input) =>
     Effect.gen(function* () {
+      yield* requireHtmlRenders;
       // The page is stored in the calling thread, so it needs that thread's
       // live run, like any other write.
       const { scope } = yield* readMutationCaller();

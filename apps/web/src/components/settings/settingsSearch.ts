@@ -308,6 +308,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads inbox sidebar shelf"],
   },
   {
+    id: "visual-replies",
+    title: "Visual replies (beta)",
+    to: "/settings/general",
+    searchTerms: ["html pages charts tables diagrams render inline agent"],
+  },
+  {
     id: "auto-settle-inactive-threads",
     title: "Auto-settle inactive threads",
     to: "/settings/general",

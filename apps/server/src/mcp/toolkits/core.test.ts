@@ -183,15 +183,24 @@ it.effect("returns a bounded public failure without serializing storage causes",
 it.effect("returns an HTML render reference that Codex and Claude tool rows both carry", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const result = yield* server
-      .callTool({
-        name: "html_render",
-        arguments: { html: "<p>Revenue</p>", title: "Revenue", height: 240 },
-      })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
+    const render = (capabilities: ReadonlySet<McpInvocationContext.McpCapability>) =>
+      server
+        .callTool({
+          name: "html_render",
+          arguments: { html: "<p>Revenue</p>", title: "Revenue", height: 240 },
+        })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            capabilities,
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    // Visual replies are a beta the user turns on.
+    expect(declaredFailure(yield* render(scope.capabilities))).toMatchObject({
+      code: "capability_denied",
+    });
+    const result = yield* render(new Set(["orchestration", "html"]));
     const reference = htmlRenderFromToolItem({
       toolName: "t3-code.html_render",
       output: result.structuredContent,

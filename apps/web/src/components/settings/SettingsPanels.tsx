@@ -573,6 +573,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
         ? ["Working section"]
         : []),
+      ...(settings.enableHtmlRenders !== DEFAULT_UNIFIED_SETTINGS.enableHtmlRenders
+        ? ["Visual replies"]
+        : []),
       ...(settings.sidebarAutoSettleAfterDays !==
       DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
         ? ["Auto-settle inactive threads"]
@@ -709,6 +712,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarProjectSortOrder,
       settings.sidebarWorkingShelfEnabled,
+      settings.enableHtmlRenders,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
       settings.timestampFormat,
@@ -809,6 +813,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      enableHtmlRenders: DEFAULT_UNIFIED_SETTINGS.enableHtmlRenders,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
@@ -2386,6 +2391,20 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label="Working section (beta)"
+            />
+          }
+        />
+        <SettingsRow
+          serverScoped
+          {...searchableSetting("visual-replies")}
+          description="Let agents answer with charts, tables, and diagrams shown inline in the thread. Applies when an agent session next starts."
+          settingKeys={["enableHtmlRenders"]}
+          control={
+            <ScopedSwitch
+              settingKeys={["enableHtmlRenders"]}
+              checked={settings.enableHtmlRenders}
+              onCheckedChange={(checked) => updateSettings({ enableHtmlRenders: Boolean(checked) })}
+              aria-label="Visual replies (beta)"
             />
           }
         />
