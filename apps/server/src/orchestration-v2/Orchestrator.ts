@@ -3669,6 +3669,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
+    readonly delegatedTaskParentRunId?: OrchestrationV2Run["delegatedTaskParentRunId"];
     readonly forceRestart: boolean;
   }) =>
     Effect.gen(function* () {
@@ -4192,6 +4193,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const restartedRun: OrchestrationV2Run = {
         ...targetRun,
+        ...(input.delegatedTaskParentRunId === undefined
+          ? {}
+          : { delegatedTaskParentRunId: input.delegatedTaskParentRunId }),
         providerInstanceId: input.modelSelection.instanceId,
         modelSelection: input.modelSelection,
         providerThreadId: restartProviderThread.id,
@@ -4839,6 +4843,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : (projection.runs.find((run) => run.id === dispatchMode.targetRunId)
                   ?.modelSelection ?? modelSelection),
           delegatedCompletion,
+          delegatedTaskParentRunId,
           targetRunId: dispatchMode.targetRunId,
           messageId: command.messageId,
           text: dispatchText,

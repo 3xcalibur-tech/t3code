@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  RunId,
   ThreadId,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
@@ -422,7 +423,10 @@ const composerSelection = {
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
 
-const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (name: string) {
+const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function* (
+  name: string,
+  canRestart = false,
+) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
   const started: ProviderAdapterV2TurnInput[] = [];
@@ -432,7 +436,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     turns: {
       ...CodexProviderCapabilitiesV2.turns,
       supportsActiveSteering: true,
-      supportsSteeringByInterruptRestart: false,
+      supportsSteeringByInterruptRestart: canRestart,
     },
   };
   const adapter: ProviderAdapterV2Shape = {
@@ -506,7 +510,34 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
             Effect.sync(() => {
               steered.push(turn.message.text);
             }),
-          interruptTurn: () => Effect.void,
+          interruptTurn: ({ providerTurnId }) =>
+            !canRestart
+              ? Effect.void
+              : Effect.gen(function* () {
+                  const turn = started.find(
+                    (turn) =>
+                      ProviderTurnId.make(`provider-turn:${turn.attemptId}`) === providerTurnId,
+                  )!;
+                  yield* Queue.offer(events, {
+                    type: "provider_turn.updated",
+                    driver,
+                    providerTurn: {
+                      id: providerTurnId,
+                      providerThreadId: turn.providerThread.id,
+                      nodeId: turn.rootNodeId,
+                      runAttemptId: turn.attemptId,
+                      nativeTurnRef: {
+                        driver,
+                        nativeId: `native:${turn.attemptId}`,
+                        strength: "strong",
+                      },
+                      ordinal: turn.providerTurnOrdinal,
+                      status: "interrupted",
+                      startedAt: now,
+                      completedAt: yield* DateTime.now,
+                    },
+                  });
+                }),
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => Effect.die("unused"),
           rollbackThread: () => Effect.die("unused"),
@@ -564,6 +595,240 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   });
   return { events, started, steered, layer, startFirstTurn };
 });
+
+it.effect.each([false, true])(
+  "a restarted child returns its result to its owning cohort, original disposed %s",
+  (disposed) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { events, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          "steering-child-cohort",
+          true,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const sink = yield* EventSink.EventSinkV2;
+          const childId = yield* startFirstTurn;
+          const child = yield* orchestrator.getThreadProjection(childId);
+          const childRun = child.runs[0]!;
+          const parentId = ThreadId.make("thread:steering-child-cohort-parent");
+          const originalOwnerId = RunId.make("run:steering-child-cohort-original");
+          const latestOwnerId = RunId.make("run:steering-child-cohort-latest");
+          const expectedOwnerId = disposed ? latestOwnerId : originalOwnerId;
+          const taskId = NodeId.make("task:steering-child-cohort");
+          const now = yield* DateTime.now;
+          const parentRun = {
+            ...childRun,
+            threadId: parentId,
+            providerThreadId: null,
+            rootNodeId: null,
+            activeAttemptId: null,
+            checkpointId: null,
+            contextHandoffId: null,
+          };
+          // A plain interrupt disposes the old cohort while its child can still run.
+          // A later parent turn may then request a restart of that child.
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make("seed:steering-parent"),
+                type: "thread.created",
+                threadId: parentId,
+                occurredAt: now,
+                payload: {
+                  ...child.thread,
+                  id: parentId,
+                  activeProviderThreadId: null,
+                  lineage: {
+                    parentThreadId: null,
+                    rootThreadId: parentId,
+                    relationshipToParent: null,
+                  },
+                },
+              },
+              {
+                id: EventId.make("seed:steering-child-lineage"),
+                type: "thread.metadata-updated",
+                threadId: childId,
+                occurredAt: now,
+                payload: {
+                  ...child.thread,
+                  lineage: {
+                    parentThreadId: parentId,
+                    rootThreadId: parentId,
+                    relationshipToParent: "subagent",
+                  },
+                  forkedFrom: { type: "node", nodeId: taskId },
+                },
+              },
+              {
+                id: EventId.make("seed:steering-old-cohort"),
+                type: "run.updated",
+                threadId: parentId,
+                occurredAt: now,
+                payload: {
+                  ...parentRun,
+                  id: originalOwnerId,
+                  ordinal: 1,
+                  userMessageId: MessageId.make("message:steering-original-parent"),
+                  status: disposed ? "interrupted" : "completed",
+                  completedAt: now,
+                  delegatedCompletion: {
+                    disposition: disposed ? "disposed" : "open",
+                    nextGeneration: 1,
+                    delivery: null,
+                  },
+                },
+              },
+              {
+                id: EventId.make("seed:steering-latest-cohort"),
+                type: "run.updated",
+                threadId: parentId,
+                occurredAt: now,
+                payload: {
+                  ...parentRun,
+                  id: latestOwnerId,
+                  ordinal: 2,
+                  userMessageId: MessageId.make("message:steering-latest-parent"),
+                  status: "waiting",
+                },
+              },
+              {
+                id: EventId.make("seed:steering-task"),
+                type: "subagent.updated",
+                threadId: parentId,
+                occurredAt: now,
+                payload: {
+                  id: taskId,
+                  threadId: parentId,
+                  runId: originalOwnerId,
+                  parentNodeId: NodeId.make("node:steering-original-parent"),
+                  origin: "app_owned",
+                  createdBy: "agent",
+                  driver,
+                  providerInstanceId: instanceId,
+                  providerThreadId: childRun.providerThreadId,
+                  childThreadId: childId,
+                  nativeTaskRef: null,
+                  prompt: "Keep working until restarted",
+                  title: null,
+                  model: runSelection.model,
+                  status: "running",
+                  result: null,
+                  startedAt: now,
+                  completedAt: null,
+                  updatedAt: now,
+                  completionWake: "always",
+                  completionDelivery: {
+                    state: disposed ? "disposed" : "pending",
+                    observedByRunId: null,
+                  },
+                },
+              },
+              {
+                id: EventId.make("seed:steering-child-owner"),
+                type: "run.updated",
+                threadId: childId,
+                occurredAt: now,
+                payload: { ...childRun, delegatedTaskParentRunId: originalOwnerId },
+              },
+            ],
+          });
+
+          const restarted = yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("restart:steering-child-cohort"),
+            threadId: childId,
+            messageId: MessageId.make("message:restart-steering-child-cohort"),
+            text: "Restart for the current parent task",
+            attachments: [],
+            modelSelection: runSelection,
+            dispatchMode: { type: "restart_active", targetRunId: childRun.id },
+            createdBy: "agent",
+            creationSource: "mcp",
+          });
+          const restarting = yield* orchestrator.getThreadProjection(childId);
+          assert.equal(restarting.runs[0]?.id, childRun.id);
+          assert.equal(restarting.runs[0]?.delegatedTaskParentRunId, expectedOwnerId);
+          assert.equal(
+            (yield* orchestrator.getThreadProjection(parentId)).subagents[0]?.runId,
+            expectedOwnerId,
+          );
+          yield* worker.drain();
+          yield* orchestrator
+            .streamStoredEventsFrom({ threadId: childId, afterSequence: restarted.sequence })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "provider-turn.updated" &&
+                  stored.event.payload.runAttemptId === restarting.runs[0]?.activeAttemptId &&
+                  stored.event.payload.status === "running",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+          const running = yield* orchestrator.getThreadProjection(childId);
+          const turn = running.providerTurns.find(
+            (turn) => turn.runAttemptId === running.runs[0]?.activeAttemptId,
+          )!;
+          const parentSequence = yield* orchestrator.getThreadEventSequence(parentId);
+          const childSequence = yield* orchestrator.getThreadEventSequence(childId);
+          yield* Queue.offer(events, {
+            type: "turn.terminal",
+            driver,
+            providerThreadId: turn.providerThreadId,
+            providerTurnId: turn.id,
+            runOrdinal: childRun.ordinal,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+          yield* orchestrator
+            .streamStoredEventsFrom({ threadId: childId, afterSequence: childSequence })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "run.updated" &&
+                  ["waiting", "completed"].includes(stored.event.payload.status),
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+          yield* worker.drain();
+          yield* orchestrator
+            .streamStoredEventsFrom({ threadId: parentId, afterSequence: parentSequence })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "context-transfer.created" &&
+                  stored.event.payload.type === "subagent_result",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+          const finished = yield* orchestrator.getThreadProjection(parentId);
+          assert.equal(finished.subagents[0]?.runId, expectedOwnerId);
+          assert.equal(finished.subagents[0]?.completionDelivery?.state, "claimed");
+          assert.deepEqual(
+            finished.runs.find((run) => run.id === expectedOwnerId)?.delegatedCompletion?.delivery
+              ?.taskIds,
+            [taskId],
+          );
+          assert.equal(
+            finished.runs.find((run) => run.id === originalOwnerId)?.delegatedCompletion
+              ?.disposition,
+            disposed ? "disposed" : "open",
+          );
+          assert.equal(
+            finished.contextTransfers.find((transfer) => transfer.type === "subagent_result")
+              ?.targetRunId,
+            expectedOwnerId,
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
 
 it.effect("steers a changed turn-scoped selection into a provider that cannot restart", () =>
   Effect.scoped(
