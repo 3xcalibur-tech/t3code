@@ -1762,20 +1762,29 @@ export const layerWithOptions = (
               // the credential this open mints, holding its own reservation.
               // Revoke it only if nothing else still depends on it: the same
               // check releaseEntry uses before revoking a session's credential.
-              const revokeIfUnheld = Effect.gen(function* () {
-                if (!prepared.issued || mcpCredentialId === undefined) return;
-                const current = yield* Ref.get(sessions);
-                const heldElsewhere =
-                  isMcpCredentialReserved(input.threadId, mcpCredentialId) ||
-                  Array.from(current.values()).some(
-                    (other) =>
-                      other.attachedThreadIds.has(input.threadId) ||
-                      other.mcpCredentialIdByThread.get(input.threadId) === mcpCredentialId,
-                  );
-                if (!heldElsewhere) {
-                  yield* clearMcpSession(input.threadId, mcpCredentialId);
-                }
-              });
+              // The check and the revoke run under the same per-thread lock
+              // prepareMcpSession uses, so a concurrent prepare for this
+              // thread cannot adopt the credential in the gap between this
+              // open's holder check and its revoke: either prepare runs
+              // first and the check sees its reservation, or this finishes
+              // and releases the credential before prepare can reuse it.
+              const revokeIfUnheld = mcpPrepareLock.withLock(
+                input.threadId,
+                Effect.gen(function* () {
+                  if (!prepared.issued || mcpCredentialId === undefined) return;
+                  const current = yield* Ref.get(sessions);
+                  const heldElsewhere =
+                    isMcpCredentialReserved(input.threadId, mcpCredentialId) ||
+                    Array.from(current.values()).some(
+                      (other) =>
+                        other.attachedThreadIds.has(input.threadId) ||
+                        other.mcpCredentialIdByThread.get(input.threadId) === mcpCredentialId,
+                    );
+                  if (!heldElsewhere) {
+                    yield* clearMcpSession(input.threadId, mcpCredentialId);
+                  }
+                }),
+              );
               // An open that fails or is interrupted (a start timeout, a Stop)
               // must not leave the provider process it spawned behind. Bound
               // the close the same way release does: a misbehaving adapter
@@ -1842,25 +1851,37 @@ export const layerWithOptions = (
                 idleFiber: null,
                 pinnedSinceMs: null,
               };
-              yield* Ref.update(sessions, (current) => {
-                const updated = new Map(current);
-                updated.set(key, entry);
-                return updated;
-              });
-              // The entry now guards the credential via its recorded id, so
-              // the pre-open reservation can be dropped.
-              yield* dropReservation;
+              // Publishing the entry and dropping the reservation must not
+              // straddle an interrupt: a Stop landing between them (after
+              // manager.get can see the entry, before the handler below is
+              // attached) would leave the entry, its process and its scope
+              // with no cleanup at all. Both steps are quick bookkeeping with
+              // no real suspension, so making them uninterruptible costs
+              // nothing and closes that gap the same way Effect's own
+              // acquireRelease makes "acquire, then attach release" atomic.
+              const finishOpenSetup = releaseEntry({
+                providerSessionId: input.providerSessionId,
+                reason: "runtime_error",
+                detail: "Opening the provider session was abandoned before it finished setup.",
+              }).pipe(logReleaseFailure(input.providerSessionId));
+              yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  yield* Ref.update(sessions, (current) => {
+                    const updated = new Map(current);
+                    updated.set(key, entry);
+                    return updated;
+                  });
+                  // The entry now guards the credential via its recorded id,
+                  // so the pre-open reservation can be dropped.
+                  yield* dropReservation;
+                }),
+              );
               // From here the entry is live and visible to other callers
               // (manager.get, close, idle release). A failure or an interrupt
               // (a start timeout, a Stop) landing anywhere in this setup tail,
               // including the persistence write, must release the entry it
               // just recorded, the same way an abandoned pre-registration open
               // releases its scope above.
-              const finishOpenSetup = releaseEntry({
-                providerSessionId: input.providerSessionId,
-                reason: "runtime_error",
-                detail: "Opening the provider session was abandoned before it finished setup.",
-              }).pipe(logReleaseFailure(input.providerSessionId));
               yield* Effect.gen(function* () {
                 yield* withActivityError(
                   input.providerSessionId,

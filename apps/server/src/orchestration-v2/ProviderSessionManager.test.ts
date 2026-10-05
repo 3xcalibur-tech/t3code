@@ -110,6 +110,36 @@ const makeAttachWritePauseLayer = (gate: {
     }),
   ).pipe(Layer.provide(TestEventSinkLayer));
 
+/**
+ * Pauses the first `revokeProviderSession` call: signals `started`, then
+ * waits for `resume`. Lets a test hold a credential revoke in flight (and,
+ * with it, any per-thread lock the caller acquired around the revoke) while
+ * a concurrent prepare for the same thread is attempted.
+ */
+const makeRevokePauseRegistryLayer = (gate: {
+  readonly started: Deferred.Deferred<void>;
+  readonly resume: Deferred.Deferred<void>;
+}) =>
+  Layer.effect(
+    McpSessionRegistry.McpSessionRegistry,
+    Effect.gen(function* () {
+      const delegate = yield* McpSessionRegistry.McpSessionRegistry;
+      let paused = false;
+      return McpSessionRegistry.McpSessionRegistry.of({
+        ...delegate,
+        revokeProviderSession: (providerSessionId) =>
+          Effect.gen(function* () {
+            if (!paused) {
+              paused = true;
+              yield* Deferred.succeed(gate.started, undefined);
+              yield* Deferred.await(gate.resume);
+            }
+            yield* delegate.revokeProviderSession(providerSessionId);
+          }),
+      });
+    }),
+  ).pipe(Layer.provide(TestMcpRegistryLayer));
+
 interface FlakyReleaseWrites {
   /** Which release writes fail right now. */
   readonly failing: Ref.Ref<"none" | "session" | "session-and-requests">;
@@ -445,6 +475,10 @@ function makeTestLayer(input: {
     readonly started: Deferred.Deferred<void>;
     readonly resume: Deferred.Deferred<void>;
   };
+  readonly revokePause?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly resume: Deferred.Deferred<void>;
+  };
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
   readonly afterOpen?: Effect.Effect<void>;
@@ -486,11 +520,15 @@ function makeTestLayer(input: {
       ),
     ),
   );
+  const configuredMcpRegistryLayer =
+    input.revokePause !== undefined
+      ? makeRevokePauseRegistryLayer(input.revokePause)
+      : TestMcpRegistryLayer;
   return Layer.mergeAll(
     TestStoresLayer,
     configuredEventSinkLayer,
     IdAllocator.layer,
-    TestMcpRegistryLayer,
+    configuredMcpRegistryLayer,
     ProviderSessionManager.layerWithOptions({
       idleTimeoutMs: input.idleTimeoutMs,
       ...(input.maxIdlePinMs === undefined ? {} : { maxIdlePinMs: input.maxIdlePinMs }),
@@ -501,7 +539,7 @@ function makeTestLayer(input: {
           configuredEventSinkLayer,
           IdAllocator.layer,
           providerEventIngestorTestLayer,
-          TestMcpRegistryLayer,
+          configuredMcpRegistryLayer,
           TestStoresLayer,
           ...(input.serverSettingsLayer === undefined ? [] : [input.serverSettingsLayer]),
           ...(input.projectServiceLayer === undefined ? [] : [input.projectServiceLayer]),
@@ -927,7 +965,7 @@ it.effect(
           const callNumber = yield* Ref.modify(openStartedCount, (count) => [count + 1, count + 1]);
           if (callNumber === 1) {
             yield* Deferred.succeed(firstStarted, undefined);
-            yield* Effect.never;
+            return yield* Effect.never;
           } else {
             yield* Deferred.succeed(secondStarted, undefined);
             yield* Deferred.await(releaseSecond);
@@ -1045,6 +1083,111 @@ it.effect(
             state,
             idleTimeoutMs: 60_000,
             attachWritePause: gate,
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 blocks a concurrent prepare for the same thread while revoking an abandoned open's credential",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const openStartedCount = yield* Ref.make(0);
+      const firstStarted = yield* Deferred.make<void>();
+      const secondAdapterStarted = yield* Deferred.make<void>();
+      const revokeGate = {
+        started: yield* Deferred.make<void>(),
+        resume: yield* Deferred.make<void>(),
+      };
+      // Call 1 (s1) mints the credential and parks, holding it open forever
+      // until interrupted. Call 2 (s2) only signals once it reaches the
+      // adapter, which happens strictly after its own prepareMcpSession (and
+      // therefore the per-thread lock it needs) has returned.
+      const beforeOpen = () =>
+        Effect.gen(function* () {
+          const callNumber = yield* Ref.modify(openStartedCount, (count) => [count + 1, count + 1]);
+          if (callNumber === 1) {
+            yield* Deferred.succeed(firstStarted, undefined);
+            return yield* Effect.never;
+          }
+          yield* Deferred.succeed(secondAdapterStarted, undefined);
+        });
+
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-revoke-lock-race");
+        const s1 = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const s2 = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+
+        const first = yield* manager
+          .open({ threadId, providerSessionId: s1, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(firstStarted);
+
+        // Interrupt s1: abandonOpen's revokeIfUnheld finds nothing else
+        // holds the credential yet, decides to revoke, and (via the paused
+        // registry) is now parked mid-revoke, still holding the per-thread
+        // prepare lock.
+        const stopping = yield* Fiber.interrupt(first).pipe(Effect.forkScoped);
+        yield* Deferred.await(revokeGate.started);
+
+        // s2 starts for the same thread while the revoke is in flight. If
+        // the revoke and the lock are not serialized, s2's prepare can run
+        // right now and adopt the credential s1 is about to revoke anyway.
+        const second = yield* manager
+          .open({ threadId, providerSessionId: s2, modelSelection, runtimePolicy })
+          .pipe(Effect.forkScoped);
+        const secondAdapterStartedWaiter = yield* Deferred.await(secondAdapterStarted).pipe(
+          Effect.forkScoped,
+        );
+        // Give the scheduler every chance to run s2 as far as it can go
+        // without the lock before asserting it is still blocked: a bare
+        // pollUnsafe right after forking can pass even on unfixed code
+        // simply because s2 has not been scheduled yet.
+        for (let i = 0; i < 200; i++) {
+          yield* Effect.yieldNow;
+        }
+        assert.isUndefined(
+          secondAdapterStartedWaiter.pollUnsafe(),
+          "s2's prepare must still be waiting on the per-thread lock while s1's revoke is in flight",
+        );
+
+        yield* Deferred.succeed(revokeGate.resume, undefined);
+        yield* Fiber.join(stopping);
+        yield* Fiber.join(secondAdapterStartedWaiter);
+        yield* Fiber.join(second);
+
+        const current = McpProviderSession.readMcpProviderSession(threadId);
+        assert.isDefined(current, "s2 must end up with its own valid credential");
+        const token = current!.authorizationHeader.replace(/^Bearer\s+/, "");
+        assert.isDefined(
+          yield* registry.resolve(token),
+          "s2's credential must not be the one s1 revoked out from under it",
+        );
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            beforeOpen,
+            revokePause: revokeGate,
           }),
         ),
       );
