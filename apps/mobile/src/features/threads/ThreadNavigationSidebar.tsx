@@ -292,6 +292,7 @@ function ThreadNavigationSidebarPane(
   const {
     loaded: shelfPreferencesLoaded,
     pinnedView,
+    pinnedViewEnabled,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -387,10 +388,11 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: props.selectedThreadKey ?? null,
-      pinnedView,
+      view: pinnedViewEnabled ? (pinnedView ? "pinned" : "active") : undefined,
     });
   }, [
     pinnedView,
+    pinnedViewEnabled,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
@@ -664,16 +666,24 @@ function ThreadNavigationSidebarPane(
     togglePinnedView();
     if (!visible) onRequestVisibility();
   }, [onRequestVisibility, togglePinnedView, visible]);
-  useHardwareKeyboardCommand("togglePinnedView", handleTogglePinnedView);
+  const pinnedViewCommands = useMemo(
+    () => (pinnedViewEnabled ? (["togglePinnedView"] as const) : []),
+    [pinnedViewEnabled],
+  );
+  useHardwareKeyboardCommand(pinnedViewCommands, handleTogglePinnedView);
   const pinnedViewToggle = useMemo(
-    () => ({
-      pinnedView,
-      otherViewThreadCount: threadListV2Layout.otherViewThreadCount,
-      otherViewDoneCount: threadListV2Layout.otherViewDoneCount,
-      onToggle: togglePinnedView,
-    }),
+    () =>
+      pinnedViewEnabled
+        ? {
+            pinnedView,
+            otherViewThreadCount: threadListV2Layout.otherViewThreadCount,
+            otherViewDoneCount: threadListV2Layout.otherViewDoneCount,
+            onToggle: togglePinnedView,
+          }
+        : null,
     [
       pinnedView,
+      pinnedViewEnabled,
       threadListV2Layout.otherViewDoneCount,
       threadListV2Layout.otherViewThreadCount,
       togglePinnedView,

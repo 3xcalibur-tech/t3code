@@ -2246,7 +2246,7 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  if (!legacySidebarEnabled) {
+  if (!legacySidebarEnabled && clientSettings.sidebarPinnedViewEnabled) {
     actionItems.push({
       kind: "action",
       value: "action:sidebar-pinned-view",

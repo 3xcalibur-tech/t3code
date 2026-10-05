@@ -308,7 +308,7 @@ export interface ThreadListV2Layout {
       snooze expires instead of on the next minute tick. */
   readonly nextSnoozeWakeAt: string | null;
   /** Threads in the view that is not showing: pins in the inbox, active and
-      working threads in the pinned view. */
+      working threads in the pinned view. Zero while the pinned view is off. */
   readonly otherViewThreadCount: number;
   /** Of those, the rows that would show the unread Done label. */
   readonly otherViewDoneCount: number;
@@ -665,9 +665,10 @@ export function buildThreadListV2Items(input: {
       outbox. Such a thread has work the user is waiting on, so it stays in
       the active block even when the server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
-  /** Shows only pinned threads instead of the inbox. Snoozed and settled
-      shelves render in both views. */
-  readonly pinnedView?: boolean;
+  /** Pinned view beta: one view at a time, the inbox without pins or only
+      pinned threads. Snoozed and settled shelves render in both. Absent = off:
+      pins sit above the active block. */
+  readonly view?: "active" | "pinned";
 }): ThreadListV2Layout {
   const now = input.now;
   const pending =
@@ -741,13 +742,12 @@ export function buildThreadListV2Items(input: {
       active.push(thread);
     }
   }
-  // One view at a time: the inbox, or only pinned threads. Search and scope
-  // already applied, so the other view's counts follow them too.
-  const pinnedView = input.pinnedView === true;
-  const otherViewThreads = pinnedView ? active.concat(working) : pinned;
-  const viewPinned = pinnedView ? pinned : [];
-  const viewActive = pinnedView ? [] : active;
-  const viewWorking = pinnedView ? [] : working;
+  // Search and scope already applied, so the other view's counts follow them.
+  const otherViewThreads =
+    input.view === "pinned" ? active.concat(working) : input.view === "active" ? pinned : [];
+  const viewPinned = input.view === "active" ? [] : pinned;
+  const viewActive = input.view === "pinned" ? [] : active;
+  const viewWorking = input.view === "pinned" ? [] : working;
 
   // The beta inbox is time-ordered, so the saved arrangement (and any move in
   // flight) is kept but not applied until the beta is off again.

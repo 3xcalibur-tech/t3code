@@ -28,7 +28,8 @@ export function HomeHeader(props: HomeHeaderProps) {
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const filterMenu = buildHomeListFilterMenu(props);
-  const pinnedViewItem = createPinnedViewHeaderItem(props.pinnedViewToggle);
+  const pinnedViewItem =
+    props.pinnedViewToggle === null ? null : createPinnedViewHeaderItem(props.pinnedViewToggle);
 
   return (
     <>
@@ -39,7 +40,7 @@ export function HomeHeader(props: HomeHeaderProps) {
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
           unstable_headerRightItems: () => [
-            pinnedViewItem,
+            ...(pinnedViewItem === null ? [] : [pinnedViewItem]),
             withNativeGlassHeaderItem({
               accessibilityLabel: "Open settings",
               icon: { name: "ellipsis", type: "sfSymbol" } as const,

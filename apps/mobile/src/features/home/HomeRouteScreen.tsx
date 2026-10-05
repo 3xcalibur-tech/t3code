@@ -118,21 +118,25 @@ export function HomeRouteScreen() {
       setSelectedProjectKey(null);
     }
   }, [projectFilterOptions, selectedProjectKey]);
-  // The list computes what its hidden view holds; the header shows it.
-  const { pinnedView, togglePinnedView } = useThreadListV2ShelfPreferences();
+  // Pinned view beta: the list computes what its hidden view holds; the
+  // header shows it.
+  const { pinnedView, pinnedViewEnabled, togglePinnedView } = useThreadListV2ShelfPreferences();
   const [otherViewCounts, setOtherViewCounts] = useState({ threadCount: 0, doneCount: 0 });
   const handleOtherViewCountsChange = useCallback(
     (threadCount: number, doneCount: number) => setOtherViewCounts({ threadCount, doneCount }),
     [],
   );
   const pinnedViewToggle = useMemo(
-    () => ({
-      pinnedView,
-      otherViewThreadCount: otherViewCounts.threadCount,
-      otherViewDoneCount: otherViewCounts.doneCount,
-      onToggle: togglePinnedView,
-    }),
-    [otherViewCounts, pinnedView, togglePinnedView],
+    () =>
+      pinnedViewEnabled
+        ? {
+            pinnedView,
+            otherViewThreadCount: otherViewCounts.threadCount,
+            otherViewDoneCount: otherViewCounts.doneCount,
+            onToggle: togglePinnedView,
+          }
+        : null,
+    [otherViewCounts, pinnedView, pinnedViewEnabled, togglePinnedView],
   );
 
   // In split layouts the persistent sidebar IS the thread list — Home becomes
@@ -186,12 +190,12 @@ export function HomeRouteScreen() {
             shallow-merged. The brand slot also doubles as the connection
             status surface while an environment reconnects. */}
         <NativeStackScreenOptions
-          optionsVersion={windowWidth}
+          optionsVersion={[windowWidth, pinnedViewEnabled]}
           options={{
             ...getConnectionAwareBrandHeaderOptions({
               headerWidth: windowWidth,
-              // Pinned view toggle and settings.
-              trailingItemCount: 2,
+              // Settings, plus the pinned view toggle while that beta is on.
+              trailingItemCount: pinnedViewEnabled ? 2 : 1,
               onOpenEnvironments: () =>
                 navigation.navigate("SettingsSheet", {
                   screen: "SettingsContent",

@@ -19,5 +19,6 @@ export interface HomeHeaderProps {
   readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
-  readonly pinnedViewToggle: ThreadListPinnedViewToggle;
+  /** Pinned view beta; null while off. */
+  readonly pinnedViewToggle: ThreadListPinnedViewToggle | null;
 }

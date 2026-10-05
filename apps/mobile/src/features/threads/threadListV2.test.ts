@@ -487,7 +487,7 @@ describe("buildThreadListV2Items", () => {
     expect(layout.settledCount).toBe(1);
   });
 
-  it("keeps active pinned threads in the pinned view", () => {
+  it("keeps active pinned threads in the pinned block", () => {
     const pinned = makeThread({
       id: ThreadId.make("pinned"),
       title: "Pinned thread",
@@ -498,7 +498,6 @@ describe("buildThreadListV2Items", () => {
       environmentId: null,
       searchQuery: "",
       now: NOW,
-      pinnedView: true,
     });
 
     expect(layout.items[0]).toMatchObject({
@@ -563,10 +562,10 @@ describe("buildThreadListV2Items", () => {
     expect(layout.settledCount).toBe(1);
   });
 
-  it("snooze hides a pinned thread and wake restores it to the pinned view", () => {
+  it("snooze hides a pinned thread and wake restores it to the pinned block", () => {
     const snoozedInput = {
       threads: [
-        makeThread({ id: ThreadId.make("pinned"), title: "Pinned", pinnedAt: NOW }),
+        makeThread({ id: ThreadId.make("active"), title: "Active" }),
         makeThread({
           id: ThreadId.make("pinned-snoozed"),
           title: "Pinned and snoozed",
@@ -577,21 +576,17 @@ describe("buildThreadListV2Items", () => {
       ],
       environmentId: null,
       searchQuery: "",
-      pinnedView: true,
     };
 
     // Before the wake time: the snooze wins; the pin holds underneath.
     const whileSnoozed = buildThreadListV2Items({ ...snoozedInput, now: NOW });
-    expect(whileSnoozed.items.map((item) => item.thread.id)).toEqual(["pinned"]);
+    expect(whileSnoozed.items.map((item) => item.thread.id)).toEqual(["active"]);
     expect(whileSnoozed.snoozedCount).toBe(1);
 
-    // After the wake time: the thread returns pinned.
+    // After the wake time: the thread returns pinned, back on top.
     const afterWake = buildThreadListV2Items({ ...snoozedInput, now: "2026-06-03T10:00:00.000Z" });
-    expect(afterWake.items.map((item) => item.thread.id).sort()).toEqual([
-      "pinned",
-      "pinned-snoozed",
-    ]);
-    expect(afterWake.items.every((item) => item.pinned)).toBe(true);
+    expect(afterWake.items.map((item) => item.thread.id)).toEqual(["pinned-snoozed", "active"]);
+    expect(afterWake.items[0]?.pinned).toBe(true);
     expect(afterWake.snoozedCount).toBe(0);
   });
 
@@ -1184,7 +1179,6 @@ describe("pending mobile thread moves", () => {
     rows: EnvironmentThreadShell[],
     pendingOrder: PendingThreadOrder | null,
     searchQuery = "",
-    pinnedView = false,
   ) {
     return buildThreadListV2Items({
       threads: rows,
@@ -1192,7 +1186,6 @@ describe("pending mobile thread moves", () => {
       environmentId: null,
       searchQuery,
       now: NOW,
-      pinnedView,
     }).items.map((item) => item.thread.id);
   }
 
@@ -1203,8 +1196,7 @@ describe("pending mobile thread moves", () => {
       let current = rows;
       let hold: PendingThreadOrder | null = pending;
       const desired = pending.orderedIds.map((id) => id.split(":")[1]);
-      const pinnedView = section === "pinned";
-      expect(layout(current, hold, "", pinnedView)).toEqual(desired);
+      expect(layout(current, hold)).toEqual(desired);
       for (const assignment of assignments) {
         current = update(current, assignment);
         hold = reconcilePendingThreadOrder(
@@ -1212,10 +1204,10 @@ describe("pending mobile thread moves", () => {
           getThreadListV2OrderedSection({ threads: current, section, now: NOW }),
         );
         expect(hold).not.toBeNull();
-        expect(layout(current, hold, "", pinnedView)).toEqual(desired);
+        expect(layout(current, hold)).toEqual(desired);
       }
       expect(reconcilePendingThreadOrder({ ...hold!, commandsComplete: true }, current)).toBeNull();
-      expect(layout(current, null, "", pinnedView)).toEqual(desired);
+      expect(layout(current, null)).toEqual(desired);
     },
   );
 
@@ -2222,10 +2214,14 @@ describe("Working section beta", () => {
 
   it("folds unpinned working threads into a collapsed shelf", () => {
     const layout = build();
-    expect(ids(layout)).toEqual(["finished-late", "asks-approval", "finished-early"]);
+    expect(ids(layout)).toEqual([
+      "pinned-working",
+      "finished-late",
+      "asks-approval",
+      "finished-early",
+    ]);
     expect(layout.workingCount).toBe(1);
-    expect(layout.workingShelfHeaderIndex).toBe(3);
-    expect(ids(build({ pinnedView: true }))).toEqual(["pinned-working"]);
+    expect(layout.workingShelfHeaderIndex).toBe(4);
 
     const off = build({ workingShelfEnabled: false });
     expect(ids(off)).toContain("working");
@@ -2245,7 +2241,7 @@ describe("Working section beta", () => {
       inboxReturnAt: (thread) =>
         thread.id === "finished-early" ? Date.parse("2026-06-01T04:00:00.000Z") : undefined,
     });
-    expect(ids(layout)).toEqual(["finished-early", "finished-late", "asks-approval"]);
+    expect(ids(layout).slice(1)).toEqual(["finished-early", "finished-late", "asks-approval"]);
   });
 
   it("places the shelf after queued tasks and before snoozed and settled threads", () => {
@@ -2307,7 +2303,7 @@ describe("Working section beta", () => {
   });
 });
 
-describe("pinned view", () => {
+describe("pinned view beta", () => {
   const running = {
     status: "running" as const,
     activeRunId: null,
@@ -2372,8 +2368,17 @@ describe("pinned view", () => {
   const ids = (layout: ReturnType<typeof buildThreadListV2Items>) =>
     layout.items.map((item) => item.thread.id);
 
-  it("hides pins from the inbox and counts them for the toggle", () => {
+  it("keeps pins above the inbox and counts nothing while off", () => {
     const layout = build();
+    expect(ids(layout).slice(0, 2).sort()).toEqual(["pinned", "pinned-done"]);
+    expect(layout.items.filter((item) => item.pinned)).toHaveLength(2);
+    expect(layout.workingCount).toBe(1);
+    expect(layout.otherViewThreadCount).toBe(0);
+    expect(layout.otherViewDoneCount).toBe(0);
+  });
+
+  it("hides pins from the inbox and counts them for the toggle", () => {
+    const layout = build({ view: "active" });
     expect([...ids(layout)].sort()).toEqual([
       "active",
       "active-approval",
@@ -2388,7 +2393,7 @@ describe("pinned view", () => {
   });
 
   it("shows only pins, with the snoozed and settled shelves but no Working shelf", () => {
-    const layout = build({ pinnedView: true });
+    const layout = build({ view: "pinned" });
     expect(ids(layout).slice(0, 2).sort()).toEqual(["pinned", "pinned-done"]);
     expect(ids(layout).slice(2)).toEqual(["snoozed", "settled"]);
     expect(layout.items.slice(0, 2).every((item) => item.pinned)).toBe(true);
@@ -2402,7 +2407,7 @@ describe("pinned view", () => {
   });
 
   it("counts the other view under the same search as the list", () => {
-    const layout = build({ pinnedView: true, searchQuery: "done" });
+    const layout = build({ view: "pinned", searchQuery: "done" });
     expect(ids(layout)).toEqual(["pinned-done"]);
     expect(layout.otherViewThreadCount).toBe(1);
     expect(layout.otherViewDoneCount).toBe(1);

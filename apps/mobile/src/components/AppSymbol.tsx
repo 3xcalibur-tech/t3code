@@ -196,6 +196,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   photo: IconPhoto,
   pin: IconPin,
   "pin.fill": IconPinFilled,
+  "pin.circle": IconPin,
   "pin.slash": IconPinnedOff,
   play: IconPlayerPlay,
   plus: IconPlus,

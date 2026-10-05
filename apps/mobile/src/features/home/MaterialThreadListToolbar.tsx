@@ -34,7 +34,8 @@ export function MaterialThreadListToolbar(props: {
   readonly onFilterAction: NonNullable<ComponentProps<typeof ControlPillMenu>["onPressAction"]>;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironments: () => void;
-  readonly pinnedViewToggle: ThreadListPinnedViewToggle;
+  /** Pinned view beta; null while off. */
+  readonly pinnedViewToggle: ThreadListPinnedViewToggle | null;
   readonly sidebar?: boolean;
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
@@ -118,7 +119,9 @@ export function MaterialThreadListToolbar(props: {
                 icon="magnifyingglass"
                 onPress={openSearch}
               />
-              <AndroidPinnedViewToggleButton toggle={props.pinnedViewToggle} />
+              {props.pinnedViewToggle === null ? null : (
+                <AndroidPinnedViewToggleButton toggle={props.pinnedViewToggle} />
+              )}
               <AndroidHeaderIconButton
                 accessibilityLabel="Open settings"
                 icon="gearshape"

@@ -149,7 +149,7 @@ export function CommandPalette(props: {
   const activeThread = useThreadShell(activeThreadRef);
   const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
-  const { pinnedView, togglePinnedView } = useThreadListV2ShelfPreferences();
+  const { pinnedView, pinnedViewEnabled, togglePinnedView } = useThreadListV2ShelfPreferences();
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<string | null>(null);
   const [visible, setVisible] = useState(true);
@@ -262,13 +262,17 @@ export function CommandPalette(props: {
             params: { screen: "SettingsArchive" },
           }),
       },
-      {
-        key: "togglePinnedView",
-        kind: "action",
-        title: pinnedView ? "Show active threads" : "Show pinned threads",
-        searchTerms: ["pinned", "pins", "inbox", "thread list"],
-        run: togglePinnedView,
-      },
+      ...(pinnedViewEnabled
+        ? [
+            {
+              key: "togglePinnedView",
+              kind: "action" as const,
+              title: pinnedView ? "Show active threads" : "Show pinned threads",
+              searchTerms: ["pinned", "pins", "inbox", "thread list"],
+              run: togglePinnedView,
+            },
+          ]
+        : []),
     ];
     const projectByKey = new Map(
       projects.map((project) => [scopedProjectKey(project.environmentId, project.id), project]),
@@ -357,6 +361,7 @@ export function CommandPalette(props: {
     activeThreadRef,
     navigation,
     pinnedView,
+    pinnedViewEnabled,
     projects,
     runCommand,
     savedConnectionsById,

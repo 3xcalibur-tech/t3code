@@ -37,17 +37,20 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
 
 /**
  * Right-side UINavigationBar items for the sidebar column: the pinned view
- * toggle, the thread list filter/sort menu and the settings button, sharing
- * one glass capsule — the Messages-style grouped header buttons.
+ * toggle (beta, null while off), the thread list filter/sort menu and the
+ * settings button, sharing one glass capsule — the Messages-style grouped
+ * header buttons.
  */
 export function createSidebarHeaderItems(input: {
-  readonly pinnedViewToggle: ThreadListPinnedViewToggle;
+  readonly pinnedViewToggle: ThreadListPinnedViewToggle | null;
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
   readonly onOpenSettings: () => void;
 }): NativeStackHeaderItem[] {
   return [
-    createPinnedViewHeaderItem(input.pinnedViewToggle),
+    ...(input.pinnedViewToggle === null
+      ? []
+      : [createPinnedViewHeaderItem(input.pinnedViewToggle)]),
     withNativeGlassHeaderItem({
       type: "menu",
       label: "",

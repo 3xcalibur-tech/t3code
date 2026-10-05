@@ -21,8 +21,10 @@ export function useThreadListV2ShelfPreferences() {
   const workingShelfEnabled = loaded && preferencesResult.value.workingShelfEnabled === true;
   const workingShelfExpanded =
     loaded && preferencesResult.value.threadListWorkingShelfExpanded === true;
-  // The list shows one view at a time: the inbox, or only pinned threads.
-  const pinnedView = loaded && preferencesResult.value.threadListPinnedView === true;
+  // Pinned view beta: the list shows one view at a time, the inbox or only
+  // pinned threads. The remembered view applies only while the beta is on.
+  const pinnedViewEnabled = loaded && preferencesResult.value.pinnedViewEnabled === true;
+  const pinnedView = pinnedViewEnabled && preferencesResult.value.threadListPinnedView === true;
   const snoozedShelfExpandedRef = useRef(snoozedShelfExpanded);
   const settledShelfExpandedRef = useRef(settledShelfExpanded);
   const workingShelfExpandedRef = useRef(workingShelfExpanded);
@@ -51,15 +53,16 @@ export function useThreadListV2ShelfPreferences() {
     savePreferences({ threadListWorkingShelfExpanded: expanded });
   }, [loaded, savePreferences]);
   const togglePinnedView = useCallback(() => {
-    if (!loaded) return;
+    if (!pinnedViewEnabled) return;
     const next = !pinnedViewRef.current;
     pinnedViewRef.current = next;
     savePreferences({ threadListPinnedView: next });
-  }, [loaded, savePreferences]);
+  }, [pinnedViewEnabled, savePreferences]);
 
   return {
     loaded,
     pinnedView,
+    pinnedViewEnabled,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,

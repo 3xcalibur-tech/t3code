@@ -45,12 +45,15 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 ## Pin and reorder threads
 
-Pin a thread from its menu to keep it within reach. Pinned threads live in their own view. The
-pin button at the top of the thread list switches between active threads and pinned threads, as
-does `mod+alt+p` on web and desktop or `Cmd+Option+P` on iPad with a hardware keyboard. Its badges
-count the threads in the other view and, in blue, how many of them finished since you last opened
-them. On iPhone and iPad the button has one badge: the finished count when there is one, otherwise
-the thread count. Change the web and desktop shortcut in **Settings → Keybindings**.
+Pin a thread from its menu to keep it above your active work.
+
+To give pinned threads their own view instead, turn on **Pinned view (beta)** in **Settings →
+General** on web and desktop, or **Pinned view** in **Settings → Thread behavior** on mobile. A
+pin button at the top of the thread list then switches between active threads and pinned threads,
+as does `mod+alt+p` on web and desktop or `Cmd+Option+P` on iPad with a hardware keyboard. Its
+badges count the threads in the other view and, in blue, how many of them finished since you last
+opened them. On iPhone and iPad the button has one badge: the finished count when there is one,
+otherwise the thread count. Change the web and desktop shortcut in **Settings → Keybindings**.
 
 On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
@@ -69,10 +72,12 @@ scroll position instead of following the thread to its new place in the list.
 
 Pinning does not prevent automatic settlement. Settling a thread removes its pin.
 
-On web and desktop, drag a thread between sections to change its state. In the active view, drag
-a thread to the top edge to pin it; it lands at the top of your pinned threads. In the pinned view,
-drag a pinned thread down past the **Active** label to unpin it. Dragging a thread onto the **Settled** header settles it, and dragging a settled
-thread into the active list un-settles it. A snoozed thread can be dragged out of the snoozed
+On web and desktop, drag a thread between sections to change its state. Drag a thread up into
+the pinned section to pin it at the spot you drop it; drag a pinned thread down into the active
+list to unpin it. With the pinned view on, drag a thread to the top edge of the active view to pin
+it at the top of your pins, or drag a pinned thread below the **Active** label to unpin it.
+Dragging a thread onto the **Settled** header settles it, and dragging a settled thread into the
+active list un-settles it. A snoozed thread can be dragged out of the snoozed
 shelf, which wakes it, but threads cannot be dragged into the shelf because snoozing needs a wake
 time. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
 Pinned and active boundary labels appear only while dragging, without moving the rows. The
@@ -80,7 +85,8 @@ other rows slide aside to show where the thread will land. When you cross into a
 the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
 **Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
 thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes
-over. Reordering within the same section shows no badge. Section labels stay readable for the whole drag, and the section the
+over. Reordering within the same section shows no badge. When there are no pins, drag to the top
+edge to pin a thread. Section labels stay readable for the whole drag, and the section the
 thread is over takes the accent color. Section labels also
 identify empty sections and a collapsed settled shelf.
 

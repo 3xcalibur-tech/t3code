@@ -2531,7 +2531,10 @@ export default function Sidebar() {
   // app restarts keep it.
   const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
-  const pinnedView = useUiStateStore((store) => store.sidebarPinnedView);
+  // Opt-in: with the setting off, pinned threads stay above the inbox.
+  const pinnedViewEnabled = useClientSettings((s) => s.sidebarPinnedViewEnabled);
+  const storedPinnedView = useUiStateStore((store) => store.sidebarPinnedView);
+  const pinnedView = pinnedViewEnabled && storedPinnedView;
   const toggleSidebarPinnedView = useUiStateStore((store) => store.toggleSidebarPinnedView);
   // {value, label} items let Base UI drive the combobox selection contract
   // while the popup search filters the same collection.
@@ -2640,7 +2643,7 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, pinnedView, projectScopeKey]);
+  }, [clearSelection, pinnedView, pinnedViewEnabled, projectScopeKey]);
 
   const openProjectSettings = useCallback(
     (projectGroup: SidebarProjectSnapshot) => {
@@ -2818,14 +2821,21 @@ export default function Sidebar() {
     threads,
     workingShelfEnabled,
   ]);
-  // The list shows one view at a time: the inbox, or only pinned threads.
-  // Snoozed and settled shelves render in both. Search spans every thread.
-  const viewPinnedThreads = pinnedView ? pinnedThreads : EMPTY_THREADS;
+  // With the pinned view on, the list shows one view at a time: the inbox,
+  // or only pinned threads. Snoozed and settled shelves render in both.
+  // Search spans every thread.
+  const viewPinnedThreads = pinnedViewEnabled && !pinnedView ? EMPTY_THREADS : pinnedThreads;
   const viewActiveThreads = pinnedView ? EMPTY_THREADS : activeThreads;
   const viewWorkingThreads = pinnedView ? EMPTY_THREADS : workingThreads;
+  const offViewSection = !pinnedViewEnabled ? null : pinnedView ? "active" : "pinned";
   const otherViewThreads = useMemo(
-    () => (pinnedView ? [...activeThreads, ...workingThreads] : pinnedThreads),
-    [activeThreads, pinnedThreads, pinnedView, workingThreads],
+    () =>
+      !pinnedViewEnabled
+        ? EMPTY_THREADS
+        : pinnedView
+          ? [...activeThreads, ...workingThreads]
+          : pinnedThreads,
+    [activeThreads, pinnedThreads, pinnedView, pinnedViewEnabled, workingThreads],
   );
   // Counts the rows that would show a Done pill. Selecting a number
   // re-renders only when the count changes, not on every recorded visit.
@@ -3929,7 +3939,7 @@ export default function Sidebar() {
             activeKeysById,
             activeReorderableKeys: activeReorderableThreadKeys,
             activeTimeOrdered: workingShelfEnabled,
-            offViewSection: pinnedView ? "active" : "pinned",
+            ...(offViewSection === null ? {} : { offViewSection }),
           }).kind !== "none"
         );
       },
@@ -3948,8 +3958,8 @@ export default function Sidebar() {
     draggedFromSection,
     dragActivationY,
     draggableThreadKeys,
+    offViewSection,
     pinnedKeys,
-    pinnedView,
     sidebarListItems,
     threadByKey,
     workingShelfEnabled,
@@ -3981,7 +3991,7 @@ export default function Sidebar() {
         activeKeysById,
         activeReorderableKeys: activeReorderableThreadKeys,
         activeTimeOrdered: workingShelfEnabled,
-        offViewSection: pinnedView ? "active" : "pinned",
+        ...(offViewSection === null ? {} : { offViewSection }),
       });
       if (plan.kind === "none") return;
       if (plan.kind === "settle" && settlingThreadKeysRef.current.has(activeKey)) return;
@@ -4103,9 +4113,9 @@ export default function Sidebar() {
       activeKeys,
       activeReorderableThreadKeys,
       draggableThreadKeys,
+      offViewSection,
       pinThread,
       pinnedKeys,
-      pinnedView,
       planForwardNavigation,
       reorderPinnedThread,
       reorderActiveThread,
@@ -4752,9 +4762,7 @@ export default function Sidebar() {
   );
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
-        return;
-      }
+      if (event.defaultPrevented || event.repeat) return;
       const command = resolveShortcutCommand(event, keybindings, {
         platform: navigator.platform,
         context: {
@@ -4765,6 +4773,14 @@ export default function Sidebar() {
           isDesktop: isElectron,
         },
       });
+      // The view toggle also works over the command palette, which lists it.
+      if (command === "sidebar.togglePinnedView" && pinnedViewEnabled) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSidebarPinnedView();
+        return;
+      }
+      if (isCommandPaletteOpen() || isModelPickerOpen()) return;
       const navigateToThreadKey = (targetThreadKey: string | null) => {
         if (!targetThreadKey) return false;
         const targetThread = threadByKey.get(targetThreadKey);
@@ -4774,12 +4790,6 @@ export default function Sidebar() {
         navigateToThread(scopeThreadRef(targetThread.environmentId, targetThread.id));
         return true;
       };
-      if (command === "sidebar.togglePinnedView") {
-        event.preventDefault();
-        event.stopPropagation();
-        toggleSidebarPinnedView();
-        return;
-      }
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {
         navigateToThreadKey(
@@ -4801,6 +4811,7 @@ export default function Sidebar() {
     keybindings,
     navigateToThread,
     orderedThreadKeys,
+    pinnedViewEnabled,
     routeTerminalOpen,
     routeThreadKey,
     threadByKey,
@@ -4880,14 +4891,20 @@ export default function Sidebar() {
             <SidebarThreadHeader
               searchFieldRef={headerSearchRef}
               hasProjects={projectGroups.length > 0}
-              pinnedView={pinnedView}
-              onTogglePinnedView={toggleSidebarPinnedView}
-              pinnedViewShortcutLabel={shortcutLabelForCommand(
-                keybindings,
-                "sidebar.togglePinnedView",
-              )}
-              otherViewThreadCount={otherViewThreads.length}
-              otherViewDoneCount={otherViewDoneCount}
+              pinnedViewToggle={
+                pinnedViewEnabled
+                  ? {
+                      pinnedView,
+                      onToggle: toggleSidebarPinnedView,
+                      shortcutLabel: shortcutLabelForCommand(
+                        keybindings,
+                        "sidebar.togglePinnedView",
+                      ),
+                      otherViewThreadCount: otherViewThreads.length,
+                      otherViewDoneCount,
+                    }
+                  : null
+              }
               projectScope={
                 <Combobox
                   items={projectScopeItems}
@@ -5449,7 +5466,8 @@ export default function Sidebar() {
             </TooltipProvider>
           ) : null}
           {!isSearchingThreads &&
-          visibleDraftSessionCount === 0 &&
+          // The pinned view leaves drafts out, so they can't fill its list.
+          (pinnedView || visibleDraftSessionCount === 0) &&
           pinnedThreads.length +
             activeThreads.length +
             workingThreads.length +

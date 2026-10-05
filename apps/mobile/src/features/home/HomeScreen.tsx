@@ -470,6 +470,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const {
     loaded: shelfPreferencesLoaded,
     pinnedView,
+    pinnedViewEnabled,
     settledShelfExpanded,
     snoozedShelfExpanded,
     workingShelfEnabled,
@@ -479,7 +480,11 @@ export function HomeScreen(props: HomeScreenProps) {
     toggleWorkingShelf,
     togglePinnedView,
   } = useThreadListV2ShelfPreferences();
-  useHardwareKeyboardCommand("togglePinnedView", togglePinnedView);
+  const pinnedViewCommands = useMemo(
+    () => (pinnedViewEnabled ? (["togglePinnedView"] as const) : []),
+    [pinnedViewEnabled],
+  );
+  useHardwareKeyboardCommand(pinnedViewCommands, togglePinnedView);
   // The queued-start and snooze helpers need a clock while the list stays open.
   const [nowMinute, setNowMinute] = useState(() => new Date().toISOString().slice(0, 16));
   // Snooze wake times are second-precise; a counter bumped exactly at the
@@ -570,10 +575,11 @@ export function HomeScreen(props: HomeScreenProps) {
       snoozedShelfExpanded,
       settledShelfExpanded,
       selectedThreadKey: null,
-      pinnedView,
+      view: pinnedViewEnabled ? (pinnedView ? "pinned" : "active") : undefined,
     });
   }, [
     pinnedView,
+    pinnedViewEnabled,
     workingShelfEnabled,
     workingShelfExpanded,
     pendingOrder,
