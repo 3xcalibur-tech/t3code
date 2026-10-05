@@ -13,7 +13,8 @@ across every project and connected environment. User guide:
   `home`, and only the Home RPCs and Home's own tools write it.
 - The grant is "this thread is `home.threadId`", read on every MCP call in
   `mcp/homeRouting.ts`. Turning Home off or starting fresh revokes the old
-  thread's reach at once, then interrupts its active run. Fleet operations
+  thread's reach at once, then holds its queue (`queue.hold`, under the
+  orchestrator's thread lock) and interrupts its active run. Fleet operations
   check the grant again right before they act. No credential carries it.
 - Home threads are always full-access. The MCP mode check stops a caller from
   acting on a thread broader than itself, and approvals need the widest mode.

@@ -31,10 +31,6 @@ const makeHome = () => {
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
   // Threads with a running turn, to model a Home that is busy when it is replaced.
   const running = new Set<string>();
-  // Threads with a turn queued that has not started yet.
-  const queued = new Set<string>();
-  // Threads where cancelling a queued turn lets the next queued turn start.
-  const startsNextOnCancel = new Set<string>();
   const shell = (threadId: ThreadId) =>
     ({
       id: threadId,
@@ -77,23 +73,15 @@ const makeHome = () => {
             sent.push(input);
             return Effect.succeed({} as ThreadManagement.ThreadManagementSendResult);
           },
-          getThreadRecords: (threadId) =>
-            Effect.succeed({
-              runs: queued.has(threadId) ? [{ id: "queued-run", status: "queued" }] : [],
-            } as never),
           dispatch: (command) => {
             dispatched.push(command);
-            if (command.type === "queued-run.cancel") {
-              queued.delete(command.threadId);
-              if (startsNextOnCancel.has(command.threadId)) running.add(command.threadId);
-            }
             return Effect.succeed({} as never);
           },
         }),
       ),
     ),
   );
-  return { layer, launched, sent, dispatched, sendFailures, running, queued, startsNextOnCancel };
+  return { layer, launched, sent, dispatched, sendFailures, running };
 };
 
 const event = (threadId: string, kind: HomeWatchEvent["kind"]): HomeWatchEvent => ({
@@ -201,42 +189,22 @@ it.effect("a Home thread that a fresh start replaced cannot change watches", () 
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("turning Home off cancels a turn the old Home has queued but not started", () => {
-  const { layer, dispatched, queued } = makeHome();
-  return Effect.gen(function* () {
-    const home = yield* HomeService.HomeService;
-    const { threadId } = yield* home.enable({ modelSelection });
-    queued.add(threadId);
-    yield* home.disable;
-    expect(dispatched).toMatchObject([
-      { type: "queued-run.cancel", threadId, runId: "queued-run" },
-    ]);
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("a queued turn that starts while the old Home is cancelled is interrupted too", () => {
-  const { layer, dispatched, queued, startsNextOnCancel } = makeHome();
-  return Effect.gen(function* () {
-    const home = yield* HomeService.HomeService;
-    const { threadId } = yield* home.enable({ modelSelection });
-    queued.add(threadId);
-    startsNextOnCancel.add(threadId);
-    yield* home.disable;
-    expect(dispatched).toMatchObject([
-      { type: "queued-run.cancel", threadId },
-      { type: "run.interrupt", threadId, holdQueue: true },
-    ]);
-  }).pipe(Effect.provide(layer));
-});
-
-it.effect("turning Home off stops the old Home and holds its queued messages", () => {
+it.effect("turning Home off holds the old Home's queue, then stops its run", () => {
   const { layer, dispatched, running } = makeHome();
   return Effect.gen(function* () {
     const home = yield* HomeService.HomeService;
-    const { threadId } = yield* home.enable({ modelSelection });
-    running.add(threadId);
+    const { threadId: idle } = yield* home.enable({ modelSelection });
     yield* home.disable;
-    expect(dispatched).toMatchObject([{ type: "run.interrupt", threadId, holdQueue: true }]);
+    expect(dispatched).toMatchObject([{ type: "queue.hold", threadId: idle }]);
+
+    dispatched.length = 0;
+    const { threadId: busy } = yield* home.enable({ modelSelection });
+    running.add(busy);
+    yield* home.disable;
+    expect(dispatched).toMatchObject([
+      { type: "queue.hold", threadId: busy },
+      { type: "run.interrupt", threadId: busy },
+    ]);
   }).pipe(Effect.provide(layer));
 });
 
@@ -262,7 +230,10 @@ it.effect("starting fresh moves the grant to a new thread and settles the old on
     expect(fresh.threadId).not.toBe(first.threadId);
     expect(yield* home.isHome(first.threadId)).toBe(false);
     expect(yield* home.isHome(fresh.threadId)).toBe(true);
-    expect(dispatched).toMatchObject([{ type: "thread.settle", threadId: first.threadId }]);
+    expect(dispatched).toMatchObject([
+      { type: "queue.hold", threadId: first.threadId },
+      { type: "thread.settle", threadId: first.threadId },
+    ]);
   }).pipe(Effect.provide(layer));
 });
 
