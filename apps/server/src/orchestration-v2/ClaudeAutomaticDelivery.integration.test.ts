@@ -37,6 +37,7 @@ import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
+import * as PeerGrantsTestkit from "../peer/PeerGrants.testkit.ts";
 
 const sessionId = "automatic-delivery-session";
 const settings = Schema.decodeSync(ClaudeSettings)({});
@@ -316,7 +317,12 @@ it.effect.each(["child completion", "scheduled message", "user steering"] as con
                   ),
                   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
                   Layer.provide(
-                    Layer.mergeAll(NodeCrypto.layer, Scheduler.layer, SqlitePersistenceMemory),
+                    Layer.mergeAll(
+                      NodeCrypto.layer,
+                      Scheduler.layer,
+                      SqlitePersistenceMemory,
+                      PeerGrantsTestkit.layerNoGrants,
+                    ),
                   ),
                 ),
               ),

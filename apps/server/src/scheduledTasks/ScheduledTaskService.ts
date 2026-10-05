@@ -1,6 +1,9 @@
 import {
   CommandId,
+  isInteractionModeWithin,
+  isRuntimeModeWithin,
   MessageId,
+  OrchestrationV2PeerOrigin,
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
@@ -29,6 +32,8 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as PeerGrants from "../peer/PeerGrants.ts";
+import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
@@ -43,6 +48,9 @@ const decodeWorkspaceStrategyJson = Schema.decodeUnknownEffect(
 );
 const decodeModelSelectionJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ScheduledTask.fields.modelSelection),
+);
+const decodePeerOriginJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2PeerOrigin),
 );
 
 interface ScheduledTaskRow {
@@ -66,6 +74,13 @@ interface ScheduledTaskRow {
   readonly last_run_status: string;
   readonly last_run_error: string | null;
   readonly run_count: number;
+  readonly peer_origin_json: string | null;
+}
+
+/** Server-only upsert fields. Clients cannot set them through the WS contract. */
+export interface ScheduledTaskServerUpsertInput extends ScheduledTaskUpsertInput {
+  /** Recorded when a task is created; edits keep the original value. */
+  readonly peerOrigin?: OrchestrationV2PeerOrigin | undefined;
 }
 
 export class ScheduledTaskService extends Context.Service<
@@ -75,7 +90,7 @@ export class ScheduledTaskService extends Context.Service<
     /** Emits the full task list on subscribe and again after every change (CRUD, run transitions, reschedules). */
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
     readonly upsert: (
-      input: ScheduledTaskUpsertInput,
+      input: ScheduledTaskServerUpsertInput,
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     /** Partial update flipping only the enabled flag; never touches other fields. */
     readonly setEnabled: (
@@ -130,6 +145,8 @@ const decodeRow = (row: ScheduledTaskRow) =>
     const schedule = yield* decodeScheduleJson(row.schedule_json);
     const workspaceStrategy = yield* decodeWorkspaceStrategyJson(row.workspace_strategy_json);
     const modelSelection = yield* decodeModelSelectionJson(row.model_selection_json);
+    const peerOrigin =
+      row.peer_origin_json === null ? null : yield* decodePeerOriginJson(row.peer_origin_json);
     return yield* decodeTask({
       // The stored id decodes through the task schema so a corrupt value fails
       // as a typed parse error, not a `ScheduledTaskId.make` defect.
@@ -146,6 +163,7 @@ const decodeRow = (row: ScheduledTaskRow) =>
       interactionMode: row.interaction_mode,
       createdBy: row.created_by,
       creationSource: row.creation_source,
+      peerOrigin,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       nextRunAt: row.next_run_at,
@@ -209,6 +227,56 @@ export const layer = Layer.effect(
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const peerGrants = yield* PeerGrants.PeerGrants;
+
+    // A task a peer-origin agent created runs only while its grant is active,
+    // and only into threads that are themselves peer-origin.
+    const assertPeerDispatchAllowed = (task: ScheduledTask) =>
+      Effect.gen(function* () {
+        const origin = task.peerOrigin;
+        if (origin == null) return;
+        const grant = yield* peerGrants
+          .getActive(origin.grantId)
+          .pipe(
+            Effect.mapError((cause) =>
+              taskError("Could not read the peer grant.", { taskId: task.id, cause }),
+            ),
+          );
+        if (Option.isNone(grant)) {
+          return yield* taskError("The peer grant that created this task was revoked.", {
+            taskId: task.id,
+          });
+        }
+        if (!grant.value.projectIds.includes(task.projectId)) {
+          return yield* taskError(
+            "The peer grant that created this task does not cover its project.",
+            {
+              taskId: task.id,
+            },
+          );
+        }
+        if (task.threadId === null) return;
+        const shell = yield* threadManagement
+          .getThreadShell(ThreadId.make(task.threadId))
+          .pipe(
+            Effect.mapError((cause) =>
+              taskError("Could not read the bound thread.", { taskId: task.id, cause }),
+            ),
+          );
+        // Sending runs with the thread's modes, so the thread must be this
+        // grant's work and no broader than the task.
+        if (
+          shell === null ||
+          shell.peerOrigin?.grantId !== origin.grantId ||
+          !isRuntimeModeWithin(shell.runtimeMode, task.runtimeMode) ||
+          !isInteractionModeWithin(shell.interactionMode, task.interactionMode)
+        ) {
+          return yield* taskError(
+            "A task created by peer work can only run in that grant's threads, within the task's modes.",
+            { taskId: task.id },
+          );
+        }
+      });
     const scheduler = yield* Scheduler.Scheduler;
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
@@ -238,7 +306,8 @@ export const layer = Layer.effect(
         last_run_at,
         last_run_status,
         last_run_error,
-        run_count
+        run_count,
+        peer_origin_json
       FROM scheduled_tasks
       ORDER BY updated_at DESC, task_id ASC
     `;
@@ -270,7 +339,8 @@ export const layer = Layer.effect(
         last_run_at,
         last_run_status,
         last_run_error,
-        run_count
+        run_count,
+        peer_origin_json
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `;
@@ -322,7 +392,8 @@ export const layer = Layer.effect(
           last_run_at,
           last_run_status,
           last_run_error,
-          run_count
+          run_count,
+          peer_origin_json
         )
         SELECT
           ${task.id},
@@ -344,7 +415,8 @@ export const layer = Layer.effect(
           ${task.lastRunAt},
           ${task.lastRunStatus},
           ${task.lastRunError},
-          ${task.runCount}
+          ${task.runCount},
+          ${task.peerOrigin == null ? null : JSON.stringify(task.peerOrigin)}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -514,43 +586,48 @@ export const layer = Layer.effect(
         // Effect.exit (not Effect.result) so defects and interruptions in the
         // dispatch are also captured and recorded as a failed run instead of
         // aborting before markCompleted.
-        const result =
+        const dispatch: Effect.Effect<
+          unknown,
+          | ThreadLaunchService.ThreadLaunchError
+          | ThreadManagementService.ThreadManagementError
+          | OrchestratorV2Error
+        > =
           active.threadId === null
-            ? yield* Effect.exit(
-                threadLaunch.launch({
-                  commandId,
-                  projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
-                  workspaceStrategy: active.workspaceStrategy,
-                  initialMessage: {
-                    messageId,
-                    scheduledTaskId: active.id,
-                    text: prompt,
-                    attachments: [],
-                  },
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              )
-            : yield* Effect.exit(
-                threadManagement.sendToThread({
-                  projectId: active.projectId,
-                  commandId,
-                  threadId: ThreadId.make(active.threadId),
+            ? threadLaunch.launch({
+                commandId,
+                projectId: active.projectId,
+                title: active.title,
+                modelSelection: active.modelSelection,
+                runtimeMode: active.runtimeMode,
+                interactionMode: active.interactionMode,
+                workspaceStrategy: active.workspaceStrategy,
+                initialMessage: {
                   messageId,
                   scheduledTaskId: active.id,
                   text: prompt,
                   attachments: [],
-                  modelSelection: active.modelSelection,
-                  // Scheduled prompts must not interrupt tools in the bound thread.
-                  mode: "queue",
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
-              );
+                },
+                createdBy: active.createdBy,
+                creationSource: active.creationSource,
+                ...(active.peerOrigin == null ? {} : { peerOrigin: active.peerOrigin }),
+              })
+            : threadManagement.sendToThread({
+                projectId: active.projectId,
+                commandId,
+                threadId: ThreadId.make(active.threadId),
+                messageId,
+                scheduledTaskId: active.id,
+                text: prompt,
+                attachments: [],
+                modelSelection: active.modelSelection,
+                // Scheduled prompts must not interrupt tools in the bound thread.
+                mode: "queue",
+                createdBy: active.createdBy,
+                creationSource: active.creationSource,
+              });
+        const result = yield* Effect.exit(
+          assertPeerDispatchAllowed(active).pipe(Effect.andThen(dispatch)),
+        );
 
         const completedAt = yield* localNow;
         const runSucceeded = result._tag === "Success";
@@ -760,6 +837,8 @@ export const layer = Layer.effect(
           interactionMode: input.interactionMode,
           createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
           creationSource: input.creationSource ?? "web",
+          peerOrigin:
+            existingTask === null ? (input.peerOrigin ?? null) : (existingTask.peerOrigin ?? null),
           createdAt: existingTask?.createdAt ?? iso(now),
           updatedAt: iso(now),
           nextRunAt: scheduleUnchanged

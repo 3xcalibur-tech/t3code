@@ -21,6 +21,7 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import { assertPeerWorkAccess } from "../../peerOrigin.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -78,16 +79,18 @@ const readQuestion = Effect.fn("mcp.readQuestion")(function* (
 export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
-      yield* readFullAccessCaller(
+      const { caller } = yield* readFullAccessCaller(
         "Running a scheduled task requires a live full-access/default thread or a full-access client.",
       );
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
-      if (!tasks.some((task) => task.id === input.taskId))
+      const scheduled = tasks.find((task) => task.id === input.taskId);
+      if (scheduled === undefined)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "The scheduled task was not found.",
         });
+      yield* assertPeerWorkAccess(caller, scheduled);
       const { task } = yield* scheduler
         .runNow({ id: input.taskId })
         .pipe(Effect.mapError(unavailable));

@@ -1,7 +1,9 @@
 import {
   CommandId,
   type RunId,
+  isInteractionModeWithin,
   isProviderAvailable,
+  isRuntimeModeWithin,
   MessageId,
   type ModelSelection,
   NodeId,
@@ -12,6 +14,7 @@ import {
   type OrchestrationV2TurnItem,
   OrchestratorMcpFailure,
   type OrchestratorMcpCapabilitiesResult,
+  type OrchestratorMcpProviderCapability,
   type OrchestratorMcpCreateThreadsInput,
   type OrchestratorMcpCreateThreadsResult,
   type OrchestratorMcpCreatedThread,
@@ -78,6 +81,7 @@ import {
   type McpThreadInvocationScope,
   requireThreadScope,
 } from "./McpInvocationContext.ts";
+import { assertPeerWorkAccess } from "./peerOrigin.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -152,6 +156,23 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadInterruptInput,
   ) => Effect.Effect<OrchestratorMcpThreadInterruptResult, OrchestratorMcpFailure>;
+  /**
+   * Unscoped reads for the peer API, which authorizes its caller by grant
+   * before it calls these. Never expose them to MCP callers directly.
+   */
+  readonly peer: {
+    readonly providers: Effect.Effect<
+      ReadonlyArray<OrchestratorMcpProviderCapability>,
+      OrchestratorMcpFailure
+    >;
+    readonly resolveModelSelection: (input: {
+      readonly inherited: ModelSelection;
+      readonly target: OrchestratorMcpTarget | undefined;
+    }) => Effect.Effect<ModelSelection, OrchestratorMcpFailure>;
+    readonly readThread: (
+      input: OrchestratorMcpThreadReadInput,
+    ) => Effect.Effect<OrchestratorMcpThreadReadResult, OrchestratorMcpFailure>;
+  };
 }
 
 export class OrchestratorMcpService extends Context.Service<
@@ -433,29 +454,12 @@ function canExposeTaskRunResult(run: OrchestrationV2Run | undefined): run is Orc
   );
 }
 
-function runtimeModeRank(mode: RuntimeMode): number {
-  switch (mode) {
-    case "approval-required":
-      return 0;
-    case "auto-accept-edits":
-      return 1;
-    case "auto":
-      return 2;
-    case "full-access":
-      return 3;
-  }
-}
-
-function interactionModeRank(mode: ProviderInteractionMode): number {
-  return mode === "plan" ? 0 : 1;
-}
-
 export function resolveRuntimeMode(
   parentMode: RuntimeMode,
   requested: OrchestratorMcpRuntimeMode | undefined,
 ): Effect.Effect<RuntimeMode, OrchestratorMcpFailure> {
   const resolved = requested === undefined || requested === "inherit" ? parentMode : requested;
-  return runtimeModeRank(resolved) > runtimeModeRank(parentMode)
+  return !isRuntimeModeWithin(resolved, parentMode)
     ? Effect.fail(
         failure(
           "runtime_mode_escalation_denied",
@@ -470,7 +474,7 @@ export function resolveInteractionMode(
   requested: OrchestratorMcpInteractionMode | undefined,
 ): Effect.Effect<ProviderInteractionMode, OrchestratorMcpFailure> {
   const resolved = requested === undefined || requested === "inherit" ? parentMode : requested;
-  return interactionModeRank(resolved) > interactionModeRank(parentMode)
+  return !isInteractionModeWithin(resolved, parentMode)
     ? Effect.fail(
         failure(
           "interaction_mode_escalation_denied",
@@ -996,7 +1000,9 @@ const make = Effect.gen(function* () {
     providerAdapters.list().pipe(Effect.map((instanceIds) => new Set(instanceIds)));
 
   const resolveTarget = (input: {
-    readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
+    readonly parent: {
+      readonly thread: Pick<OrchestrationV2ThreadProjection["thread"], "modelSelection">;
+    };
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
@@ -1283,9 +1289,10 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.timeoutOption(Duration.millis(timeoutMs)));
 
   /**
-   * A scheduled task the caller may change: one whose modes are no broader
-   * than the caller's own, so editing its prompt cannot run work above the
-   * caller's limits.
+   * A scheduled task the caller may change. Its modes, and those of the thread
+   * it is bound to, are no broader than the caller's own, so editing its prompt
+   * cannot run work above the caller's limits. Work a peer started may only
+   * change its own grant's tasks.
    */
   const loadScheduledTask = (
     scheduledTaskId: ScheduledTask["id"],
@@ -1293,6 +1300,7 @@ const make = Effect.gen(function* () {
       readonly runtimeMode: RuntimeMode;
       readonly interactionMode: ProviderInteractionMode;
     },
+    caller: OrchestrationV2ThreadProjection["thread"] | undefined,
   ): Effect.Effect<ScheduledTask, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
       const { tasks } = yield* scheduledTasks
@@ -1306,10 +1314,106 @@ const make = Effect.gen(function* () {
       if (task === undefined) {
         return yield* failure("task_not_found", `Scheduled task ${scheduledTaskId} was not found.`);
       }
+      yield* assertPeerWorkAccess(caller, task);
       yield* resolveRuntimeMode(limits.runtimeMode, task.runtimeMode);
       yield* resolveInteractionMode(limits.interactionMode, task.interactionMode);
+      if (task.threadId !== null) {
+        const bound = yield* threadManagement
+          .getThreadShell(ThreadId.make(task.threadId))
+          .pipe(Effect.mapError(threadManagementFailure));
+        if (bound !== null) {
+          yield* assertPeerWorkAccess(caller, bound);
+          yield* resolveRuntimeMode(limits.runtimeMode, bound.runtimeMode);
+          yield* resolveInteractionMode(limits.interactionMode, bound.interactionMode);
+        }
+      }
       return task;
     });
+
+  const loadThreadPage = (input: OrchestratorMcpThreadReadInput) =>
+    Effect.gen(function* () {
+      const view = input.view ?? "messages";
+      const afterPosition = input.afterPosition ?? -1;
+      const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
+      const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
+      const timeline = yield* threadManagement
+        .getTimelinePage(input.threadId, {
+          afterPosition,
+          limit,
+          view,
+          ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
+        })
+        .pipe(Effect.mapError(threadManagementFailure));
+      const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
+      for (const row of timeline.items) {
+        if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
+        const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
+        ids.push(row.item.messageId);
+        messageIdsByThread.set(row.sourceThreadId, ids);
+      }
+      const sourceMessages = yield* Effect.forEach(
+        [...messageIdsByThread],
+        ([threadId, messageIds]) =>
+          threadManagement.getThreadRecords(threadId, ["messages"], { messageIds }).pipe(
+            Effect.map((records) => [threadId, records.messages] as const),
+            Effect.mapError(threadManagementFailure),
+          ),
+        { concurrency: 1 },
+      );
+      return { timeline, maxChars, messagesByThreadId: new Map(sourceMessages) };
+    });
+
+  const threadReadResult = (
+    target: Parameters<typeof threadDetail>[0],
+    input: OrchestratorMcpThreadReadInput,
+    loaded: Effect.Success<ReturnType<typeof loadThreadPage>>,
+  ): OrchestratorMcpThreadReadResult => {
+    const page = loaded.timeline.items;
+    return {
+      thread: threadDetail(target, loaded.timeline.totalItems),
+      recentRuns: target.runs
+        .toSorted((left, right) => right.ordinal - left.ordinal)
+        .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
+        .map(threadRun),
+      items: page.map((row) =>
+        timelineItem({
+          row,
+          maxChars: loaded.maxChars,
+          messagesByThreadId: loaded.messagesByThreadId,
+          ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+        }),
+      ),
+      nextPosition: page.at(-1)?.position ?? null,
+      hasMore: loaded.timeline.hasMore,
+    };
+  };
+
+  const providerCapabilities = Effect.gen(function* () {
+    const providers = yield* loadProviders;
+    const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
+    return providers.map((provider): OrchestratorMcpProviderCapability => {
+      const constraints = providerConstraints(
+        provider,
+        orchestrationCapableInstanceIds.has(provider.instanceId),
+      );
+      return {
+        providerInstanceId: provider.instanceId,
+        driverKind: provider.driver,
+        displayName: provider?.displayName ?? null,
+        models:
+          provider?.models.map((model) => ({
+            id: model.slug,
+            label: model.name ?? null,
+            ...(model.capabilities?.optionDescriptors === undefined
+              ? {}
+              : { options: model.capabilities.optionDescriptors }),
+          })) ?? [],
+        canRunChildTask: constraints.length === 0,
+        canRunCrossProviderChildTask: constraints.length === 0,
+        constraints: [...constraints],
+      };
+    });
+  });
 
   return OrchestratorMcpService.of({
     scheduleTask: (scope, input) =>
@@ -1317,6 +1421,13 @@ const make = Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
         const projectId = yield* resolveProjectTarget(parent, input.projectId);
         yield* assertLiveCallerForOtherProject(scope, parent, projectId);
+        // Work a peer started stays in the project its grant let it into.
+        if (parent?.thread.peerOrigin != null && parent.thread.projectId !== projectId) {
+          return yield* failure(
+            "capability_denied",
+            "Work a peer environment started can only schedule tasks in its own project.",
+          );
+        }
         const project = yield* requireProject(projectId);
         // Binding means "wake this thread", which only a thread caller in that project has.
         const bindToCurrentThread =
@@ -1338,7 +1449,7 @@ const make = Effect.gen(function* () {
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
           input.title ?? (derivedTitle.length > 0 ? derivedTitle.slice(0, 80) : "Scheduled task");
-        const upsertInput: ScheduledTaskUpsertInput = {
+        const upsertInput: ScheduledTaskService.ScheduledTaskServerUpsertInput = {
           title,
           prompt: input.prompt,
           enabled: input.enabled ?? true,
@@ -1351,6 +1462,7 @@ const make = Effect.gen(function* () {
           interactionMode: limits.interactionMode,
           createdBy: "agent",
           creationSource: "mcp",
+          ...(parent?.thread.peerOrigin == null ? {} : { peerOrigin: parent.thread.peerOrigin }),
           // Scope the idempotency key by provider session so two callers
           // reusing the same clientRequestId cannot collide on one task row.
           ...(input.clientRequestId === undefined
@@ -1392,7 +1504,7 @@ const make = Effect.gen(function* () {
     updateScheduledTask: (scope, input) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits, parent?.thread);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
           input.bindToCurrentThread === true &&
@@ -1445,7 +1557,7 @@ const make = Effect.gen(function* () {
     deleteScheduledTask: (scope, input) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
-        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
+        const existing = yield* loadScheduledTask(input.scheduledTaskId, limits, parent?.thread);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         yield* scheduledTasks
           .delete({ id: existing.id })
@@ -1459,36 +1571,13 @@ const make = Effect.gen(function* () {
     capabilities: (scope) =>
       Effect.gen(function* () {
         const { parent, limits } = yield* loadCaller(scope);
-        const providers = yield* loadProviders;
-        const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
         return {
           parentThreadId: parent?.thread.id ?? null,
           inheritedProviderInstanceId: parent?.thread.modelSelection.instanceId ?? null,
           inheritedModel: parent?.thread.modelSelection.model ?? null,
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
-          providers: providers.map((provider) => {
-            const constraints = providerConstraints(
-              provider,
-              orchestrationCapableInstanceIds.has(provider.instanceId),
-            );
-            return {
-              providerInstanceId: provider.instanceId,
-              driverKind: provider.driver,
-              displayName: provider?.displayName ?? null,
-              models:
-                provider?.models.map((model) => ({
-                  id: model.slug,
-                  label: model.name ?? null,
-                  ...(model.capabilities?.optionDescriptors === undefined
-                    ? {}
-                    : { options: model.capabilities.optionDescriptors }),
-                })) ?? [],
-              canRunChildTask: constraints.length === 0,
-              canRunCrossProviderChildTask: constraints.length === 0,
-              constraints: [...constraints],
-            };
-          }),
+          providers: yield* providerCapabilities,
           features: {
             appOwnedSubagents: true,
             asyncPolling: true,
@@ -1776,6 +1865,9 @@ const make = Effect.gen(function* () {
                   interactionMode,
                   branch: parent.thread.branch,
                   worktreePath: parent.thread.worktreePath,
+                  ...(parent.thread.peerOrigin == null
+                    ? {}
+                    : { peerOrigin: parent.thread.peerOrigin }),
                 })
                 .pipe(
                   Effect.mapError((error) =>
@@ -1903,36 +1995,7 @@ const make = Effect.gen(function* () {
     readThread: (scope, input) =>
       Effect.gen(function* () {
         const { parent, target } = yield* loadReadableThread(scope, input.threadId);
-        const view = input.view ?? "messages";
-        const afterPosition = input.afterPosition ?? -1;
-        const limit = input.limit ?? DEFAULT_THREAD_READ_LIMIT;
-        const maxChars = input.maxCharsPerItem ?? DEFAULT_THREAD_ITEM_MAX_CHARS;
-        const timeline = yield* threadManagement
-          .getTimelinePage(input.threadId, {
-            afterPosition,
-            limit,
-            view,
-            ...(input.itemId === undefined ? {} : { itemId: input.itemId }),
-          })
-          .pipe(Effect.mapError(threadManagementFailure));
-        const page = timeline.items;
-        const messageIdsByThread = new Map<ThreadId, Array<MessageId>>();
-        for (const row of page) {
-          if (row.item.type !== "user_message" && row.item.type !== "assistant_message") continue;
-          const ids = messageIdsByThread.get(row.sourceThreadId) ?? [];
-          ids.push(row.item.messageId);
-          messageIdsByThread.set(row.sourceThreadId, ids);
-        }
-        const sourceMessages = yield* Effect.forEach(
-          [...messageIdsByThread],
-          ([threadId, messageIds]) =>
-            threadManagement.getThreadRecords(threadId, ["messages"], { messageIds }).pipe(
-              Effect.map((records) => [threadId, records.messages] as const),
-              Effect.mapError(threadManagementFailure),
-            ),
-          { concurrency: 1 },
-        );
-        const messagesByThreadId = new Map(sourceMessages);
+        const loaded = yield* loadThreadPage(input);
         const task = parent === undefined ? undefined : directAppOwnedChildTask(parent, target);
         if (
           parent !== undefined &&
@@ -1959,10 +2022,10 @@ const make = Effect.gen(function* () {
           if (
             pageIncludesTerminalTaskResult({
               parent,
-              page,
+              page: loaded.timeline.items,
               task,
               target: { ...target, ...resultRecords },
-              maxChars,
+              maxChars: loaded.maxChars,
             })
           ) {
             yield* readTask(
@@ -1974,28 +2037,13 @@ const make = Effect.gen(function* () {
             );
           }
         }
-        return {
-          thread: threadDetail(target, timeline.totalItems),
-          recentRuns: target.runs
-            .toSorted((left, right) => right.ordinal - left.ordinal)
-            .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
-            .map(threadRun),
-          items: page.map((row) =>
-            timelineItem({
-              row,
-              maxChars,
-              messagesByThreadId,
-              ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
-            }),
-          ),
-          nextPosition: page.at(-1)?.position ?? null,
-          hasMore: timeline.hasMore,
-        } satisfies OrchestratorMcpThreadReadResult;
+        return threadReadResult(target, input, loaded);
       }),
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
         yield* assertLiveCallerForOtherThread(scope, parent, target);
+        yield* assertPeerWorkAccess(parent?.thread, target.thread);
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
 
@@ -2066,6 +2114,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
         yield* assertLiveCallerForOtherThread(scope, parent, target);
+        yield* assertPeerWorkAccess(parent?.thread, target.thread);
         // Stopping another thread's work is a write: it must run within the caller's modes.
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, target.thread.interactionMode);
@@ -2105,6 +2154,23 @@ const make = Effect.gen(function* () {
           status: result.type === "already_terminal" ? result.run.status : "interrupt_requested",
         } satisfies OrchestratorMcpThreadInterruptResult;
       }),
+    peer: {
+      providers: providerCapabilities,
+      resolveModelSelection: ({ inherited, target }) =>
+        loadProviders.pipe(
+          Effect.flatMap((providers) =>
+            resolveTarget({ parent: { thread: { modelSelection: inherited } }, target, providers }),
+          ),
+          Effect.map((resolved) => resolved.modelSelection),
+        ),
+      readThread: (input) =>
+        Effect.gen(function* () {
+          const target = yield* threadManagement
+            .getThreadRecords(input.threadId, ["runs", "runtimeRequests", "contextTransfers"])
+            .pipe(Effect.mapError(threadManagementFailure));
+          return threadReadResult(target, input, yield* loadThreadPage(input));
+        }),
+    },
   });
 });
 

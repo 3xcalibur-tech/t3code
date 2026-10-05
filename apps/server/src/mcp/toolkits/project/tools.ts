@@ -25,6 +25,7 @@ import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
+import * as PeerGrants from "../../../peer/PeerGrants.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -142,6 +143,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ManagedProjectFolders.ManagedProjectFolders,
     FileSystem.FileSystem,
     ServerConfig.ServerConfig,
+    PeerGrants.PeerGrants,
   ],
 })
   .annotate(Tool.Destructive, true)

@@ -22,17 +22,27 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 
-export const RuntimeMode = Schema.Literals([
-  "approval-required",
-  "auto-accept-edits",
-  "auto",
-  "full-access",
-]);
+/** Ordered from narrowest to broadest. */
+const RUNTIME_MODES = ["approval-required", "auto-accept-edits", "auto", "full-access"] as const;
+export const RuntimeMode = Schema.Literals(RUNTIME_MODES);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
+
+/** True when `mode` allows no more than `limit`. */
+export function isRuntimeModeWithin(mode: RuntimeMode, limit: RuntimeMode): boolean {
+  return RUNTIME_MODES.indexOf(mode) <= RUNTIME_MODES.indexOf(limit);
+}
+
+/** True when `mode` allows no more than `limit`. Plan is the narrower mode. */
+export function isInteractionModeWithin(
+  mode: ProviderInteractionMode,
+  limit: ProviderInteractionMode,
+): boolean {
+  return mode === "plan" || limit === "default";
+}
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 
 export const ProviderRequestKind = Schema.Literals([

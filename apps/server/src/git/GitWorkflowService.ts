@@ -40,6 +40,12 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly refName: string;
     }) => Effect.Effect<boolean, GitCommandError>;
+    /** True when `ancestor` is `descendant` or reachable from it. */
+    readonly isAncestor: (input: {
+      readonly cwd: string;
+      readonly ancestor: string;
+      readonly descendant: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -76,6 +82,12 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly remoteName: string;
       readonly refName?: string;
+    }) => Effect.Effect<void, GitCommandError>;
+    /** Fetches exactly `refs/heads/<remoteBranch>` and fails when the remote lacks it. */
+    readonly fetchRemoteTrackingBranch: (input: {
+      readonly cwd: string;
+      readonly remoteName: string;
+      readonly remoteBranch: string;
     }) => Effect.Effect<void, GitCommandError>;
     readonly remoteExists: (input: {
       readonly cwd: string;
@@ -300,6 +312,18 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((result) => result.exitCode === 0),
       ),
+    isAncestor: (input) =>
+      ensureGitCommand("GitWorkflowService.isAncestor", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.isAncestor",
+            cwd: input.cwd,
+            args: ["merge-base", "--is-ancestor", input.ancestor, input.descendant],
+            allowNonZeroExit: true,
+          }),
+        ),
+        Effect.map((result) => result.exitCode === 0),
+      ),
     status: (input) =>
       detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
@@ -356,6 +380,10 @@ export const make = Effect.gen(function* () {
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(
         Effect.andThen(git.fetchRemote(input)),
+      ),
+    fetchRemoteTrackingBranch: (input) =>
+      ensureGitCommand("GitWorkflowService.fetchRemoteTrackingBranch", input.cwd).pipe(
+        Effect.andThen(git.fetchRemoteTrackingBranch(input)),
       ),
     remoteExists: (input) =>
       ensureGitCommand("GitWorkflowService.remoteExists", input.cwd).pipe(

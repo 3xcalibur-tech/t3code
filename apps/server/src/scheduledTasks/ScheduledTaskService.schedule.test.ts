@@ -12,12 +12,14 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as PeerGrantsTestkit from "../peer/PeerGrants.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
 
 it.effect("rejects a stale form save after deletion while preserving explicit-id creates", () =>
   Effect.gen(function* () {
     const dependencies = Layer.mergeAll(
+      PeerGrantsTestkit.layerNoGrants,
       NodeCrypto.layer,
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
@@ -60,6 +62,7 @@ it.effect("preserves a due run when a save only pads the scheduled hour", () =>
     yield* TestClock.setTime(DateTime.toEpochMillis(dueAt) - 1_000);
 
     const dependencies = Layer.mergeAll(
+      PeerGrantsTestkit.layerNoGrants,
       NodeCrypto.layer,
       Scheduler.layer,
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),

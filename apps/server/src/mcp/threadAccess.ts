@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as OrchestrationMcp from "./OrchestratorMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { assertPeerWorkAccess } from "./peerOrigin.ts";
 
 export const unavailable = () =>
   new OrchestratorMcpFailure({
@@ -196,6 +197,7 @@ export const readWritableThread = Effect.fn("mcp.readWritableThread")(function* 
 >(threadId?: ThreadId, fields: ReadonlyArray<K> = []) {
   const context = yield* readThread(threadId, fields);
   yield* assertLiveCaller(context);
+  yield* assertPeerWorkAccess(context.caller, context.projection.thread);
   yield* assertTargetWithinLimits(context.limits, context.projection.thread);
   return context;
 });

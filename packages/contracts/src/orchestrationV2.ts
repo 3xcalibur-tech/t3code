@@ -11,11 +11,13 @@ import {
   CommandId,
   ContextHandoffId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
   NodeId,
   NonNegativeInt,
+  PeerGrantId,
   PlanId,
   PositiveInt,
   ProjectId,
@@ -82,6 +84,21 @@ export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource
 
 export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
 export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
+
+/**
+ * Set when another environment started this work through a peer grant. It is
+ * immutable and inherited by every thread created from a peer-origin thread
+ * (subagents, forks, launches, scheduled runs). Peer-origin agents may only
+ * act on peer-origin work. See docs/internals/peer-access.md.
+ */
+export const OrchestrationV2PeerOrigin = Schema.Struct({
+  grantId: PeerGrantId,
+  /** The admin's label for the grant when the work started. */
+  label: TrimmedNonEmptyString,
+  /** The environment id the peer sent. Unverified: a grant secret does not prove who holds it. */
+  claimedEnvironmentId: Schema.NullOr(EnvironmentId),
+});
+export type OrchestrationV2PeerOrigin = typeof OrchestrationV2PeerOrigin.Type;
 
 const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
@@ -375,6 +392,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  peerOrigin: Schema.optional(Schema.NullOr(OrchestrationV2PeerOrigin)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(
     Schema.Union([
@@ -1734,6 +1752,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  peerOrigin: Schema.optional(Schema.NullOr(OrchestrationV2PeerOrigin)),
   latestRunId: Schema.NullOr(RunId),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2500,6 +2519,8 @@ export const OrchestrationV2Command = Schema.Union([
         metadata: Schema.optional(OrchestrationV2ProviderThreadNativeMetadata),
       }),
     ),
+    /** Server-set only; client dispatches have it removed. */
+    peerOrigin: Schema.optional(OrchestrationV2PeerOrigin),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),

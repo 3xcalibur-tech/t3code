@@ -847,6 +847,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "peer-grants",
+    title: "Peer grants",
+    to: "/settings/connections",
+    searchTerms: ["peer access other environment agents mcp delegate setup string secret revoke"],
+    localBackendManagementOnly: true,
+  },
+  {
+    id: "peer-environments",
+    title: "Peer environments",
+    to: "/settings/connections",
+    searchTerms: ["peer access other environment agents mcp delegate setup string hand off work"],
+    localEnvironmentOnly: true,
+  },
+  {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",

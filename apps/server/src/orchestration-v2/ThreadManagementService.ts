@@ -49,7 +49,11 @@ export function withCreationProvenance(
   provenance: ThreadManagementProvenance,
 ): OrchestrationV2Command {
   switch (command.type) {
-    case "thread.create":
+    case "thread.create": {
+      // Peer origin is server-set provenance; a client cannot claim or clear it.
+      const { peerOrigin: _peerOrigin, ...rest } = command;
+      return { ...rest, ...provenance };
+    }
     case "message.dispatch":
     case "thread.fork":
     case "thread.merge_back":

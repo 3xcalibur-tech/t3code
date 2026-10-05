@@ -454,6 +454,7 @@ it("readThread and sendToThread reach threads in other projects", async () => {
                 {
                   id: "task-foreign",
                   projectId: foreignProjectId,
+                  threadId: null,
                   runtimeMode: "approval-required",
                   interactionMode: "default",
                 } as never,

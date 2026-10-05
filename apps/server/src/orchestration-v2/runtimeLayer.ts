@@ -51,6 +51,7 @@ import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.t
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import * as PeerGrants from "../peer/PeerGrants.ts";
 
 /** The shared application event log and its command receipts. */
 export const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
@@ -235,8 +236,9 @@ const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
 const threadManagementProvided = threadManagementServiceLayer.pipe(
   Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
 );
+const PeerGrantsLayerLive = PeerGrants.layer.pipe(Layer.provide(ProjectServiceLayerLive));
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
-  Layer.provide(ProjectServiceLayerLive),
+  Layer.provide(Layer.merge(ProjectServiceLayerLive, PeerGrantsLayerLive)),
 );
 const managedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(ProjectServiceLayerLive),
@@ -257,7 +259,9 @@ const threadLifecycleProvided = threadLifecycleServiceLayer.pipe(
   Layer.provide(threadManagementProvided),
 );
 const scheduledTaskProvided = scheduledTaskServiceLayer.pipe(
-  Layer.provide(Layer.mergeAll(threadLaunchProvided, threadManagementProvided)),
+  Layer.provide(
+    Layer.mergeAll(threadLaunchProvided, threadManagementProvided, PeerGrantsLayerLive),
+  ),
 );
 const providerContinuationWorkerProvided = providerContinuationWorkerLive.pipe(
   Layer.provide(
@@ -310,6 +314,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
 export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   OrchestrationV2LayerLive.pipe(Layer.provide(ProjectServiceLayerLive)),
   ProjectServiceLayerLive,
+  PeerGrantsLayerLive,
   managedProjectFoldersProvided,
   threadLaunchProvided,
   threadLifecycleProvided,

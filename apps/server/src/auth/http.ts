@@ -34,6 +34,7 @@ import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
+import * as PeerGrants from "../peer/PeerGrants.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
@@ -233,6 +234,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const peerGrants = yield* PeerGrants.PeerGrants;
 
     return handlers
       .handle(
@@ -493,6 +495,50 @@ export const authHttpApiLayer = HttpApiBuilder.group(
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("client_session_revoke_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "peerGrants",
+        Effect.fn("environment.auth.peerGrants")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            yield* requireEnvironmentScope(AuthAccessReadScope);
+            return yield* peerGrants.list;
+          },
+          Effect.catchTag("PeerGrantStoreError", (error) =>
+            failEnvironmentInternal("peer_grants_failed", error),
+          ),
+        ),
+      )
+      .handle(
+        "createPeerGrant",
+        Effect.fn("environment.auth.createPeerGrant")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            // Granting another environment work here is access management, so
+            // only an admin session on this environment can do it.
+            yield* requireEnvironmentScope(AuthAccessWriteScope);
+            yield* appendCredentialResponseHeaders;
+            return yield* peerGrants.create(args.payload);
+          },
+          Effect.catchTags({
+            PeerGrantProjectNotFoundError: () =>
+              failEnvironmentInvalidRequest("invalid_peer_grant"),
+            PeerGrantStoreError: (error) => failEnvironmentInternal("peer_grants_failed", error),
+          }),
+        ),
+      )
+      .handle(
+        "revokePeerGrant",
+        Effect.fn("environment.auth.revokePeerGrant")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            yield* requireEnvironmentScope(AuthAccessWriteScope);
+            return { revoked: yield* peerGrants.revoke(args.payload.id) };
+          },
+          Effect.catchTag("PeerGrantStoreError", (error) =>
+            failEnvironmentInternal("peer_grants_failed", error),
           ),
         ),
       );

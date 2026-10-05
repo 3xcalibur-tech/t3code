@@ -1,6 +1,112 @@
-import type { AdvertisedEndpoint, DesktopBridge, DesktopWslState } from "@t3tools/contracts";
+import {
+  isAllowedPeerUrl,
+  type AdvertisedEndpoint,
+  type DesktopBridge,
+  type DesktopWslState,
+} from "@t3tools/contracts";
 
 type WslEnableBridge = Pick<DesktopBridge, "setWslBackendEnabled" | "setWslDistro" | "setWslOnly">;
+
+/**
+ * The endpoint links and QR codes use by default: the saved default endpoint,
+ * else the server's default, else the first non-loopback one.
+ */
+export function selectPairingEndpoint(
+  endpoints: ReadonlyArray<AdvertisedEndpoint>,
+  defaultEndpointKey?: string | null,
+): AdvertisedEndpoint | null {
+  const availableEndpoints = endpoints.filter((endpoint) => endpoint.status !== "unavailable");
+  if (defaultEndpointKey) {
+    const selectedEndpoint = availableEndpoints.find(
+      (endpoint) => endpointDefaultPreferenceKey(endpoint) === defaultEndpointKey,
+    );
+    if (selectedEndpoint) {
+      return selectedEndpoint;
+    }
+  }
+  return (
+    availableEndpoints.find((endpoint) => endpoint.isDefault) ??
+    availableEndpoints.find((endpoint) => endpoint.reachability !== "loopback") ??
+    availableEndpoints.find((endpoint) => endpoint.compatibility.hostedHttpsApp === "compatible") ??
+    null
+  );
+}
+
+export interface PeerEndpointOption {
+  readonly id: string;
+  readonly label: string;
+  readonly url: string;
+}
+
+export const PEER_CONNECT_ENDPOINT_ID = "t3-connect";
+
+/**
+ * Addresses another environment may use to reach this one for peer access,
+ * and the one to preselect. Peer URLs must be HTTPS or loopback HTTP, so plain
+ * LAN and Tailscale IP endpoints are left out. The T3 Connect address works
+ * from anywhere, so it comes first. Loopback only works on this machine, so it
+ * is offered but never preselected; with nothing else, the user types a URL.
+ */
+export function selectPeerEndpoints(
+  endpoints: ReadonlyArray<AdvertisedEndpoint>,
+  defaultEndpointKey: string | null,
+  connectUrl: string | null,
+): {
+  readonly options: ReadonlyArray<PeerEndpointOption>;
+  readonly selected: string | null;
+} {
+  const advertised = endpoints.filter(
+    (endpoint) => endpoint.status !== "unavailable" && isAllowedPeerUrl(endpoint.httpBaseUrl),
+  );
+  const connect =
+    connectUrl !== null && isAllowedPeerUrl(connectUrl)
+      ? [{ id: PEER_CONNECT_ENDPOINT_ID, label: "T3 Connect", url: connectUrl }]
+      : [];
+  const remote = advertised.filter((endpoint) => endpoint.reachability !== "loopback");
+  return {
+    options: [
+      ...connect,
+      ...advertised.map((endpoint) => ({
+        id: endpoint.id,
+        label: endpoint.label,
+        url: endpoint.httpBaseUrl,
+      })),
+    ],
+    selected:
+      connect[0]?.id ??
+      selectPairingEndpoint(remote, defaultEndpointKey)?.id ??
+      remote[0]?.id ??
+      null,
+  };
+}
+
+export function isTailscaleHttpsEndpoint(endpoint: AdvertisedEndpoint): boolean {
+  return endpoint.id.startsWith("tailscale-magicdns:");
+}
+
+export function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
+  if (endpoint.id.startsWith("desktop-loopback:")) {
+    return "desktop-core:loopback:http";
+  }
+  if (endpoint.id.startsWith("desktop-lan:")) {
+    return "desktop-core:lan:http";
+  }
+  if (endpoint.id.startsWith("tailscale-ip:")) {
+    return "tailscale:ip:http";
+  }
+  if (isTailscaleHttpsEndpoint(endpoint)) {
+    return "tailscale:magicdns:https";
+  }
+
+  let scheme = "unknown";
+  try {
+    scheme = new URL(endpoint.httpBaseUrl).protocol.replace(/:$/u, "");
+  } catch {
+    // Keep the stored preference stable even if a custom endpoint is malformed.
+  }
+
+  return `${endpoint.provider.id}:${endpoint.reachability}:${scheme}:${endpoint.label}`;
+}
 
 /**
  * A QR code encoding a loopback URL makes the scanning device dial itself, so

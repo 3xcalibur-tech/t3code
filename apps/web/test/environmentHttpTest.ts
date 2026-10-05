@@ -4,6 +4,7 @@ import {
   EnvironmentAuthenticatedAuth,
   EnvironmentAuthenticatedPrincipal,
   EnvironmentHttpApi,
+  PeerGrantAuth,
   type AuthBrowserSessionRequest,
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
@@ -60,6 +61,9 @@ const authenticatedAuth: Context.Service.Shape<typeof EnvironmentAuthenticatedAu
     }),
   );
 
+// No test here calls the peer API; any request that reaches it is a test bug.
+const peerGrantAuth: Context.Service.Shape<typeof PeerGrantAuth> = () => unexpectedEndpoint("peer");
+
 export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestScenario) {
   const calls: EnvironmentHttpTestCalls = {
     descriptor: 0,
@@ -115,10 +119,14 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
             .handle("revokePairingLink", () => unexpectedEndpoint("auth.revokePairingLink"))
             .handle("clients", () => unexpectedEndpoint("auth.clients"))
             .handle("revokeClient", () => unexpectedEndpoint("auth.revokeClient"))
-            .handle("revokeOtherClients", () => unexpectedEndpoint("auth.revokeOtherClients")),
+            .handle("revokeOtherClients", () => unexpectedEndpoint("auth.revokeOtherClients"))
+            .handle("peerGrants", () => unexpectedEndpoint("auth.peerGrants"))
+            .handle("createPeerGrant", () => unexpectedEndpoint("auth.createPeerGrant"))
+            .handle("revokePeerGrant", () => unexpectedEndpoint("auth.revokePeerGrant")),
         ),
       ]),
       Effect.provideService(EnvironmentAuthenticatedAuth, authenticatedAuth),
+      Effect.provideService(PeerGrantAuth, peerGrantAuth),
       Effect.scoped,
     ),
   );

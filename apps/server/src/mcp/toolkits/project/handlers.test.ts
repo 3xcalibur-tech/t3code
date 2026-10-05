@@ -22,6 +22,7 @@ import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.t
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { ProjectHandlersLive } from "./handlers.ts";
 import { ProjectToolkit } from "./tools.ts";
+import * as PeerGrantsTestkit from "../../../peer/PeerGrants.testkit.ts";
 
 it.effect("attributes a launched thread's first message to the calling thread", () =>
   Effect.gen(function* () {
@@ -42,6 +43,7 @@ it.effect("attributes a launched thread's first message to the calling thread", 
     } as OrchestrationV2ThreadShell;
     let launchedSender: ThreadId | undefined;
     const dependencies = Layer.mergeAll(
+      PeerGrantsTestkit.layerNoGrants,
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -108,6 +110,7 @@ it.effect("launches a scratch thread into the Scratch project", () =>
     } as OrchestrationV2ThreadShell;
     const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
     const dependencies = Layer.mergeAll(
+      PeerGrantsTestkit.layerNoGrants,
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -200,6 +203,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       deletedAt: null,
     };
     const dependencies = Layer.mergeAll(
+      PeerGrantsTestkit.layerNoGrants,
       NodeCrypto.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment"),
@@ -324,6 +328,7 @@ const clientLaunchHarness = (input: {
         ),
     }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+    PeerGrantsTestkit.layerNoGrants,
     NodeServices.layer,
     ServerConfig.layerTest(process.cwd(), { prefix: "t3-client-launch-" }).pipe(
       Layer.provide(NodeServices.layer),

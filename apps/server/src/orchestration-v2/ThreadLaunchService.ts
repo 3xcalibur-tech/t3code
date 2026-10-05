@@ -9,6 +9,7 @@ import {
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
+  type OrchestrationV2PeerOrigin,
   type OrchestrationV2ProviderThreadNativeMetadata,
   type OrchestrationV2ThreadProjection,
   type ProviderDriverKind,
@@ -89,6 +90,8 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Server-set provenance for work a peer environment started, directly or indirectly. */
+  readonly peerOrigin?: OrchestrationV2PeerOrigin | undefined;
 }
 
 /** What workspace preparation reads from a launch; a retry rebuilds it from the run. */
@@ -771,6 +774,7 @@ const make = Effect.gen(function* () {
                   : { importedNativeThread: input.importedNativeThread }),
                 createdBy: input.createdBy,
                 creationSource: input.creationSource,
+                ...(input.peerOrigin === undefined ? {} : { peerOrigin: input.peerOrigin }),
               });
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(

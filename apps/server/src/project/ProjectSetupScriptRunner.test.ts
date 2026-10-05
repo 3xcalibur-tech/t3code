@@ -8,6 +8,8 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
+import * as PeerGrants from "../peer/PeerGrants.ts";
+import * as PeerGrantsTestkit from "../peer/PeerGrants.testkit.ts";
 
 it.effect("resolves setup scripts through the standalone project service", () => {
   const open = vi.fn((input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
@@ -64,6 +66,7 @@ it.effect("resolves setup scripts through the standalone project service", () =>
         }),
         Layer.mock(TerminalManager.TerminalManager)({ open, write, subscribe }),
         ServerSettings.layerTest(),
+        PeerGrantsTestkit.layerNoGrants,
       ),
     ),
   );
@@ -115,5 +118,29 @@ it.effect("resolves setup scripts through the standalone project service", () =>
     });
     assert.deepEqual(lines, ["Downloading 10%", "Downloading 20%", "Done"]);
     yield* listener({ type: "closed", threadId: "thread-1", terminalId: "setup-setup" });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("never runs setup for peer work whose grant does not allow it", () => {
+  const open = vi.fn(() => Effect.die("A blocked setup must not open a terminal."));
+  const layer = ProjectSetupScriptRunner.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(TerminalManager.TerminalManager)({ open }),
+        ServerSettings.layerTest(),
+        Layer.mock(PeerGrants.PeerGrants)({ allowsSetupScript: () => Effect.succeed(false) }),
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+    const result = yield* runner.runForThread({
+      threadId: "thread:peer",
+      projectId: "project:peer",
+      worktreePath: "/repo-worktree",
+    });
+    assert.deepEqual(result, { status: "blocked-by-peer-grant" });
+    assert.equal(open.mock.calls.length, 0);
   }).pipe(Effect.provide(layer));
 });

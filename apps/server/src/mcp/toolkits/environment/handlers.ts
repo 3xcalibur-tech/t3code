@@ -4,6 +4,7 @@ import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as Settings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { rejectPeerOriginCaller } from "../../peerOrigin.ts";
 import { readCaller, readFullAccessCaller, unavailable } from "../../threadAccess.ts";
 import { EnvironmentToolkit } from "./tools.ts";
 
@@ -62,7 +63,8 @@ export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
       const update = Effect.gen(function* () {
-        const { settings } = yield* access(true);
+        const { caller, settings } = yield* access(true);
+        yield* rejectPeerOriginCaller(caller, "change environment preferences");
         return preferences(
           yield* settings.updateSettings(patch).pipe(Effect.mapError(unavailable)),
         );

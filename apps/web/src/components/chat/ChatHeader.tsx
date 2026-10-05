@@ -1,4 +1,8 @@
-import { type EnvironmentId, type ThreadId } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type OrchestrationV2PeerOrigin,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
@@ -39,6 +43,8 @@ interface ChatHeaderProps {
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
+  /** Set when another environment started this thread through a peer grant. */
+  peerOrigin: OrchestrationV2PeerOrigin | null;
   rightPanelOpen: boolean;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
@@ -71,6 +77,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   isServerThread,
   activeProject,
+  peerOrigin,
   rightPanelOpen,
   onNewThreadInProject,
   onOpenProjectSettings,
@@ -332,6 +339,19 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {peerOrigin ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={<span className="max-w-48 shrink-0 truncate text-xs text-muted-foreground" />}
+          >
+            From peer: {peerOrigin.label}
+          </TooltipTrigger>
+          <TooltipPopup side="bottom" className="max-w-80">
+            Another environment started this work through the grant "{peerOrigin.label}". Claimed
+            environment: {peerOrigin.claimedEnvironmentId ?? "unknown"} (not verified).
+          </TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 });

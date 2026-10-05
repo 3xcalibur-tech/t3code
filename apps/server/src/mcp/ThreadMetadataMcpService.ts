@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { assertPeerWorkAccess } from "./peerOrigin.ts";
 import { assertTargetWithinLimits } from "./threadAccess.ts";
 
 export class ThreadMetadataMcpService extends Context.Service<
@@ -167,14 +168,12 @@ const make = Effect.gen(function* () {
     if (shell === null || shell.deletedAt !== null) {
       return yield* failure("thread_not_found", `Thread ${threadId} was not found.`);
     }
-    // Another thread may only be changed if it runs within the caller's own modes.
+    // Another thread may only be changed if it runs within the caller's own modes,
+    // and, for work a peer started, only if it is that grant's work.
     if (threadId !== scope.thread?.threadId) {
-      const limits =
+      const caller =
         scope.thread === undefined
-          ? {
-              runtimeMode: scope.client?.runtimeModeCeiling ?? ("approval-required" as const),
-              interactionMode: "default" as const,
-            }
+          ? undefined
           : yield* threadManagement.getThreadShell(scope.thread.threadId).pipe(
               Effect.mapError((error) =>
                 failure(
@@ -195,12 +194,17 @@ const make = Effect.gen(function* () {
                           "The calling provider no longer owns an active thread run.",
                         ),
                       )
-                    : Effect.succeed({
-                        runtimeMode: caller.runtimeMode,
-                        interactionMode: caller.interactionMode,
-                      }),
+                    : Effect.succeed(caller),
               ),
             );
+      const limits =
+        caller === undefined
+          ? {
+              runtimeMode: scope.client?.runtimeModeCeiling ?? ("approval-required" as const),
+              interactionMode: "default" as const,
+            }
+          : { runtimeMode: caller.runtimeMode, interactionMode: caller.interactionMode };
+      yield* assertPeerWorkAccess(caller, shell);
       yield* assertTargetWithinLimits(limits, shell);
     }
     const target = yield* threadManagement

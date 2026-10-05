@@ -201,6 +201,31 @@ your login; `t3 connect logout` also clears that login. Background-service
 Treat pairing URLs and authorization codes as passwords. Do not include them in
 screenshots, logs, or bug reports.
 
+## Peer access
+
+Peer access lets an agent on one machine hand work to an agent on another, for
+example to check a change on a different operating system. It works between any
+two environments that can reach each other over HTTPS, such as T3 Connect or
+Tailscale addresses.
+
+1. On the machine that will do the work, open **Settings → Connections → Peer
+   grants** and create a grant. Choose its projects, the broadest modes it
+   allows, and whether project setup scripts may run. Copy the setup string. It
+   is shown only once.
+2. On the machine that sends the work, open **Settings → Connections → Peer
+   environments** and paste the setup string.
+
+Agents on the sending machine can then use the `t3_peer_*` tools. A launch
+starts a new thread in a fresh worktree at an exact commit, so the agent must
+push the commit first. Threads a peer started show **From peer** with the
+grant's name.
+
+Work a peer starts cannot change settings, cannot act on work started locally
+or through another grant, and cannot reach a third machine. Setup scripts are off by default because they run
+the incoming code without permission checks. Revoke a grant to stop new
+requests at once; threads that already started keep running until you stop
+them. Treat setup strings as passwords.
+
 ## T3 Connect troubleshooting
 
 Run `t3 connect status` on the host to inspect saved authorization and link

@@ -3,6 +3,12 @@ import type {
   AuthClientMetadata,
   AuthEnvironmentScope,
   AuthPairingCredentialResult,
+  EnvironmentId,
+  PeerGrant,
+  PeerGrantCreateInput,
+  PeerGrantCreateResult,
+  PeerGrantId,
+  PeerTarget,
   ServerAuthSessionMethod,
   AuthSessionId,
   AuthSessionState,
@@ -31,6 +37,12 @@ const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "list-client-sessions",
   "revoke-client-session",
   "revoke-other-client-sessions",
+  "list-peer-grants",
+  "create-peer-grant",
+  "revoke-peer-grant",
+  "list-peer-targets",
+  "add-peer-target",
+  "remove-peer-target",
 ]);
 type PrimaryEnvironmentRequestOperation = typeof PrimaryEnvironmentRequestOperation.Type;
 
@@ -422,6 +434,128 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
   } catch (error) {
     throw PrimaryEnvironmentRequestError.fromCause({
       operation: "revoke-other-client-sessions",
+      cause: error,
+    });
+  }
+}
+
+export async function listServerPeerGrants(): Promise<ReadonlyArray<PeerGrant>> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.peerGrants({ headers: {} })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({ operation: "list-peer-grants", cause: error });
+  }
+}
+
+export async function createServerPeerGrant(
+  payload: PeerGrantCreateInput,
+): Promise<PeerGrantCreateResult> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.createPeerGrant({ headers: {}, payload })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "create-peer-grant",
+      cause: error,
+    });
+  }
+}
+
+export async function revokeServerPeerGrant(id: PeerGrantId): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.revokePeerGrant({ headers: {}, payload: { id } })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "revoke-peer-grant",
+      cause: error,
+    });
+  }
+}
+
+export async function listServerPeerTargets(): Promise<ReadonlyArray<PeerTarget>> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.peerTargets.list({ headers: {} })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "list-peer-targets",
+      cause: error,
+    });
+  }
+}
+
+const PeerSetupRejectionReason = Schema.Literals([
+  "invalid_peer_setup",
+  "peer_grant_rejected",
+  "peer_unreachable",
+]);
+const isPeerSetupRejectionReason = Schema.is(PeerSetupRejectionReason);
+
+const PEER_SETUP_REJECTION_MESSAGES: Record<typeof PeerSetupRejectionReason.Type, string> = {
+  invalid_peer_setup: "This setup string is not valid. Copy it again from the other environment.",
+  peer_grant_rejected: "The other environment rejected this grant. It may be revoked.",
+  peer_unreachable: "Could not reach the other environment. Check that its URL works from here.",
+};
+
+/** The setup string was bad, its grant was refused, or the peer could not be reached. */
+export class PrimaryEnvironmentPeerSetupRejectedError extends Schema.TaggedError<PrimaryEnvironmentPeerSetupRejectedError>()(
+  "PrimaryEnvironmentPeerSetupRejectedError",
+  {
+    reason: PeerSetupRejectionReason,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return PEER_SETUP_REJECTION_MESSAGES[this.reason];
+  }
+}
+
+/** Fails with PrimaryEnvironmentPeerSetupRejectedError when the setup itself is the problem. */
+export async function addServerPeerTarget(setup: string): Promise<PeerTarget> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.peerTargets.add({ headers: {}, payload: { setup } })),
+      ),
+    );
+  } catch (error) {
+    if (
+      isEnvironmentHttpCommonError(error) &&
+      error._tag === "EnvironmentRequestInvalidError" &&
+      isPeerSetupRejectionReason(error.reason)
+    ) {
+      throw new PrimaryEnvironmentPeerSetupRejectedError({ reason: error.reason, cause: error });
+    }
+    throw PrimaryEnvironmentRequestError.fromCause({ operation: "add-peer-target", cause: error });
+  }
+}
+
+export async function removeServerPeerTarget(environmentId: EnvironmentId): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.peerTargets.remove({ headers: {}, payload: { environmentId } }),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "remove-peer-target",
       cause: error,
     });
   }

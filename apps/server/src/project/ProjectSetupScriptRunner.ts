@@ -15,12 +15,18 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as PeerGrants from "../peer/PeerGrants.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
+}
+
+/** The thread came from a peer whose grant does not allow setup scripts. */
+export interface ProjectSetupScriptRunnerResultBlocked {
+  readonly status: "blocked-by-peer-grant";
 }
 
 export interface ProjectSetupScriptRunnerResultStarted {
@@ -52,6 +58,7 @@ export interface ProjectSetupScriptOutputLine {
 
 export type ProjectSetupScriptRunnerResult =
   | ProjectSetupScriptRunnerResultNoScript
+  | ProjectSetupScriptRunnerResultBlocked
   | ProjectSetupScriptRunnerResultStarted;
 
 export interface ProjectSetupScriptRunnerInput {
@@ -82,7 +89,13 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedError<Project
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
-    operation: Schema.Literals(["resolveProject", "readSettings", "openTerminal", "writeCommand"]),
+    operation: Schema.Literals([
+      "resolveProject",
+      "readSettings",
+      "readPeerPolicy",
+      "openTerminal",
+      "writeCommand",
+    ]),
     cause: Schema.Defect(),
   },
 ) {
@@ -201,6 +214,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const peerGrants = yield* PeerGrants.PeerGrants;
   const completionShell = resolveCompletionShell(
     yield* HostProcessPlatform,
     yield* HostProcessEnvironment,
@@ -300,6 +314,22 @@ export const make = Effect.gen(function* () {
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
     };
+    // Every setup path runs through here, so a peer grant's choice holds even
+    // when an agent asks for the script. A setup script runs the incoming code
+    // outside provider permission controls.
+    const allowedByPeerGrant = yield* peerGrants.allowsSetupScript(input.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "readPeerPolicy",
+            cause,
+          }),
+      ),
+    );
+    if (!allowedByPeerGrant) {
+      return { status: "blocked-by-peer-grant" } as const;
+    }
     const suppliedProject = input.project;
     const projectById =
       suppliedProject ??

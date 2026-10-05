@@ -6,8 +6,14 @@ export {
 } from "./context";
 
 export {
+  addServerPeerTarget,
   createServerPairingCredential,
+  createServerPeerGrant,
   isPrimaryEnvironmentPairingCredentialRejectedError,
+  listServerPeerGrants,
+  listServerPeerTargets,
+  removeServerPeerTarget,
+  revokeServerPeerGrant,
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,

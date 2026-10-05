@@ -41,6 +41,18 @@ import {
   OrchestrationV2ThreadDetailSnapshot,
   OrchestrationV2ThreadHistoryPage,
 } from "./orchestrationV2.ts";
+import {
+  PeerGrant,
+  PeerGrantCreateInput,
+  PeerGrantCreateResult,
+  PeerGrantRevokeInput,
+  PeerGrantRevokeResult,
+  PeerHttpApiGroup,
+  PeerTarget,
+  PeerTargetAddInput,
+  PeerTargetRemoveInput,
+  PeerTargetRemoveResult,
+} from "./peer.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
 import {
   PullRequestDiffInput,
@@ -78,6 +90,10 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "scope_not_granted",
   "invalid_command",
   "invalid_history_cursor",
+  "invalid_peer_grant",
+  "invalid_peer_setup",
+  "peer_grant_rejected",
+  "peer_unreachable",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 
@@ -109,6 +125,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_thread_snapshot_failed",
   "orchestration_thread_bounded_snapshot_failed",
   "orchestration_thread_history_failed",
+  "peer_grants_failed",
+  "peer_targets_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -506,6 +524,55 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       success: AuthOtherClientSessionsRevokeResult,
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("peerGrants", "/api/auth/peer-grants", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Array(PeerGrant),
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createPeerGrant", "/api/auth/peer-grants", {
+      headers: OptionalBearerHeaders,
+      payload: PeerGrantCreateInput,
+      success: PeerGrantCreateResult,
+      error: [EnvironmentRequestInvalidError, ...EnvironmentScopedOperationErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("revokePeerGrant", "/api/auth/peer-grants/revoke", {
+      headers: OptionalBearerHeaders,
+      payload: PeerGrantRevokeInput,
+      success: PeerGrantRevokeResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
+/** Peer environments this environment's agents may hand work to. */
+class EnvironmentPeerTargetsHttpApi extends HttpApiGroup.make("peerTargets")
+  .add(
+    HttpApiEndpoint.get("list", "/api/peer-targets", {
+      headers: OptionalBearerHeaders,
+      success: Schema.Array(PeerTarget),
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("add", "/api/peer-targets", {
+      headers: OptionalBearerHeaders,
+      payload: PeerTargetAddInput,
+      success: PeerTarget,
+      error: [EnvironmentRequestInvalidError, ...EnvironmentScopedOperationErrors],
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("remove", "/api/peer-targets/remove", {
+      headers: OptionalBearerHeaders,
+      payload: PeerTargetRemoveInput,
+      success: PeerTargetRemoveResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
 const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
@@ -657,4 +724,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
   .add(EnvironmentProjectsHttpApi)
-  .add(EnvironmentConnectHttpApi) {}
+  .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentPeerTargetsHttpApi)
+  .add(PeerHttpApiGroup) {}

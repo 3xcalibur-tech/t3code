@@ -4,6 +4,8 @@ import {
   applyWslEnableSelection,
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
+  PEER_CONNECT_ENDPOINT_ID,
+  selectPeerEndpoints,
   selectQrEndpointOption,
 } from "./ConnectionsSettings.logic";
 
@@ -181,5 +183,48 @@ describe("selectQrEndpointOption", () => {
     const loopbackOnly = options.slice(0, 1);
     expect(selectQrEndpointOption(loopbackOnly, null, null)?.id).toBe("desktop-loopback:4780");
     expect(selectQrEndpointOption([], "anything", "anything")).toBeNull();
+  });
+});
+
+describe("selectPeerEndpoints", () => {
+  const loopback = makeEndpoint({
+    id: "desktop-loopback:4780",
+    reachability: "loopback",
+    httpBaseUrl: "http://127.0.0.1:4780",
+  });
+  const lan = makeEndpoint({
+    id: "desktop-lan:http://192.168.1.42:4780",
+    httpBaseUrl: "http://192.168.1.42:4780",
+    isDefault: true,
+  });
+  const tailscaleHttps = makeEndpoint({
+    id: "tailscale-magicdns:https://box.tail.ts.net",
+    reachability: "private-network",
+    httpBaseUrl: "https://box.tail.ts.net",
+  });
+
+  it("offers only HTTPS and loopback endpoints and prefers a non-loopback one", () => {
+    const result = selectPeerEndpoints([loopback, lan, tailscaleHttps], null, null);
+    expect(result.options.map((endpoint) => endpoint.id)).toEqual([loopback.id, tailscaleHttps.id]);
+    expect(result.selected).toBe(tailscaleHttps.id);
+  });
+
+  it("prefers the T3 Connect address, which works from anywhere", () => {
+    const result = selectPeerEndpoints([tailscaleHttps], null, "https://box.t3.example");
+    expect(result.options[0]).toEqual({
+      id: PEER_CONNECT_ENDPOINT_ID,
+      label: "T3 Connect",
+      url: "https://box.t3.example",
+    });
+    expect(result.selected).toBe(PEER_CONNECT_ENDPOINT_ID);
+  });
+
+  it("never preselects loopback, even as the saved default", () => {
+    expect(selectPeerEndpoints([loopback], "desktop-core:loopback:http", null).selected).toBeNull();
+    const unavailable = { ...tailscaleHttps, status: "unavailable" as const };
+    expect(selectPeerEndpoints([lan, unavailable], null, null)).toEqual({
+      options: [],
+      selected: null,
+    });
   });
 });

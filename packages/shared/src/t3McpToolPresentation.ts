@@ -49,6 +49,7 @@ export type T3McpToolSummaryAction =
   | "project-clone"
   | "environment-read"
   | "environment-update"
+  | "peer-environment"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -260,6 +261,25 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   t3_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  t3_peer_targets: tool(["List", "Listing", "Listed", "peer environments"], "peer-environment"),
+  t3_peer_capabilities: tool(
+    ["Check", "Checking", "Checked", "a peer environment"],
+    "peer-environment",
+  ),
+  t3_peer_projects: tool(
+    ["List", "Listing", "Listed", "peer environment projects"],
+    "peer-environment",
+  ),
+  t3_peer_launch: tool(
+    ["Start", "Starting", "Started", "a thread in a peer environment"],
+    "thread-create",
+  ),
+  t3_peer_read: tool(["Read", "Reading", "Read", "a peer environment thread"], "thread-read"),
+  t3_peer_wait: tool(["Wait", "Waiting", "Waited", "for a peer environment thread"], "thread-wait"),
+  t3_peer_interrupt: tool(
+    ["Interrupt", "Interrupting", "Requested an interrupt of", "a peer environment thread"],
+    "thread-interrupt",
+  ),
   t3_environment_read: tool(
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",

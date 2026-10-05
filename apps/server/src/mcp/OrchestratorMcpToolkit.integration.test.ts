@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -21,6 +22,7 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitResult,
+  PeerGrantId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -75,6 +77,9 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as PeerTargetsTestkit from "../peer/PeerTargets.testkit.ts";
+import { PeerHandlersLive } from "./toolkits/peer/handlers.ts";
+import { PeerToolkit } from "./toolkits/peer/tools.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
 
 const parentThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
@@ -3844,6 +3849,229 @@ describe("orchestrator MCP toolkit", () => {
             latestTerminalSummary: queuedFollowupResult,
             latestTerminalResultContextTransferId: null,
           });
+        }).pipe(Effect.provide(testLayer));
+      }),
+    ),
+  );
+
+  it.live("keeps work a peer environment started away from trusted work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cwd = yield* checkpointWorkspace("orchestrator-mcp-peer-origin");
+        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+        const registryLayer = ProviderAdapterRegistry.makeLayer([
+          makeDeterministicAdapter({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            capabilities: CodexProviderCapabilitiesV2,
+            capturedTurns,
+            shouldComplete: () => false,
+            response: (turn) => `Codex completed: ${turn.message.text}`,
+          }),
+        ]);
+        const orchestratorLayer = makeOrchestratorV2ReplayLayerWithRegistry(
+          { name: "orchestrator-mcp-peer-origin", runtimePolicyOverride: { cwd } },
+          registryLayer,
+        );
+        const orchestrationLayer = Layer.merge(
+          orchestratorLayer,
+          ThreadManagementService.layer.pipe(Layer.provide(orchestratorLayer)),
+        );
+        const trustedTask = scheduledTaskFromUpsert({
+          id: ScheduledTaskId.make("scheduled-task:trusted"),
+          title: "Trusted",
+          prompt: "Trusted recurring work.",
+          enabled: true,
+          schedule: { type: "interval", everyMs: 60_000 },
+          projectId,
+          threadId: null,
+          workspaceStrategy: { type: "root" },
+          modelSelection: codexSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+        const scheduledStore = yield* Ref.make<ReadonlyArray<ScheduledTask>>([trustedTask]);
+        const scheduledTaskStubLayer = Layer.succeed(
+          ScheduledTaskService.ScheduledTaskService,
+          ScheduledTaskService.ScheduledTaskService.of({
+            list: () => Ref.get(scheduledStore).pipe(Effect.map((tasks) => ({ tasks }))),
+            subscribeList: () => Stream.empty,
+            upsert: (input) =>
+              Effect.gen(function* () {
+                const task = { ...scheduledTaskFromUpsert(input), peerOrigin: input.peerOrigin };
+                yield* Ref.update(scheduledStore, (all) => [...all, task]);
+                return { task };
+              }),
+            setEnabled: () => Effect.die("ScheduledTaskService.setEnabled is unused in this test"),
+            delete: () => Effect.die("ScheduledTaskService.delete is unused in this test"),
+            runNow: () => Effect.die("ScheduledTaskService.runNow is unused in this test"),
+          }),
+        );
+        const testLayer = Layer.mergeAll(
+          McpHttpServer.OrchestratorToolkitRegistrationLive,
+          McpHttpServer.ThreadToolkitRegistrationLive,
+          McpServer.toolkit(PeerToolkit).pipe(Layer.provide(PeerHandlersLive)),
+        ).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(orchestrationLayer),
+          Layer.provide(registryLayer),
+          Layer.provide(
+            makeProviderRegistryLayer([
+              makeProviderSnapshot({
+                instanceId: codexInstanceId,
+                driver: ProviderDriverKind.make("codex"),
+                model: codexModel,
+              }),
+            ]),
+          ),
+          Layer.provide(scheduledTaskStubLayer),
+          Layer.provide(
+            Layer.mock(ProjectService.ProjectService)({
+              getById: (id) =>
+                Effect.succeed(
+                  id === projectId
+                    ? Option.some({ id, defaultModelSelection: null } as never)
+                    : Option.none(),
+                ),
+            }),
+          ),
+          Layer.provide(
+            PeerTargetsTestkit.layerWithPeer(() => new Response(null, { status: 500 })).pipe(
+              Layer.provide(NodeCrypto.layer),
+            ),
+          ),
+          Layer.provide(NodeServices.layer),
+        );
+
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const server = yield* McpServer.McpServer;
+          const peerOrigin = {
+            grantId: PeerGrantId.make("grant:mainbook"),
+            label: "Mainbook",
+            claimedEnvironmentId: EnvironmentId.make("environment:mainbook"),
+          };
+          const createThread = (threadId: ThreadId, origin?: typeof peerOrigin) =>
+            orchestrator.dispatch({
+              type: "thread.create",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`command:${threadId}:create`),
+              threadId,
+              projectId,
+              title: threadId,
+              modelSelection: codexSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+              ...(origin === undefined ? {} : { peerOrigin: origin }),
+            });
+          const trustedThreadId = ThreadId.make("thread:trusted");
+          const peerThreadId = ThreadId.make("thread:peer");
+          const otherPeerThreadId = ThreadId.make("thread:peer-other");
+          const otherGrantThreadId = ThreadId.make("thread:peer-other-grant");
+          yield* createThread(trustedThreadId);
+          yield* createThread(peerThreadId, peerOrigin);
+          yield* createThread(otherPeerThreadId, peerOrigin);
+          yield* createThread(otherGrantThreadId, {
+            ...peerOrigin,
+            grantId: PeerGrantId.make("grant:other"),
+          });
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("command:thread:peer:start"),
+            threadId: peerThreadId,
+            messageId: MessageId.make("message:thread:peer:start"),
+            text: parentPrompt,
+            attachments: [],
+            modelSelection: codexSelection,
+            dispatchMode: { type: "start_immediately" },
+          });
+          yield* waitForProjection(orchestrator, peerThreadId, (projection) =>
+            projection.providerTurns.some((turn) => turn.status === "running"),
+          );
+          const invoke = (name: string, args: Record<string, unknown>) =>
+            server.callTool({ name, arguments: args }).pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, {
+                environmentId: EnvironmentId.make("environment:peer-target"),
+                requestNamespace: "mcp-provider-session-peer",
+                thread: {
+                  threadId: peerThreadId,
+                  providerSessionId: "mcp-provider-session-peer",
+                  providerInstanceId: codexInstanceId,
+                },
+                client: undefined,
+                capabilities: new Set(["orchestration"] as const),
+                issuedAt: 1,
+              }),
+              Effect.provideService(McpSchema.McpServerClient, client),
+            );
+          const denied = { code: "capability_denied" };
+
+          // Writes to trusted work are refused on every path, including the
+          // ones that skip the shared writable-thread helper.
+          expect(
+            (yield* invoke("t3_thread_send", { threadId: trustedThreadId, message: "Do this." }))
+              .structuredContent,
+          ).toMatchObject(denied);
+          expect(
+            (yield* invoke("t3_thread_interrupt", { threadId: trustedThreadId })).structuredContent,
+          ).toMatchObject(denied);
+          expect(
+            (yield* invoke("t3_thread_update", {
+              threadId: trustedThreadId,
+              action: "rename",
+              title: "Renamed",
+            })).structuredContent,
+          ).toMatchObject(denied);
+          expect(
+            (yield* invoke("t3_thread_organize", { threadId: trustedThreadId, action: "pin" }))
+              .structuredContent,
+          ).toMatchObject(denied);
+          expect(
+            (yield* invoke("update_scheduled_task", {
+              scheduledTaskId: trustedTask.id,
+              prompt: "Rewritten by peer work.",
+            })).structuredContent,
+          ).toMatchObject(denied);
+          // Another grant's work is off limits too: grants differ in what they allow.
+          expect(
+            (yield* invoke("t3_thread_send", { threadId: otherGrantThreadId, message: "Do this." }))
+              .structuredContent,
+          ).toMatchObject(denied);
+          // Peer access is never transitive.
+          expect((yield* invoke("t3_peer_targets", {})).structuredContent).toMatchObject(denied);
+
+          // Other peer-started work stays reachable, and new work inherits the origin.
+          const renamed = yield* invoke("t3_thread_update", {
+            threadId: otherPeerThreadId,
+            action: "rename",
+            title: "Renamed peer work",
+          });
+          expect(renamed.isError).toBe(false);
+          const created = yield* decodeCreateThreadsResult(
+            (yield* invoke("create_threads", {
+              threads: [{ title: "Peer follow-up" }],
+              clientRequestId: "peer-origin-create",
+            })).structuredContent,
+          ).pipe(Effect.orDie);
+          const createdThreadId = created.threads[0]?.threadId;
+          expect(createdThreadId).toBeDefined();
+          expect(
+            (yield* orchestrator.getThreadProjection(createdThreadId!)).thread.peerOrigin,
+          ).toEqual(peerOrigin);
+          const scheduled = yield* invoke("schedule_task", {
+            prompt: "Check again later.",
+            schedule: { type: "interval", everyMs: 60_000 },
+          });
+          expect(scheduled.isError).toBe(false);
+          expect(
+            (yield* Ref.get(scheduledStore)).find((task) => task.prompt === "Check again later.")
+              ?.peerOrigin,
+          ).toEqual(peerOrigin);
         }).pipe(Effect.provide(testLayer));
       }),
     ),

@@ -484,9 +484,12 @@ function ThreadRouteContent(
 
   /* ─── Native header theming ──────────────────────────────────────── */
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
+  const peerOriginLabel = selectedThread?.source.peerOrigin?.label;
   const headerSubtitle = [
     selectedThreadProject?.title ?? null,
     selectedEnvironmentConnection?.environmentLabel ?? null,
+    // Another environment started this work through a peer grant.
+    peerOriginLabel === undefined ? null : `From peer: ${peerOriginLabel}`,
   ]
     .filter(Boolean)
     .join(" · ");

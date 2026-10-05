@@ -85,6 +85,7 @@ import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts"
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
+import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -171,6 +172,9 @@ import {
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration-v2/http.ts";
 import { projectHttpApiLayer } from "./project/http.ts";
+import { peerGrantAuthLayer, peerHttpApiLayer, peerTargetsHttpApiLayer } from "./peer/http.ts";
+import * as PeerService from "./peer/PeerService.ts";
+import * as PeerTargets from "./peer/PeerTargets.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -643,7 +647,10 @@ const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(projectHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
+      Layer.provide(peerHttpApiLayer),
+      Layer.provide(peerTargetsHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
+      Layer.provide(peerGrantAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
@@ -666,6 +673,13 @@ const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
+  Layer.provide(PeerTargets.layer),
+  Layer.provide(
+    PeerService.layer.pipe(
+      Layer.provide(OrchestratorMcpService.layer),
+      Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+    ),
+  ),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

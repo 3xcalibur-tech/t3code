@@ -26,6 +26,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Scheduler from "./Scheduler.ts";
+import * as PeerGrantsTestkit from "../peer/PeerGrants.testkit.ts";
 
 it.effect.each(["on time", "after restart"])(
   "runs Scheduled Tasks and a persisted limit retry through the same scheduler %s",
@@ -86,6 +87,7 @@ it.effect.each(["on time", "after restart"])(
       const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
       const receipts = yield* Queue.unbounded<"task" | "retry">();
       const dependencies = Layer.mergeAll(
+        PeerGrantsTestkit.layerNoGrants,
         NodeCrypto.layer,
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({
           launch: () =>

@@ -6,7 +6,9 @@ import * as Claims from "../../../orchestration-v2/AttachmentClaims.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
+import * as PeerGrants from "../../../peer/PeerGrants.ts";
 import { resolveRuntimeMode } from "../../OrchestratorMcpService.ts";
+import { rejectPeerOriginCaller } from "../../peerOrigin.ts";
 import {
   newCommandId,
   readCaller,
@@ -33,9 +35,10 @@ const access = Effect.gen(function* () {
   return yield* Project.ProjectService;
 });
 const mutation = Effect.gen(function* () {
-  yield* readFullAccessCaller(
+  const { caller } = yield* readFullAccessCaller(
     "Project changes require a live full-access/default calling thread or a full-access client.",
   );
+  yield* rejectPeerOriginCaller(caller, "change project configuration");
   return yield* Project.ProjectService;
 });
 export const ProjectHandlersLive = ProjectToolkit.toLayer({
@@ -75,6 +78,11 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
           message:
             "scratch:true picks its own project and folder; omit projectId and workspaceStrategy.",
         });
+      if (caller?.peerOrigin != null && input.scratch === true)
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "Work a peer environment started can only launch into its granted projects.",
+        });
       const projectId =
         input.scratch === true
           ? (yield* ManagedProjectFolders.ManagedProjectFolders.pipe(
@@ -88,6 +96,18 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
               ),
             )).projectId
           : yield* resolveProjectId(context, input.projectId);
+      const peerOrigin = caller?.peerOrigin;
+      if (peerOrigin != null) {
+        const grant = yield* PeerGrants.PeerGrants.pipe(
+          Effect.flatMap((grants) => grants.getActive(peerOrigin.grantId)),
+          Effect.mapError(unavailable),
+        );
+        if (Option.isNone(grant) || !grant.value.projectIds.includes(projectId))
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "Work a peer environment started can only launch into its granted projects.",
+          });
+      }
       const modelSelection =
         input.modelSelection ??
         caller?.modelSelection ??
@@ -125,6 +145,7 @@ export const ProjectHandlersLive = ProjectToolkit.toLayer({
             }),
         createdBy: "agent",
         creationSource: "mcp",
+        ...(caller?.peerOrigin == null ? {} : { peerOrigin: caller.peerOrigin }),
       }).pipe(
         Effect.mapError((error) =>
           error._tag === "AttachmentClaimError"

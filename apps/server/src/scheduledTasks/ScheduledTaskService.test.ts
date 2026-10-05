@@ -19,6 +19,7 @@ import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as PeerGrantsTestkit from "../peer/PeerGrants.testkit.ts";
 
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 
@@ -197,6 +198,7 @@ it.effect(
             Layer.provideMerge(
               ScheduledTaskService.layer,
               Layer.mergeAll(
+                PeerGrantsTestkit.layerNoGrants,
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>
                     Ref.updateAndGet(dispatched, (n) => n + 1).pipe(
@@ -294,6 +296,7 @@ it.effect(
             Layer.provideMerge(
               ScheduledTaskService.layer,
               Layer.mergeAll(
+                PeerGrantsTestkit.layerNoGrants,
                 Layer.mock(ThreadLaunchService.ThreadLaunchService)({
                   launch: () =>
                     Ref.updateAndGet(dispatched, (n) => n + 1).pipe(
