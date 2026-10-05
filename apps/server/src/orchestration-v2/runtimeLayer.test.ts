@@ -63,6 +63,7 @@ import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryServic
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
+import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2SessionRuntime, ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
@@ -2408,6 +2409,172 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         messages.flatMap((message) => message.notification?.summary ?? []),
         ["#8: stopped watching, could not read it"],
       );
+    }),
+  );
+
+  it.effect("keeps a watch through a rate limit without waking the agent", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-rate-limited");
+      const projectId = ProjectId.make("pr-watch-rate-limited-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch rate limited",
+        workspaceRoot: "/workspace/watch-rate-limited",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-rate-limited-create"),
+        threadId,
+        projectId,
+        title: "Watch rate limited",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-rate-limited-start"),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 9,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/9", source: "agent" },
+      });
+      const rateLimited = new PullRequestOperationError({
+        operation: "detail",
+        detail: "GitHub requests are paused until the rate limit resets.",
+        cause: new PullRequestProviderError({
+          provider: "github",
+          operation: "getChangeRequest",
+          reason: "rate-limited",
+          detail: "GitHub requests are paused until the rate limit resets.",
+        }),
+      });
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              detail: () => Effect.fail(rateLimited),
+              activity: () => Effect.fail(rateLimited),
+            }),
+          ),
+        ),
+      );
+      for (let pass = 0; pass < 30; pass += 1) yield* reactor.sweep;
+
+      const thread = yield* orchestrator.getThreadShell(threadId);
+      assert.isDefined(thread?.pullRequests?.[0]?.watch);
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(messages, []);
+    }),
+  );
+
+  it.effect("a subagent cannot watch, and a watch it inherited ends without a wake", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("runtime-pull-request-watch-parent");
+      const childThreadId = ThreadId.make("runtime-pull-request-watch-subagent");
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 10 };
+      const url = "https://github.com/pingdotgg/t3code/pull/10";
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-subagent-parent-create"),
+        threadId: parentThreadId,
+        projectId: ProjectId.make("pr-watch-subagent-project"),
+        title: "Watch parent",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-subagent-parent-start"),
+        threadId: parentThreadId,
+        ...key,
+        watching: true,
+        link: { url, source: "agent" },
+      });
+      // Before subagents stopped inheriting links, a delegated child copied the parent's watch.
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      yield* eventSink.write({
+        commandId: CommandId.make("pr-watch-subagent-seed"),
+        events: [
+          {
+            id: EventId.make("pr-watch-subagent-created"),
+            type: "thread.created",
+            threadId: childThreadId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              ...parent.thread,
+              id: childThreadId,
+              title: "Delegated review",
+              creationSource: "mcp",
+              activeProviderThreadId: null,
+              lineage: {
+                parentThreadId,
+                relationshipToParent: "subagent",
+                rootThreadId: parentThreadId,
+              },
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      const watchOf = (threadId: ThreadId) =>
+        Effect.map(orchestrator.getThreadShell(threadId), (thread) =>
+          thread?.pullRequests?.find((link) => link.number === key.number),
+        );
+      assert.isDefined((yield* watchOf(childThreadId))?.watch);
+
+      const refused = yield* orchestrator
+        .dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make("pr-watch-subagent-start"),
+          threadId: childThreadId,
+          ...key,
+          number: 11,
+          watching: true,
+          link: { url: "https://github.com/pingdotgg/t3code/pull/11", source: "agent" },
+        })
+        .pipe(Effect.flip);
+      assert.equal(refused._tag, "OrchestratorDispatchError");
+
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              detail: () => Effect.die("host unreachable"),
+              activity: () => Effect.die("host unreachable"),
+            }),
+          ),
+        ),
+      );
+      yield* reactor.sweep;
+
+      const child = yield* watchOf(childThreadId);
+      assert.isDefined(child);
+      assert.isUndefined(child?.watch);
+      assert.isDefined((yield* watchOf(parentThreadId))?.watch);
+      const { messages } = yield* orchestrator.getThreadRecords(childThreadId, ["messages"]);
+      assert.deepEqual(messages, []);
     }),
   );
 

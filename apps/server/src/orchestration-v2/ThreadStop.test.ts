@@ -95,6 +95,24 @@ const watch = (threadId: ThreadId, number: number) =>
     });
   });
 
+/** Gives a subagent the watch it would have copied from its parent before that stopped. */
+const inheritWatch = (threadId: ThreadId, number: number) =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const source = ThreadId.make(`${threadId}:watch-source`);
+    yield* createWatchingThread(source, number);
+    const link = (yield* orchestrator.getThreadProjection(source)).thread.pullRequests![0]!;
+    const { thread } = yield* orchestrator.getThreadProjection(threadId);
+    yield* projections.apply({
+      id: EventId.make(`event:${threadId}:inherited-watch`),
+      type: "thread.metadata-updated",
+      threadId,
+      occurredAt: thread.updatedAt,
+      payload: { ...thread, pullRequests: [link] },
+    });
+  });
+
 const send = (threadId: ThreadId, text: string, type: "start_immediately" | "queue_after_active") =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -156,7 +174,7 @@ it.effect("Stop ends watches, holds queues, and stops the delegated tasks under 
     yield* createWatchingThread(parentThreadId, 1);
     yield* send(parentThreadId, "first", "start_immediately");
     const childThreadId = yield* delegate(parentThreadId, "child task");
-    yield* watch(childThreadId, 2);
+    yield* inheritWatch(childThreadId, 2);
     const grandchildThreadId = yield* delegate(childThreadId, "grandchild task");
     yield* send(childThreadId, "child follow-up", "queue_after_active");
 

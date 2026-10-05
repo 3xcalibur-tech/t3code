@@ -20,9 +20,12 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
+import { PullRequestProviderError } from "../pullRequest/PullRequestProvider.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -31,6 +34,19 @@ import { evaluatePullRequestWatch, pullRequestWatchMessage } from "./pullRequest
 
 /** Passes in a row that could not read a pull request before its watch ends (one a minute). */
 const READ_FAILURE_LIMIT = 15;
+
+const isProviderError = Schema.is(PullRequestProviderError);
+
+/** The host refused the read for its rate limit, or T3 Code is pausing it until the limit resets. */
+const isRateLimited = (cause: Cause.Cause<PullRequestService.PullRequestError>) =>
+  Cause.findErrorOption(cause).pipe(
+    Option.exists(
+      (error) =>
+        error._tag === "PullRequestOperationError" &&
+        isProviderError(error.cause) &&
+        error.cause.reason === "rate-limited",
+    ),
+  );
 
 const logFailure =
   (message: string, fields: Record<string, unknown>) =>
@@ -215,6 +231,9 @@ export const make = Effect.gen(function* () {
     const key = failureKey(target);
     if (Exit.isFailure(read)) {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
+      // A rate limit stops every read on the host until it resets, so it says nothing about this
+      // pull request. Giving up would wake the agent to re-watch into the same limit.
+      if (isRateLimited(read.cause)) return;
       const failures = (readFailures.get(key) ?? 0) + 1;
       readFailures.set(key, failures);
       // The count stays until the stop lands, so a failed stop is tried again next pass.
@@ -260,7 +279,12 @@ export const make = Effect.gen(function* () {
     yield* Effect.forEach(
       targets,
       (target) =>
-        check(target).pipe(
+        // A subagent cannot watch, so a watch it holds is left from before that rule. It ends
+        // without a wake: the subagent's result already went to its parent.
+        (target.thread.lineage.relationshipToParent === "subagent"
+          ? record(target, null)
+          : check(target)
+        ).pipe(
           Effect.catchCause(
             logFailure("pull request watch check failed", {
               threadId: target.thread.id,

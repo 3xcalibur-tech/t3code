@@ -2379,6 +2379,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         threadId: command.threadId,
       });
     }
+    // A delegated child's later wakes reach no one: its result went to the parent when its task
+    // ended. The parent watches the pull request instead.
+    if (
+      command.type === "thread.pull-request.watch" &&
+      command.watching &&
+      thread.lineage.relationshipToParent === "subagent"
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is a subagent and cannot watch pull requests. Report back to the parent thread, which can watch it.`,
+      });
+    }
     if (
       command.type === "thread.pull-request.watch" &&
       command.watching &&
