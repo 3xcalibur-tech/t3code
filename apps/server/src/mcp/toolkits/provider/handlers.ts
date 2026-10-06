@@ -7,7 +7,7 @@ import {
   type UsageSummary,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as ProviderRegistry from "../../../provider/Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as UsageLimitSources from "../../../usage/UsageLimitSources.ts";
 import * as UsageService from "../../../usage/UsageService.ts";
 import { readFullAccessCaller, unavailable } from "../../threadAccess.ts";
@@ -146,7 +146,7 @@ function usageTotals(summary: UsageSummary) {
   };
 }
 
-export const ProviderHandlersLive = ProviderToolkit.toLayer({
+export const layer = ProviderToolkit.toLayer({
   t3_provider_status: ({ instanceId, usage }) =>
     Effect.gen(function* () {
       // Provider messages can carry configured URLs and executable paths.

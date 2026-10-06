@@ -8,8 +8,8 @@ export type ClientIntentThreadPanel = typeof ClientIntentThreadPanel.Type;
 
 /**
  * A server request for connected clients to show a thread. Every subscribed
- * client receives it. The client named by `targetClientId` (its preview
- * automation id) acts even when unfocused; any visible, focused client also
+ * client receives it. The client named by `targetClientId` (its activity-report
+ * window id) acts even when unfocused; any visible, focused client also
  * acts, so the window the user is looking at follows along.
  */
 export const ClientIntent = Schema.Struct({

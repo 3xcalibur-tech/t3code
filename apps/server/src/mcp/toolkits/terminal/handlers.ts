@@ -38,7 +38,7 @@ function toMcpFailure(error: ThreadTerminals.ThreadTerminalsError) {
   }
 }
 
-export const TerminalToolkitHandlersLive = TerminalToolkit.toLayer({
+export const layer = TerminalToolkit.toLayer({
   t3_terminal_list: (input) =>
     Effect.gen(function* () {
       const {

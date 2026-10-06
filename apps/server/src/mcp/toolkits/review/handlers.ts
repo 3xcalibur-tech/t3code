@@ -8,7 +8,7 @@ import { ReviewToolkit } from "./tools.ts";
 
 const DEFAULT_DIFF_CHARACTERS = 20_000;
 
-export const ReviewToolkitHandlersLive = ReviewToolkit.toLayer({
+export const layer = ReviewToolkit.toLayer({
   t3_thread_diff: (input) =>
     Effect.gen(function* () {
       const {

@@ -3,7 +3,7 @@ import * as ClientIntents from "../../../clientIntents.ts";
 import { readThread } from "../../threadAccess.ts";
 import { ClientToolkit } from "./tools.ts";
 
-export const ClientToolkitHandlersLive = ClientToolkit.toLayer({
+export const layer = ClientToolkit.toLayer({
   t3_client_open_thread: (input) =>
     Effect.gen(function* () {
       const {

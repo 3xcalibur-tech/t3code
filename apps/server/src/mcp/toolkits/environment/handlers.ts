@@ -43,7 +43,7 @@ const access = (fullAccessMessage?: string) =>
       });
     return { ...context, descriptor };
   });
-export const EnvironmentHandlersLive = EnvironmentToolkit.toLayer({
+export const layer = EnvironmentToolkit.toLayer({
   t3_environment_read: ({ include = [] }) =>
     Effect.gen(function* () {
       const { descriptor } = yield* access(

@@ -52,7 +52,7 @@ function paginate<T>(
     end = start + (input.limit ?? 20);
   return { rows: rows.slice(start, end), nextCursor: end < rows.length ? end : null };
 }
-export const ProjectHandlersLive = ProjectToolkit.toLayer({
+export const layer = ProjectToolkit.toLayer({
   t3_thread_launch: (input) =>
     Effect.gen(function* () {
       const context = yield* readMutationCaller();

@@ -67,6 +67,7 @@ export type ClientActivityClientId = typeof ClientActivityClientId.Type;
 export const ClientActivityReportInput = Schema.Struct({
   environmentId: Schema.optionalKey(EnvironmentId),
   clientId: ClientActivityClientId,
+  intentClientId: Schema.optionalKey(ClientActivityClientId),
   clientKind: ClientKind,
   visible: Schema.Boolean,
   focused: Schema.Boolean,

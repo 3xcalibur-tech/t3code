@@ -24,7 +24,7 @@ import {
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as ThreadOrdering from "../../../orchestration-v2/ThreadOrdering.ts";
 import * as ThreadInbox from "../../../orchestration-v2/ThreadInbox.ts";

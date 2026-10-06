@@ -9,7 +9,7 @@ import {
 } from "../../threadAccess.ts";
 import { GitToolkit, MAX_STATUS_FILES } from "./tools.ts";
 
-export const GitToolkitHandlersLive = GitToolkit.toLayer({
+export const layer = GitToolkit.toLayer({
   t3_git_status: (input) =>
     Effect.gen(function* () {
       // A cold status cache fetches, which runs git and its credential helpers on the host.
