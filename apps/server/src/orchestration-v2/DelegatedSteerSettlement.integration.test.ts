@@ -18,6 +18,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Latch from "effect/Latch";
+import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -32,6 +34,7 @@ import {
   type ProviderAdapterV2TurnInput,
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderContinuationRequests from "./ProviderContinuationRequests.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
@@ -75,8 +78,18 @@ it.effect.each([
     resultRead: true,
     queuedMessage: true,
   },
+  {
+    // The settlement offers A's wake, and the user rolls the parent turn back
+    // before the continuation worker dispatches it.
+    name: "rolled-back",
+    title: "drops a recovered delegated wake whose parent turn was rolled back before it started",
+    resultRead: false,
+    queuedMessage: false,
+    rollback: true,
+  },
 ] as const)("$title", (scenario) => {
   const { resultRead, queuedMessage } = scenario;
+  const rollback = "rollback" in scenario && scenario.rollback;
   return Effect.scoped(
     Effect.gen(function* () {
       const name = `delegated-steer-settlement-${scenario.name}`;
@@ -84,6 +97,31 @@ it.effect.each([
       const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
       const started: ProviderAdapterV2TurnInput[] = [];
       let steerCalls = 0;
+      // The continuation worker's queue. A closed gate holds the request the
+      // worker took, and `workerReady` signals each time the worker asks for
+      // its next request, so after a release it marks the dispatch finished.
+      const continuationQueue =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const continuationOffers =
+        yield* Queue.unbounded<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const workerReady = yield* Queue.unbounded<void>();
+      const continuationGate = yield* Latch.make(!rollback);
+      const continuationRequests = Layer.succeed(
+        ProviderContinuationRequests.ProviderContinuationRequests,
+        {
+          offer: (request) =>
+            Queue.offer(continuationOffers, request).pipe(
+              Effect.andThen(Queue.offer(continuationQueue, request)),
+              Effect.asVoid,
+            ),
+          take: Effect.gen(function* () {
+            yield* Queue.offer(workerReady, undefined);
+            const request = yield* Queue.take(continuationQueue);
+            yield* continuationGate.await;
+            return request;
+          }),
+        },
+      );
       const adapter: ProviderAdapterV2Shape = {
         instanceId,
         driver,
@@ -164,7 +202,13 @@ it.effect.each([
               interruptTurn: () => Effect.void,
               respondToRuntimeRequest: () => Effect.void,
               readThreadSnapshot: () => Effect.die("unused"),
-              rollbackThread: () => Effect.die("unused"),
+              rollbackThread: ({ providerThread }) =>
+                Effect.succeed({
+                  providerThread,
+                  providerTurns: [],
+                  messages: [],
+                  runtimeRequests: [],
+                }),
               forkThread: () => Effect.die("unused"),
             };
           }),
@@ -410,6 +454,44 @@ it.effect.each([
         );
 
         yield* settle(parent.runId, parent.runOrdinal);
+        if (rollback) {
+          // The settlement offered A's wake; the worker holds it at the gate.
+          const offer = yield* Queue.take(continuationOffers);
+          assert.equal(offer.delegatedCompletion?.messageId, steerMessageId);
+          const settled = yield* orchestrator.getThreadProjection(threadId);
+          const threadStart = settled.checkpoints.find(
+            (checkpoint) => checkpoint.ordinalWithinScope === 0 && checkpoint.status === "ready",
+          );
+          assert.isDefined(threadStart, "no thread-start checkpoint to roll back to");
+          if (threadStart === undefined) return;
+          yield* orchestrator.dispatch({
+            type: "checkpoint.rollback",
+            commandId: CommandId.make("rollback"),
+            threadId,
+            scopeId: threadStart.scopeId,
+            checkpointId: threadStart.id,
+            restoreFiles: false,
+          });
+          yield* worker.drain();
+          const rolledBack = yield* orchestrator.getThreadProjection(threadId);
+          assert.equal(rolledBack.runs[0]?.status, "rolled_back");
+          assert.equal(
+            rolledBack.runs[0]?.delegatedCompletion?.delivery?.messageId,
+            steerMessageId,
+          );
+
+          yield* Queue.clear(workerReady);
+          yield* continuationGate.open;
+          yield* Queue.take(workerReady);
+          yield* worker.drain();
+          const final = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            final.runs.map((run) => [run.id, run.status]),
+            [[parent.runId, "rolled_back"]],
+          );
+          assert.equal(started.length, 1);
+          return;
+        }
         if (!resultRead) {
           const wakeA = yield* nextWake(1, { taskIds: [taskA] });
           assert.equal(wakeA.message.messageId, steerMessageId);
@@ -440,7 +522,7 @@ it.effect.each([
           ProviderReplayHarness.layerWithRegistry(
             { name },
             ProviderAdapterRegistry.layerSingle(adapter),
-            { runEffectWorker: false, runContinuationWorker: true },
+            { runEffectWorker: false, runContinuationWorker: true, continuationRequests },
           ),
         ),
       );

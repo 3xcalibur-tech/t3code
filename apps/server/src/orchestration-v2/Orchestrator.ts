@@ -4483,6 +4483,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
       }
 
+      // A rollback discarded the run these results belong to, or the run a
+      // steer carried them into, so they no longer wake the thread. Accept the
+      // delivery without changing anything, before the wake would unsettle the
+      // thread, so the continuation worker does not retry it.
+      if (command.delegatedCompletion !== undefined) {
+        const { parentRunId } = command.delegatedCompletion;
+        const steeredRunId = projection.messages.find(
+          (message) => message.id === command.messageId,
+        )?.runId;
+        if (
+          projection.runs.some(
+            (run) =>
+              run.status === "rolled_back" && (run.id === parentRunId || run.id === steeredRunId),
+          )
+        ) {
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "thread.metadata-updated",
+            threadId: command.threadId,
+            occurredAt: yield* DateTime.now,
+            payload: projection.thread,
+          });
+          return;
+        }
+      }
+
       if (projection.thread.settledOverride !== null) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
