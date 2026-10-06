@@ -4,6 +4,9 @@ import { create, type ReactTestInstance, type ReactTestRenderer } from "react-te
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 const watchCommand = vi.hoisted(() => vi.fn());
+const shell = vi.hoisted(() => ({
+  relationshipToParent: null as "subagent" | null,
+}));
 
 vi.mock("./ThreadDetailsPrRow", () => ({
   ThreadDetailsPrRow: ({ trailing, menu }: { trailing?: ReactNode; menu?: ReactNode }) => (
@@ -44,6 +47,12 @@ vi.mock("~/rightPanelStore", () => ({
   useRightPanelStore: { getState: () => ({ open: vi.fn() }) },
 }));
 vi.mock("~/state/entities", () => ({
+  useThreadShell: () => ({
+    lineage: { relationshipToParent: shell.relationshipToParent },
+    archivedAt: null,
+    settledAt: null,
+    settledOverride: null,
+  }),
   useServerConfigs: () =>
     new Map([["environment", { environment: { capabilities: { threadPullRequestWatch: true } } }]]),
 }));
@@ -88,6 +97,7 @@ function link(number: number, watched = false): ThreadPullRequestLink {
 
 let renderer: ReactTestRenderer;
 afterEach(() => {
+  shell.relationshipToParent = null;
   act(() => renderer?.unmount());
   vi.unstubAllGlobals();
   watchCommand.mockClear();
@@ -161,4 +171,10 @@ it("labels a lone switch Monitor and toggles the watch both ways", () => {
 it("shows nothing at the row's end when nothing is monitored", () => {
   render([link(1)], link(1));
   expect(trailing()).toBe("");
+});
+
+it("offers no way to start monitoring from a subagent, which its parent does for it", () => {
+  shell.relationshipToParent = "subagent";
+  render([link(1), link(2, true)], link(1));
+  expect(switches()).toEqual([["Monitor #2", true]]);
 });

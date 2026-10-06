@@ -6,7 +6,7 @@ import {
 import type { ComponentProps } from "react";
 
 import { useRightPanelStore } from "~/rightPanelStore";
-import { useServerConfigs } from "~/state/entities";
+import { useServerConfigs, useThreadShell } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -37,13 +37,26 @@ export function ThreadDetailsPrRows({
     useServerConfigs().get(threadRef.environmentId)?.environment.capabilities
       .threadPullRequestWatch === true;
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
+  const thread = useThreadShell(threadRef);
+  // Mirrors the server: subagents report to their parent, and settled or archived threads must
+  // be unsettled first. Those threads can still stop a watch, but not start one.
+  const canStart =
+    thread !== null &&
+    thread.lineage.relationshipToParent !== "subagent" &&
+    thread.archivedAt === null &&
+    thread.settledAt === null &&
+    thread.settledOverride !== "settled";
 
   const visible = visibleThreadPullRequests(links);
   const currentKey = currentLink === null ? null : threadPullRequestKeyOf(currentLink);
   const isCurrent = (link: ThreadPullRequestLink) => threadPullRequestKeyOf(link) === currentKey;
   const monitorable = supportsWatch
     ? [
-        ...(currentLink !== null && isOpen(currentLink) ? [currentLink] : []),
+        ...(currentLink !== null &&
+        isOpen(currentLink) &&
+        (canStart || currentLink.watch !== undefined)
+          ? [currentLink]
+          : []),
         ...visible.filter((link) => link.watch !== undefined && !isCurrent(link)),
       ]
     : [];
@@ -72,7 +85,7 @@ export function ThreadDetailsPrRows({
             checked={link.watch !== undefined}
             onCheckedChange={(checked) => setWatching(link, checked)}
           >
-            {monitorable.length === 1 ? "Monitor" : `Monitor #${link.number}`}
+            {monitorable.length === 1 && isCurrent(link) ? "Monitor" : `Monitor #${link.number}`}
           </MenuCheckboxItem>
         ))}
         {hasOtherLinks ? (
