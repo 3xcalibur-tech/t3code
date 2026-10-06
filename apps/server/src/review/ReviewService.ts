@@ -20,6 +20,8 @@ import {
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 
 /** The checkout has no repository a diff can be read from. */
 export class ReviewRepositoryNotFoundError extends Schema.TaggedError<ReviewRepositoryNotFoundError>()(
@@ -63,6 +65,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const settings = yield* ServerSettings.ServerSettingsService;
 
   const canonicalizePath = (value: string) => {
     const resolvedPath = path.resolve(value);
@@ -92,13 +95,28 @@ export const make = Effect.gen(function* () {
     operation: "ReviewService.getDiffPreview" | "ReviewService.getDiffFileContents",
     cwd: string,
   ) {
-    const [candidate, workspaceRoot, worktreesRoot] = yield* Effect.all([
+    const worktreesDirectories = yield* settings.getSettings.pipe(
+      Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
+    );
+    const [candidate, workspaceRoot, worktreesRoots] = yield* Effect.all([
       canonicalizePath(cwd),
       canonicalizePath(config.cwd),
-      canonicalizePath(config.worktreesDir),
+      // A managed root that cannot be resolved, or resolves to a filesystem
+      // root through a symlink, is skipped rather than failing every review.
+      Effect.forEach(
+        managedWorktreesDirectories(worktreesDirectories, config.worktreesDir, path),
+        (directory) => canonicalizePath(directory).pipe(Effect.orElseSucceed(() => null)),
+      ).pipe(
+        Effect.map((roots) =>
+          roots.filter((root): root is string => root !== null && !isFilesystemRoot(root, path)),
+        ),
+      ),
     ]);
 
-    if (isWithinRoot(candidate, workspaceRoot) || isWithinRoot(candidate, worktreesRoot)) {
+    if (
+      isWithinRoot(candidate, workspaceRoot) ||
+      worktreesRoots.some((root) => isWithinRoot(candidate, root))
+    ) {
       return;
     }
 

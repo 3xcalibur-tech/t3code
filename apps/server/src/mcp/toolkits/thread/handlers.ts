@@ -6,7 +6,6 @@ import {
   type RunId,
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
-  type ProviderApprovalDecision,
   ProviderRequestKind,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -22,6 +21,8 @@ import {
   readWritableThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadInbox from "../../../orchestration-v2/ThreadInbox.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
@@ -55,13 +56,6 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
 });
 
 const isApprovalKind = Schema.is(ProviderRequestKind);
-// The composer's choices when a provider advertises none.
-const defaultApprovalDecisions: ReadonlyArray<ProviderApprovalDecision> = [
-  "cancel",
-  "decline",
-  "acceptForSession",
-  "accept",
-];
 /** Pending requests a caller can act on: user questions and approvals. */
 const isPendingRequest = (request: OrchestrationV2ThreadProjection["runtimeRequests"][number]) =>
   request.status === "pending" && (request.kind === "user_input" || isApprovalKind(request.kind));
@@ -94,8 +88,7 @@ const readPendingRequest = Effect.fn("mcp.readPendingRequest")(function* (
     });
   return { ...context, request, item };
 });
-
-export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
+export const layer = ThreadToolkit.toLayer({
   run_scheduled_task_now: (input) =>
     Effect.gen(function* () {
       yield* readFullAccessCaller(
@@ -244,49 +237,9 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
     }),
   t3_pending_request_respond: (input) =>
     Effect.gen(function* () {
-      const { threads, projection, request, item } = yield* readPendingRequest(input, true);
-      const approval = request.kind !== "user_input";
-      const response = approval
-        ? input.decision === undefined
-          ? undefined
-          : { decision: input.decision }
-        : input.answers === undefined
-          ? undefined
-          : { answers: input.answers };
-      if (response === undefined)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: approval ? "Approvals need a decision." : "User questions need answers.",
-        });
-      // Like the composer, offer only the provider's options, else the same defaults.
-      const offered = item?.type === "approval_request" ? item.options : undefined;
-      if (
-        approval &&
-        input.decision !== undefined &&
-        !(offered?.map((option) => option.decision) ?? defaultApprovalDecisions).includes(
-          input.decision,
-        )
-      )
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: "That decision was not offered for this approval.",
-        });
-      // Approving lets the caller run commands in the target thread; declining or cancelling
-      // only stops one, which any caller that can reach the thread may do.
-      if (approval && input.decision !== "decline" && input.decision !== "cancel")
-        yield* readFullAccessCaller(
-          "Approving requires a live full-access/default thread or a full-access client.",
-        );
-      const result = yield* threads
-        .dispatch({
-          type: "runtime-request.respond",
-          threadId: projection.thread.id,
-          commandId: yield* newCommandId(),
-          requestId: input.requestId,
-          ...response,
-        })
-        .pipe(Effect.mapError(unavailable));
-      return { sequence: result.sequence };
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.respondToPendingRequest(scope, input);
     }),
   t3_pending_request_dismiss: (input) =>
     Effect.gen(function* () {

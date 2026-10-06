@@ -7,7 +7,7 @@ import {
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { Tool, Toolkit } from "effect/ai";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ReviewService from "../../../review/ReviewService.ts";
