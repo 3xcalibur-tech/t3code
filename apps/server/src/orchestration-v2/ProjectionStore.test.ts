@@ -568,6 +568,73 @@ const followUpResultRecovery = Effect.gen(function* () {
     });
     assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
   }
+  let ordinal = 11;
+  for (const [scenario, sourceRunId, recoverable] of [
+    ["requested", original.id, true],
+    ["notification", RunId.make("run:automatic-follow-up:0"), false],
+    ["scheduled", RunId.make("run:automatic-follow-up:3"), false],
+    ["notification-intermediate", original.id, false],
+    ["scheduled-intermediate", original.id, false],
+    ["missing", RunId.make("run:missing-source"), false],
+  ] as const) {
+    let previousRunId = sourceRunId;
+    for (let depth = 1; depth <= 3; depth++) {
+      const continuation = {
+        ...monitor,
+        id: RunId.make(`run:continuation:${scenario}:${depth}`),
+        userMessageId: MessageId.make(`message:continuation:${scenario}:${depth}`),
+        ordinal: ordinal++,
+        restartContinuationOfRunId: previousRunId,
+      };
+      yield* store.apply({
+        id: EventId.make(`continuation:message:${scenario}:${depth}`),
+        type: "message.updated",
+        threadId: childId,
+        runId: continuation.id,
+        occurredAt: now,
+        payload: {
+          ...(yield* store.getThreadProjection(childId)).messages[0]!,
+          id: continuation.userMessageId,
+          runId: continuation.id,
+          creationSource: "server",
+          createdBy: "agent",
+          notification:
+            scenario === "notification-intermediate" && depth === 1
+              ? { source: { kind: "command" }, outcome: "completed", summary: "Automatic update" }
+              : undefined,
+          scheduledTaskId:
+            scenario === "scheduled-intermediate" && depth === 1
+              ? ScheduledTaskId.make("continuation-schedule")
+              : undefined,
+        },
+      });
+      yield* store.apply({
+        id: EventId.make(`continuation:run:${scenario}:${depth}`),
+        type: "run.updated",
+        threadId: childId,
+        runId: continuation.id,
+        occurredAt: now,
+        payload: continuation,
+      });
+      const candidates = yield* store.getRecoveryThreadIds("subagent-results");
+      assert.equal(candidates.includes(childId), recoverable, `${scenario} depth ${depth}`);
+      if (recoverable) {
+        yield* store.apply({
+          id: EventId.make(`continuation:transfer:${scenario}:${depth}`),
+          type: "context-transfer.created",
+          threadId: childId,
+          occurredAt: now,
+          payload: {
+            ...transfer,
+            id: ContextTransferId.make(`transfer:continuation:${scenario}:${depth}`),
+            sourcePoint: { threadId: childId, runId: continuation.id },
+          },
+        });
+        assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+      }
+      previousRunId = continuation.id;
+    }
+  }
 });
 
 it.effect("recovers only undelivered follow-up results in memory", () =>

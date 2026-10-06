@@ -3523,7 +3523,44 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                           AND json_extract(message.payload_json, '$.createdBy') IS NOT 'user'
                           AND NOT (
                             (terminal.ordinal = 1 AND json_extract(message.payload_json, '$.notification') IS NULL)
-                            OR json_extract(terminal.payload_json, '$.restartContinuationOfRunId') IS NOT NULL
+                            OR EXISTS (
+                              -- Follow only this candidate's earlier runs. Automatic wakes
+                              -- cannot become requested work through a restart chain.
+                              WITH RECURSIVE continuation_sources(run_id, ordinal, payload_json) AS (
+                                SELECT terminal.run_id, terminal.ordinal, terminal.payload_json
+                                UNION ALL
+                                SELECT source.run_id, source.ordinal, source.payload_json
+                                FROM continuation_sources AS continuation
+                                JOIN orchestration_v2_projection_runs AS source
+                                  ON source.thread_id = child.thread_id
+                                  AND source.run_id = CASE WHEN json_valid(continuation.payload_json)
+                                    THEN json_extract(continuation.payload_json, '$.restartContinuationOfRunId')
+                                    ELSE NULL END
+                                  AND source.ordinal < continuation.ordinal
+                                WHERE NOT EXISTS (
+                                  SELECT 1 FROM orchestration_v2_projection_messages AS source_message
+                                  WHERE source_message.thread_id = child.thread_id
+                                    AND source_message.message_id = json_extract(continuation.payload_json, '$.userMessageId')
+                                    AND CASE WHEN json_valid(source_message.payload_json) THEN
+                                      json_extract(source_message.payload_json, '$.notification') IS NOT NULL
+                                      OR json_extract(source_message.payload_json, '$.scheduledTaskId') IS NOT NULL
+                                      ELSE 0 END
+                                )
+                              )
+                              SELECT 1 FROM continuation_sources AS source
+                              WHERE NOT EXISTS (
+                                SELECT 1 FROM orchestration_v2_projection_messages AS source_message
+                                WHERE source_message.thread_id = child.thread_id
+                                  AND source_message.message_id = json_extract(source.payload_json, '$.userMessageId')
+                                  AND CASE WHEN json_valid(source_message.payload_json) THEN
+                                    json_extract(source_message.payload_json, '$.notification') IS NOT NULL
+                                    OR json_extract(source_message.payload_json, '$.scheduledTaskId') IS NOT NULL
+                                    OR (json_extract(source_message.payload_json, '$.creationSource') = 'server'
+                                      AND json_extract(source_message.payload_json, '$.createdBy') IS NOT 'user'
+                                      AND source.ordinal <> 1)
+                                    ELSE 0 END
+                              )
+                            )
                           ))
                         ELSE 0 END
                   )
