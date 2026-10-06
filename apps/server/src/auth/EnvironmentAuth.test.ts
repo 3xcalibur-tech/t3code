@@ -452,6 +452,60 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
     ),
   );
 
+  it.effect("renews a desktop bearer session without its bootstrap token", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const first = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        "desktop-bootstrap-token",
+        undefined,
+        requestMetadata,
+      );
+      const firstSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(first.access_token),
+      );
+
+      const renewed = yield* serverAuth.renewDesktopSession(firstSession, requestMetadata);
+      const renewedSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(renewed.access_token),
+      );
+      const firstError = yield* serverAuth
+        .authenticateHttpRequest(makeBearerRequest(first.access_token))
+        .pipe(Effect.flip);
+
+      expect(renewedSession.subject).toBe("desktop-bootstrap");
+      expect(renewedSession.scopes).toEqual(firstSession.scopes);
+      expect(renewedSession.sessionId).not.toBe(firstSession.sessionId);
+      expect(firstError._tag).toBe("ServerAuthInvalidCredentialError");
+    }).pipe(
+      Effect.provide(
+        makeEnvironmentAuthLayer({
+          desktopBootstrapToken: "desktop-bootstrap-token",
+        }),
+      ),
+    ),
+  );
+
+  it.effect("refuses to renew sessions that did not come from the desktop", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairing = yield* serverAuth.issuePairingCredential();
+      const paired = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        pairing.credential,
+        undefined,
+        requestMetadata,
+      );
+      const pairedSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(paired.access_token),
+      );
+
+      const error = yield* serverAuth
+        .renewDesktopSession(pairedSession, requestMetadata)
+        .pipe(Effect.flip);
+
+      expect(error._tag).toBe("ServerAuthSessionNotRenewableError");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
   it.effect("keeps user-issued administrative pairing links manageable", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;

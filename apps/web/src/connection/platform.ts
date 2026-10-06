@@ -18,7 +18,10 @@ import {
   PrimaryConnectionTarget,
   Wakeups,
 } from "@t3tools/client-runtime/connection";
-import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
+import {
+  bootstrapRemoteBearerSession,
+  renewRemoteBearerSession,
+} from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
 import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
@@ -363,7 +366,12 @@ const loadPrimaryConnectionRegistration = Effect.fn(
 // with a bearer token minted from the bootstrap credential the desktop issues.
 const loadSecondaryConnectionRegistration = Effect.fn(
   "web.connectionPlatform.loadSecondaryConnectionRegistration",
-)(function* (entry: DesktopEnvironmentBootstrap) {
+)(function* (
+  entry: DesktopEnvironmentBootstrap,
+  // A bearer from this backend's previous registration. Renewing it keeps a
+  // long-running desktop connected without the short-lived bootstrap token.
+  previousBearerToken?: string,
+) {
   if (
     entry.httpBaseUrl === null ||
     entry.wsBaseUrl === null ||
@@ -376,16 +384,24 @@ const loadSecondaryConnectionRegistration = Effect.fn(
   }
   const httpBaseUrl = entry.httpBaseUrl;
   const wsBaseUrl = entry.wsBaseUrl;
+  const bootstrapToken = entry.bootstrapToken;
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
     Effect.mapError(mapRemoteEnvironmentError),
   );
   const issuedAtEpochMs = yield* Clock.currentTimeMillis;
-  const access = yield* bootstrapRemoteBearerSession({
+  const exchangeBootstrapToken = bootstrapRemoteBearerSession({
     httpBaseUrl,
-    credential: entry.bootstrapToken,
+    credential: bootstrapToken,
     scopes: AuthStandardClientScopes,
     clientMetadata: clientMetadata(),
-  }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  });
+  const access = yield* (
+    previousBearerToken === undefined
+      ? exchangeBootstrapToken
+      : renewRemoteBearerSession({ httpBaseUrl, bearerToken: previousBearerToken }).pipe(
+          Effect.catch(() => exchangeBootstrapToken),
+        )
+  ).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Keep the desktop pool's stable backend id in the connection id. The
   // descriptor environment id still scopes projects and RPC state, while the
   // backend id lets desktop-only operations (notably the WSL folder picker)
@@ -510,6 +526,28 @@ export function isRejectedSecondaryBootstrap(
   return rejected.get(backendId) === signature;
 }
 
+/**
+ * The unexpired bearer a cached desktop-local registration holds for the same
+ * endpoint. The bootstrap token may have changed since; the bearer is what
+ * proves the session, so only the endpoint has to match.
+ */
+export function renewableSecondaryBearerToken(
+  cached: CachedPlatformRegistration | undefined,
+  endpointSignature: string,
+  nowEpochMs: number,
+): string | undefined {
+  if (
+    cached === undefined ||
+    !cached.signature.startsWith(`${endpointSignature}|`) ||
+    cached.expiresAtEpochMs === undefined ||
+    nowEpochMs >= cached.expiresAtEpochMs ||
+    cached.registration._tag !== "BearerConnectionRegistration"
+  ) {
+    return undefined;
+  }
+  return cached.registration.credential.token;
+}
+
 export function isRejectedBootstrapCredentialError(error: ConnectionAttemptError): boolean {
   return error._tag === "ConnectionBlockedError" && error.reason === "authentication";
 }
@@ -607,7 +645,8 @@ const platformConnectionSourceLayer = Layer.effect(
         const rejected = yield* Ref.get(rejectedRef);
         const nextRejected = new Map<string, string>();
         for (const bootstrap of topologyRead.bootstraps) {
-          const signature = `${bootstrap.httpBaseUrl}|${bootstrap.wsBaseUrl}|${bootstrap.bootstrapToken ?? ""}`;
+          const endpointSignature = `${bootstrap.httpBaseUrl}|${bootstrap.wsBaseUrl}`;
+          const signature = `${endpointSignature}|${bootstrap.bootstrapToken ?? ""}`;
           const cached = previous.get(bootstrap.id);
           if (
             cached !== undefined &&
@@ -621,7 +660,10 @@ const platformConnectionSourceLayer = Layer.effect(
             nextRejected.set(bootstrap.id, signature);
             continue;
           }
-          const built = yield* loadSecondaryConnectionRegistration(bootstrap).pipe(
+          const built = yield* loadSecondaryConnectionRegistration(
+            bootstrap,
+            renewableSecondaryBearerToken(cached, endpointSignature, nowEpochMs),
+          ).pipe(
             Effect.tapError((error) =>
               Effect.logWarning("Could not connect a desktop-local backend.", {
                 id: bootstrap.id,

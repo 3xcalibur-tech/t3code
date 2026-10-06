@@ -42,6 +42,7 @@ import * as SqlitePersistence from "../persistence/Layers/Sqlite.ts";
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+const DESKTOP_BOOTSTRAP_SUBJECT = "desktop-bootstrap";
 
 export interface IssuedPairingLink {
   readonly id: string;
@@ -197,6 +198,26 @@ export class ServerAuthOtherSessionsRevocationError extends Schema.TaggedError<S
   }
 }
 
+export class ServerAuthSessionRenewalError extends Schema.TaggedError<ServerAuthSessionRenewalError>()(
+  "ServerAuthSessionRenewalError",
+  {
+    ...serverAuthInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to renew the session.";
+  }
+}
+
+export class ServerAuthSessionNotRenewableError extends Schema.TaggedError<ServerAuthSessionNotRenewableError>()(
+  "ServerAuthSessionNotRenewableError",
+  {},
+) {
+  override get message(): string {
+    return "Only a desktop bearer session can renew itself.";
+  }
+}
+
 export class ServerAuthWebSocketTokenIssueError extends Schema.TaggedError<ServerAuthWebSocketTokenIssueError>()(
   "ServerAuthWebSocketTokenIssueError",
   {
@@ -325,6 +346,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthSessionRevocationError,
   ServerAuthOtherSessionsRevocationError,
   ServerAuthWebSocketTokenIssueError,
+  ServerAuthSessionRenewalError,
   ServerAuthDpopReplayStateRecordError,
   ServerAuthDpopReplayKeyCalculationError,
   ServerAuthLinkedCloudAccountVerificationError,
@@ -499,6 +521,17 @@ export class EnvironmentAuth extends Context.Service<
     readonly issueWebSocketTicket: (
       session: Pick<AuthenticatedSession, "sessionId">,
     ) => Effect.Effect<AuthWebSocketTicketResult, ServerAuthInternalError>;
+    /**
+     * Replaces a desktop bearer session with a fresh one, so the desktop only
+     * needs its short-lived bootstrap token once per backend run.
+     */
+    readonly renewDesktopSession: (
+      session: AuthenticatedSession,
+      requestMetadata: AuthClientMetadata,
+    ) => Effect.Effect<
+      AuthAccessTokenResult,
+      ServerAuthSessionNotRenewableError | ServerAuthInternalError
+    >;
     readonly issueStartupPairingUrl: (
       baseUrl: string,
     ) => Effect.Effect<string, ServerAuthInternalError>;
@@ -1067,6 +1100,34 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.issueWebSocketTicket"),
     );
 
+  const renewDesktopSession: EnvironmentAuth["Service"]["renewDesktopSession"] = Effect.fn(
+    "EnvironmentAuth.renewDesktopSession",
+  )(function* (session, requestMetadata) {
+    if (session.subject !== DESKTOP_BOOTSTRAP_SUBJECT || session.method !== "bearer-access-token") {
+      return yield* new ServerAuthSessionNotRenewableError({});
+    }
+    const issued = yield* sessions
+      .issue({
+        method: "bearer-access-token",
+        subject: session.subject,
+        scopes: session.scopes,
+        replaceActiveForSubjectAndMethod: true,
+        client: requestMetadata,
+      })
+      .pipe(Effect.mapError((cause) => new ServerAuthSessionRenewalError({ cause })));
+    const now = yield* DateTime.now;
+    return {
+      access_token: issued.token,
+      issued_token_type: AuthAccessTokenType,
+      token_type: "Bearer",
+      expires_in: Math.max(
+        0,
+        Math.floor((issued.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000),
+      ),
+      scope: encodeOAuthScope(issued.scopes),
+    } satisfies AuthAccessTokenResult;
+  });
+
   const authenticateHttpRequest: EnvironmentAuth["Service"]["authenticateHttpRequest"] = (
     request,
   ) =>
@@ -1115,6 +1176,7 @@ export const make = Effect.gen(function* () {
     authenticateHttpRequest,
     authenticateWebSocketUpgrade,
     issueWebSocketTicket,
+    renewDesktopSession,
     issueStartupPairingUrl,
   });
 });

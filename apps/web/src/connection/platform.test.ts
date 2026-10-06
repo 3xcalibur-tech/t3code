@@ -8,6 +8,10 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
+  BearerConnectionCredential,
+  BearerConnectionProfile,
+  BearerConnectionRegistration,
+  BearerConnectionTarget,
   ConnectionBlockedError,
   ConnectionTransientError,
 } from "@t3tools/client-runtime/connection";
@@ -17,6 +21,7 @@ import {
   canReuseCachedPlatformRegistration,
   isRejectedBootstrapCredentialError,
   isRejectedSecondaryBootstrap,
+  renewableSecondaryBearerToken,
   primaryRegistrationToRetainAfterTopologyRead,
   provisionDesktopSshEnvironment,
   readPrimaryEnvironmentTargetResult,
@@ -234,6 +239,40 @@ describe("rejected desktop-local bootstrap tokens", () => {
         new ConnectionTransientError({ reason: "endpoint-unavailable", detail: "booting" }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("desktop-local session renewal", () => {
+  const bearerRegistration = new BearerConnectionRegistration({
+    target: new BearerConnectionTarget({
+      environmentId: EnvironmentId.make("wsl-env"),
+      label: "WSL",
+      connectionId: "local:wsl:ubuntu",
+    }),
+    profile: new BearerConnectionProfile({
+      connectionId: "local:wsl:ubuntu",
+      environmentId: EnvironmentId.make("wsl-env"),
+      label: "WSL",
+      httpBaseUrl: "http://a",
+      wsBaseUrl: "ws://a",
+    }),
+    credential: new BearerConnectionCredential({ token: "current-bearer" }),
+  });
+  const cached = {
+    signature: "http://a|ws://a|old-bootstrap",
+    registration: bearerRegistration,
+    expiresAtEpochMs: 20_000,
+    refreshAtEpochMs: 15_000,
+  };
+
+  it("renews with the cached bearer even after the bootstrap token changed", () => {
+    expect(renewableSecondaryBearerToken(cached, "http://a|ws://a", 16_000)).toBe("current-bearer");
+  });
+
+  it("falls back to the bootstrap token once the bearer expired or the endpoint moved", () => {
+    expect(renewableSecondaryBearerToken(cached, "http://a|ws://a", 20_000)).toBeUndefined();
+    expect(renewableSecondaryBearerToken(cached, "http://b|ws://b", 16_000)).toBeUndefined();
+    expect(renewableSecondaryBearerToken(undefined, "http://a|ws://a", 16_000)).toBeUndefined();
   });
 });
 

@@ -99,6 +99,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "browser_session_cookie_failed",
   "access_token_issuance_failed",
   "websocket_ticket_issuance_failed",
+  "session_renewal_failed",
   "pairing_credential_issuance_failed",
   "pairing_links_load_failed",
   "pairing_link_revoke_failed",
@@ -460,6 +461,13 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       success: AuthAccessTokenResult,
       error: EnvironmentTokenExchangeErrors,
     }),
+  )
+  .add(
+    HttpApiEndpoint.post("renewSession", "/api/auth/session/renew", {
+      headers: OptionalBearerHeaders,
+      success: AuthAccessTokenResult,
+      error: EnvironmentSessionCreationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("webSocketTicket", "/api/auth/websocket-ticket", {

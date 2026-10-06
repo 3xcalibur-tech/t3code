@@ -139,6 +139,29 @@ export const bootstrapRemoteBearerSession = Effect.fn(
   );
 });
 
+/**
+ * Trades a desktop-local bearer session for a fresh one, so a long-running
+ * desktop never needs its bootstrap token again after the first exchange.
+ */
+export const renewRemoteBearerSession = Effect.fn(
+  "clientRuntime.authorization.renewRemoteBearerSession",
+)(function* (input: {
+  readonly httpBaseUrl: string;
+  readonly bearerToken: string;
+  readonly timeoutMs?: number;
+}) {
+  const client = yield* makeEnvironmentHttpApiGroupClient(input.httpBaseUrl, "auth");
+  return yield* executeEnvironmentHttpRequest(
+    environmentEndpointUrl(input.httpBaseUrl, "/api/auth/session/renew"),
+    input.timeoutMs ?? DEFAULT_REMOTE_REQUEST_TIMEOUT_MS,
+    client.renewSession({
+      headers: {
+        authorization: `Bearer ${input.bearerToken}`,
+      },
+    }),
+  );
+});
+
 export const fetchRemoteSessionState = Effect.fn(
   "clientRuntime.authorization.fetchRemoteSessionState",
 )(function* (input: {

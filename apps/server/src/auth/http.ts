@@ -384,6 +384,27 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         ),
       )
       .handle(
+        "renewSession",
+        Effect.fn("environment.auth.renewSession")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            const session = yield* EnvironmentAuthenticatedPrincipal;
+            yield* appendCredentialResponseHeaders;
+            return yield* serverAuth.renewDesktopSession(
+              { ...session, scopes: [...session.scopes] },
+              deriveAuthClientMetadata({ request }),
+            );
+          },
+          Effect.catchTag("ServerAuthSessionNotRenewableError", () =>
+            failEnvironmentAuthInvalid("invalid_credential"),
+          ),
+          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+            failEnvironmentInternal("session_renewal_failed", error),
+          ),
+        ),
+      )
+      .handle(
         "webSocketTicket",
         Effect.fn("environment.auth.webSocketTicket")(
           function* (args) {
