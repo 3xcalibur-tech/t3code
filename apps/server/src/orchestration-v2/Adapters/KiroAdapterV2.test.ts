@@ -17,8 +17,10 @@ import {
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -388,6 +390,79 @@ describe("KiroAdapterV2", () => {
       assert.isTrue(Exit.isFailure(exit));
       assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "not-a-kiro-model");
     }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+});
+
+describe("KiroAdapterV2 early Stop", () => {
+  // Kiro CLI 2.27.1 drops a `session/cancel` that arrives 0-0.5 s after
+  // `session/prompt` and runs the turn to completion (reported by TinBane).
+  // These scripts hold Kiro's first frame for the prompt until after Stop was
+  // pressed, so a cancel sent before it reaches the script as a frame it does
+  // not expect.
+  const promptStarted = {
+    ...update({
+      sessionUpdate: "session_info_update",
+      _meta: { kiro: { userMessageId: "message-1", kind: "user_message_id_assigned" } },
+    }),
+    afterMs: 300,
+  };
+  const runningProviderTurnId = (event: ProviderAdapterV2Event) =>
+    event.type === "provider_turn.updated" && event.providerTurn.status === "running"
+      ? event.providerTurn.id
+      : undefined;
+  const stopBeforeKiroStarts = (frames: ReadonlyArray<Frame>) =>
+    runKiroScript({
+      scenario: "early-stop",
+      frames: [
+        ...openSessionFrames({
+          initialize: KIRO_V3_INITIALIZE,
+          configOptions: [modeOption, autopilotOption("on")],
+        }),
+        turnPrompt,
+        ...frames,
+        ...closeSession,
+      ],
+      drive: ({ events, startTurn, interrupt }) =>
+        Effect.gen(function* () {
+          const running = yield* Deferred.make<ProviderTurnId>();
+          const turn = yield* collectTurn(
+            events.pipe(
+              Stream.tap((event) => {
+                const providerTurnId = runningProviderTurnId(event);
+                return providerTurnId === undefined
+                  ? Effect.void
+                  : Deferred.succeed(running, providerTurnId);
+              }),
+            ),
+          ).pipe(Effect.forkChild);
+          yield* startTurn;
+          yield* interrupt(yield* Deferred.await(running));
+          // Stop decides the run's outcome; the script fails on any cancel it
+          // does not expect.
+          assert.equal(terminalStatus(yield* Fiber.join(turn)), "interrupted");
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped);
+
+  it.live("holds Stop until Kiro starts the prompt, then cancels it", () =>
+    stopBeforeKiroStarts([
+      promptStarted,
+      {
+        type: "expect_outbound",
+        label: "session/cancel",
+        frame: {
+          kind: "notification",
+          method: "session/cancel",
+          params: { sessionId: SESSION_ID },
+        },
+      },
+      answer("session/prompt", { stopReason: "cancelled" }),
+    ]),
+  );
+
+  it.live("sends no cancel when Kiro finishes the prompt before starting it", () =>
+    stopBeforeKiroStarts([
+      { ...answer("session/prompt", { stopReason: "end_turn" }), afterMs: 300 },
+    ]),
   );
 });
 

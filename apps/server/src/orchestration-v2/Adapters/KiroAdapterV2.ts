@@ -162,6 +162,9 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
     sessionConfigForPolicy: (policy) => [
       { id: KIRO_AUTOPILOT_CONFIG_ID, value: kiroAutopilotValue(policy) },
     ],
+    // Kiro 2.27 drops a `session/cancel` sent before it starts the prompt
+    // (live: 0-0.5 s after `session/prompt`) and runs the turn to completion.
+    cancelAfterPromptStarts: true,
     permissionDisposition: kiroPermissionDisposition,
     approvalOptions: kiroApprovalOptions,
     // Kiro V3 advertises `promptCapabilities.image`; the shared adapter reads it.
