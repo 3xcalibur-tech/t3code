@@ -1,11 +1,10 @@
 import { EnvironmentId, type PullRequestCheck } from "@t3tools/contracts";
 import { act, cloneElement, type ReactElement, type ReactNode } from "react";
-import { create, type ReactTestRenderer } from "react-test-renderer";
+import { create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   status: "success" as PullRequestCheck["status"],
-  extraStatus: null as PullRequestCheck["status"] | null,
   perform: vi.fn(),
 }));
 
@@ -25,7 +24,7 @@ vi.mock("~/state/query", () => ({
       changedFiles: 1,
       additions: 1,
       deletions: 0,
-      checks: [state.status, ...(state.extraStatus ? [state.extraStatus] : [])].map((status) => ({
+      checks: [state.status].map((status) => ({
         name: `CI-${status}`,
         status,
         description: null,
@@ -44,17 +43,18 @@ vi.mock("../pullRequest/usePullRequestActions", () => ({
   usePullRequestActionRunner: () => ({ actionPending: false, perform: state.perform }),
   usePullRequestHandoffs: () => ({ handoff: null, startHandoff: vi.fn() }),
 }));
-vi.mock("../ui/popover", () => ({
-  Popover: ({ children }: { children: ReactNode }) => children,
-  PopoverTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
+vi.mock("../ui/menu", () => ({
+  Menu: ({ children }: { children: ReactNode }) => children,
+  MenuTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
     cloneElement(render, undefined, children),
-  PopoverPopup: () => null,
-}));
-vi.mock("../ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: ReactNode }) => children,
-  TooltipTrigger: ({ render, children }: { render: ReactElement; children: ReactNode }) =>
-    cloneElement(render, undefined, children),
-  TooltipPopup: () => null,
+  MenuPopup: ({ children }: { children: ReactNode }) => children,
+  MenuItem: ({ children, onClick }: { children: ReactNode; onClick?: () => void }) => (
+    <button type="button" onClick={onClick}>
+      {children}
+    </button>
+  ),
+  MenuItemLabel: ({ children }: { children: ReactNode }) => children,
+  MenuSeparator: () => null,
 }));
 vi.mock("../ui/alert-dialog", () => ({
   AlertDialog: ({ open, children }: { open: boolean; children: ReactNode }) =>
@@ -70,11 +70,12 @@ vi.mock("../ui/alert-dialog", () => ({
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
 
 let renderer: ReactTestRenderer;
+const text = (node: ReactTestInstance): string =>
+  node.children.map((child) => (typeof child === "string" ? child : text(child))).join("");
 afterEach(() => {
   act(() => renderer?.unmount());
   vi.unstubAllGlobals();
   state.status = "success";
-  state.extraStatus = null;
 });
 
 it("requires a new merge click after passing checks become pending and pass again", () => {
@@ -88,6 +89,7 @@ it("requires a new merge click after passing checks become pending and pass agai
       project={null}
       label="Test PR"
       openAriaLabel="Open PR"
+      url="https://github.com/pingdotgg/t3code/pull/1"
       onOpen={vi.fn()}
     />
   );
@@ -95,7 +97,7 @@ it("requires a new merge click after passing checks become pending and pass agai
     act(() => {
       renderer.root
         .findAllByType("button")
-        .find((button) => button.children.includes("Merge"))!
+        .find((button) => text(button).startsWith("Merge"))!
         .props.onClick();
     });
   const dialogs = () => renderer.root.findAllByProps({ role: "alertdialog" });
@@ -118,34 +120,4 @@ it("requires a new merge click after passing checks become pending and pass agai
   clickMerge();
   expect(dialogs()).toHaveLength(1);
   expect(state.perform).not.toHaveBeenCalled();
-});
-
-it.each<[PullRequestCheck["status"], PullRequestCheck["status"], string]>([
-  ["success", "skipped", ""],
-  ["failure", "cancelled", ""],
-  ["success", "action-required", ""],
-  ["success", "pending", "1/2"],
-  ["failure", "pending", "1/2"],
-])("shows a count only while checks run (%s, %s)", (status, extraStatus, count) => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  state.status = status;
-  state.extraStatus = extraStatus;
-  act(() => {
-    renderer = create(
-      <ThreadDetailsPrRow
-        environmentId={EnvironmentId.make("environment")}
-        pr={null}
-        number={1}
-        status={null}
-        project={null}
-        label="Test PR"
-        openAriaLabel="Open PR"
-        onOpen={vi.fn()}
-      />,
-    );
-  });
-  const text = renderer.root
-    .findAllByType("span")
-    .map((span) => span.children.filter((child) => typeof child === "string").join(""));
-  expect(text.filter((value) => /^\d+\/\d+$/.test(value))).toEqual(count ? [count] : []);
 });

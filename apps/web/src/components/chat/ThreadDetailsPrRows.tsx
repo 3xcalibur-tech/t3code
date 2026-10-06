@@ -1,130 +1,89 @@
-import { ThreadDetailsControl } from "./ThreadDetailsControl";
-import type { EnvironmentId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
-  resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
-import { Minus, Plus } from "lucide";
-import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
+import type { ComponentProps } from "react";
 
-import { findProjectOnChangeRequestHost, parseChangeRequestUrl } from "~/lib/openPullRequestLink";
-
-import { useProjects } from "~/state/entities";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { useServerConfigs } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { pullRequestListLines } from "../pullRequest/pullRequestListLines";
-import { MorphIcon } from "~/components/MorphIcon";
-import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
-
+import { MenuCheckboxItem, MenuItem, MenuItemLabel } from "../ui/menu";
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
 
-function ThreadDetailsPrLinkRow({
-  environmentId,
-  link,
-  onOpen,
-  onActed,
-  onStopWatching,
-}: {
-  environmentId: EnvironmentId;
-  link: ThreadPullRequestLink;
-  onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
-  onActed?: (() => void) | undefined;
-  onStopWatching?: (() => void) | undefined;
-}) {
-  const projects = useProjects();
-  const parsed = parseChangeRequestUrl(link.url);
-  const project =
-    parsed === null
-      ? null
-      : (findProjectOnChangeRequestHost(
-          projects.filter((candidate) => candidate.environmentId === environmentId),
-          parsed,
-        ) ?? null);
-  const linked = linkedPullRequestSnapshotStatus(link);
-  const pr = linked?.pr ?? null;
-  return (
-    <ThreadDetailsPrRow
-      environmentId={environmentId}
-      pr={pr}
-      number={link.number}
-      reference={link}
-      status={prStatusIndicator(pr, linked?.sourceControlProvider)}
-      project={project}
-      label={`#${link.number}${link.snapshot === null ? "" : `: ${link.snapshot.title}`}`}
-      openAriaLabel={link.url}
-      onOpen={onOpen}
-      onStopWatching={onStopWatching}
-      {...(onActed ? { onActed } : {})}
-    />
-  );
-}
+const isOpen = (link: ThreadPullRequestLink) =>
+  link.snapshot === null || link.snapshot.state === "open";
 
+/**
+ * The thread details card's pull request row, with the thread's monitoring in its menu.
+ *
+ * A thread can monitor several pull requests, so the menu has a "Monitor" switch for the current
+ * one and for each other one the agent monitors. Other linked pull requests live in the Linked
+ * PRs panel, which the menu opens.
+ */
 export function ThreadDetailsPrRows({
   threadRef,
   links,
   currentLink,
-  onOpenLink,
   ...row
-}: ComponentProps<typeof ThreadDetailsPrRow> & {
+}: Omit<ComponentProps<typeof ThreadDetailsPrRow>, "trailing" | "menu"> & {
   threadRef: ScopedThreadRef;
   links: ReadonlyArray<ThreadPullRequestLink>;
   currentLink: ThreadPullRequestLink | null;
-  onOpenLink: (event: ReactMouseEvent<HTMLElement>, url: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const supportsWatch =
+    useServerConfigs().get(threadRef.environmentId)?.environment.capabilities
+      .threadPullRequestWatch === true;
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  // Only watched links get the eye; the row hides it once the server records the stop.
-  const stopWatching = (link: ThreadPullRequestLink | null) =>
-    link?.watch === undefined
-      ? undefined
-      : () =>
-          void watch({
-            environmentId: threadRef.environmentId,
-            input: {
-              threadId: threadRef.threadId,
-              host: link.host,
-              repository: link.repository,
-              number: link.number,
-              watching: false,
-            },
-          });
-  const currentRow = <ThreadDetailsPrRow {...row} onStopWatching={stopWatching(currentLink)} />;
-  const rest =
-    currentLink === null
-      ? []
-      : pullRequestListLines(resolveThreadPullRequestChains(visibleThreadPullRequests(links)))
-          .map((line) => line.link)
-          .filter((link) => threadPullRequestKeyOf(link) !== threadPullRequestKeyOf(currentLink));
-  if (rest.length === 0) return currentRow;
+
+  const visible = visibleThreadPullRequests(links);
+  const currentKey = currentLink === null ? null : threadPullRequestKeyOf(currentLink);
+  const isCurrent = (link: ThreadPullRequestLink) => threadPullRequestKeyOf(link) === currentKey;
+  const monitorable = supportsWatch
+    ? [
+        ...(currentLink !== null && isOpen(currentLink) ? [currentLink] : []),
+        ...visible.filter((link) => link.watch !== undefined && !isCurrent(link)),
+      ]
+    : [];
+  const monitoring = monitorable.some((link) => link.watch !== undefined);
+
+  const setWatching = (link: ThreadPullRequestLink, watching: boolean) =>
+    void watch({
+      environmentId: threadRef.environmentId,
+      input: {
+        threadId: threadRef.threadId,
+        host: link.host,
+        repository: link.repository,
+        number: link.number,
+        watching,
+      },
+    });
+
+  const hasOtherLinks = visible.some((link) => !isCurrent(link));
+  const menu =
+    monitorable.length === 0 && !hasOtherLinks ? undefined : (
+      <>
+        {monitorable.map((link) => (
+          <MenuCheckboxItem
+            key={threadPullRequestKeyOf(link)}
+            variant="switch"
+            checked={link.watch !== undefined}
+            onCheckedChange={(checked) => setWatching(link, checked)}
+          >
+            {monitorable.length === 1 ? "Monitor" : `Monitor #${link.number}`}
+          </MenuCheckboxItem>
+        ))}
+        {hasOtherLinks ? (
+          <MenuItem onClick={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}>
+            <MenuItemLabel>All linked PRs</MenuItemLabel>
+          </MenuItem>
+        ) : null}
+      </>
+    );
 
   return (
-    <>
-      {currentRow}
-      {expanded
-        ? rest.map((link) => (
-            <ThreadDetailsPrLinkRow
-              key={threadPullRequestKeyOf(link)}
-              environmentId={row.environmentId}
-              link={link}
-              onOpen={(event) => onOpenLink(event, link.url)}
-              onActed={row.onActed}
-              onStopWatching={stopWatching(link)}
-            />
-          ))
-        : null}
-      <ThreadDetailsControl
-        variant="ghost"
-        size="sm"
-        onClick={() => setExpanded(!expanded)}
-        part="row"
-        tone="muted"
-        className="w-full active:scale-100"
-      >
-        <MorphIcon aria-hidden className="size-4 shrink-0" icon={expanded ? Minus : Plus} />
-        {expanded ? "Show less" : `Show ${rest.length} more`}
-      </ThreadDetailsControl>
-    </>
+    <ThreadDetailsPrRow {...row} trailing={monitoring ? "Monitoring" : undefined} menu={menu} />
   );
 }

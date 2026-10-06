@@ -4,13 +4,11 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
  * The thread details panel's pull request row: what the thread's pull request is, and the one
  * thing worth doing to it right now.
  *
- * The row itself opens the pull request in the right panel, exactly as it always has. Around
- * that, the host's richer answer collapses into a single trailing slot, ranked by what unblocks
- * the merge next: "Resolve" on conflicts, "Ready" on a draft, "Fix" under failing checks, and
- * "Merge" only once the branch is clean and its checks pass. While checks run the slot reports
- * that instead — a merge offered mid-run would race the very runs that gate it. Everything else
- * the host knows (title, state, checks tally, diff size) lives in the row's tooltip, so a hover
- * answers what previously took opening the panel.
+ * The row stays one line, like every other row in the card. Clicking it opens the pull request
+ * in the right panel. Its chevron opens a menu led by the next action, ranked by what unblocks the
+ * merge: "Resolve", "Ready", "Fix", or "Merge" once the branch is clean and its checks pass. No
+ * merge is offered while checks run, since it would race the runs that gate it. The caller adds
+ * its own menu items (`menu`) and a quiet trailing label (`trailing`).
  *
  * Until the detail arrives — or where pull requests are not supported at all — the row renders
  * from the linked snapshot or branch summary, or just the link when status is unavailable.
@@ -18,15 +16,10 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ProjectId, PullRequestRef } from "@t3tools/contracts";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
-import {
-  ArrowUpRightIcon,
-  EyeIcon,
-  EyeOffIcon,
-  FileDiffIcon,
-  GitBranchIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { ArrowUpRightIcon, ChevronDownIcon } from "lucide-react";
+import { useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { usePullRequestChecksRefresh } from "~/hooks/usePullRequestChecksRefresh";
@@ -38,20 +31,11 @@ import { useEnvironmentQuery } from "~/state/query";
 import {
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
-  classifyPullRequestChecks,
-  describePullRequestChecks,
-  isPullRequestConflicting,
   resolveSelectedMergeMethod,
   allowedPullRequestMergeMethods,
   resolveThreadPanelPullRequestAction,
 } from "../pullRequest/pullRequestDetail.logic";
-import { PullRequestChecksPopover } from "../pullRequest/PullRequestChecksPopover";
-import {
-  pullRequestChecksState,
-  PullRequestCheckStatusIcon,
-  PullRequestDiffStat,
-  resolvePullRequestState,
-} from "../pullRequest/pullRequestPresentation";
+import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 import {
   usePullRequestActionRunner,
   usePullRequestHandoffs,
@@ -71,8 +55,9 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import {
+  THREAD_DETAILS_PANEL_CHEVRON_CLASS,
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS,
   THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS,
@@ -89,7 +74,9 @@ export function ThreadDetailsPrRow({
   openAriaLabel,
   onOpen,
   onActed,
-  onStopWatching,
+  url,
+  trailing,
+  menu,
 }: {
   environmentId: EnvironmentId;
   pr: ThreadPr;
@@ -103,9 +90,13 @@ export function ThreadDetailsPrRow({
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
   /** An action changed the pull request on the host, so the vcs status behind the row is stale. */
   onActed?: () => void;
-  /** Set while the server watches this pull request for the thread; stops the watch. */
-  onStopWatching?: (() => void) | undefined;
+  url: string;
+  /** Quiet text at the row's end, such as "Monitoring". */
+  trailing?: ReactNode;
+  /** Extra items for the row's menu, placed after the next action. */
+  menu?: ReactNode;
 }) {
+  const anchorRef = useRef<HTMLDivElement | null>(null);
   const serverConfigs = useServerConfigs();
   const supportsPullRequests =
     serverConfigs.get(environmentId)?.environment.capabilities.pullRequests === true;
@@ -169,9 +160,6 @@ export function ThreadDetailsPrRow({
   if (confirmingMerge && rowAction !== "merge") {
     setConfirmingMerge(false);
   }
-  const conflicting = isPullRequestConflicting(detail);
-  const checksState = detail === null ? "none" : classifyPullRequestChecks(detail.checks);
-  const checksRollup = detail === null ? null : pullRequestChecksState(detail.checks);
   const selectedMergeMethod = resolveSelectedMergeMethod(
     allowedPullRequestMergeMethods(detail),
     "merge",
@@ -231,85 +219,15 @@ export function ThreadDetailsPrRow({
     <PullRequestGlyph.pullRequest className={THREAD_DETAILS_PANEL_ICON_CLASS} />
   );
 
-  // Everything the host reported, at a glance. The row stays one line; the tooltip is where the
-  // rest of the answer lives — styled like the sidebar's thread tooltip, title above icon-led
-  // detail rows, so the two read as one family.
-  const rowTooltip =
-    detail === null || statePresentation === null ? (
-      <TooltipPopup side="top">{status?.tooltip ?? `Pull request #${number}`}</TooltipPopup>
-    ) : (
-      <TooltipPopup
-        side="top"
-        align="start"
-        sideOffset={4}
-        variant="glass"
-        className="max-w-80 text-left whitespace-normal"
-      >
-        <div className="flex min-w-0 max-w-80 flex-col gap-2 px-1 py-2">
-          <div className="flex min-w-0 items-baseline gap-1.5 text-xs leading-none">
-            <span className="min-w-0 truncate font-medium text-foreground">{detail.title}</span>
-            <span className="shrink-0 text-muted-foreground">#{detail.number}</span>
-          </div>
-          <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">
-            <div className="flex min-w-0 items-center gap-2">
-              <statePresentation.Icon
-                aria-hidden
-                className={cn("size-3 shrink-0", statePresentation.toneClassName)}
-              />
-              <div className="min-w-0 truncate text-foreground/75">{statePresentation.label}</div>
-            </div>
-            <div className="flex min-w-0 items-center gap-2">
-              <GitBranchIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <div className="min-w-0 truncate text-foreground/75">
-                {detail.baseBranch} ← {detail.headBranch}
-              </div>
-            </div>
-            {detail.state === "open" && checksState !== "none" ? (
-              <div className="flex min-w-0 items-center gap-2">
-                <PullRequestCheckStatusIcon
-                  status={
-                    checksState === "failing"
-                      ? "failure"
-                      : checksState === "pending"
-                        ? "pending"
-                        : "success"
-                  }
-                />
-                <div className="min-w-0 truncate text-foreground/75">
-                  {describePullRequestChecks(detail.checks)}
-                </div>
-              </div>
-            ) : null}
-            {detail.isDraft && conflicting ? (
-              <div className="flex min-w-0 items-start gap-2 text-destructive">
-                <TriangleAlertIcon aria-hidden className="mt-0.5 size-3 shrink-0 stroke-current" />
-                <div className="min-w-0 flex-1 wrap-break-word leading-5">
-                  Merge conflicts with {detail.baseBranch}
-                </div>
-              </div>
-            ) : null}
-            <div className="flex min-w-0 items-center gap-2">
-              <FileDiffIcon className="size-3 shrink-0 stroke-muted-foreground" />
-              <div className="min-w-0 flex items-baseline gap-1 truncate text-foreground/75">
-                {detail.changedFiles.toLocaleString()}{" "}
-                {detail.changedFiles === 1 ? "file" : "files"}
-                <PullRequestDiffStat additions={detail.additions} deletions={detail.deletions} />
-              </div>
-            </div>
-          </div>
-        </div>
-      </TooltipPopup>
-    );
-
-  const trailingAction =
+  // The one thing worth doing next, ranked by what unblocks the merge. It leads the row's menu.
+  const nextAction =
     rowAction === "resolve"
       ? {
           label: "Resolve",
           pendingLabel: "Preparing...",
           pending: handoff === "conflicts",
           destructive: true,
-          suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
-          tooltip: "Check the branch out and resolve the conflicts in a new thread",
+          handoff: true,
           onClick: startResolveConflicts,
         }
       : rowAction === "ready"
@@ -318,8 +236,7 @@ export function ThreadDetailsPrRow({
             pendingLabel: "Marking...",
             pending: actionPending,
             destructive: false,
-            suffix: null,
-            tooltip: "Mark this pull request as ready for review",
+            handoff: false,
             onClick: () => void perform("ready"),
           }
         : rowAction === "fix"
@@ -328,8 +245,7 @@ export function ThreadDetailsPrRow({
               pendingLabel: "Preparing...",
               pending: handoff === "findings",
               destructive: true,
-              suffix: <ArrowUpRightIcon aria-hidden className="size-3 shrink-0" />,
-              tooltip: "Fix the failing checks in a new thread",
+              handoff: true,
               onClick: startFixChecks,
             }
           : rowAction === "merge"
@@ -338,151 +254,69 @@ export function ThreadDetailsPrRow({
                 pendingLabel: "Merging...",
                 pending: actionPending,
                 destructive: false,
-                suffix: null,
-                tooltip: `Merge this pull request (${selectedMergeMethod})`,
+                handoff: false,
                 onClick: () => setConfirmingMerge(true),
               }
             : null;
 
-  const rowContent = (
-    <>
-      {icon}
-      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-    </>
-  );
-
-  // The server ends a watch when the pull request closes, so only an open one shows the eye.
-  // It takes the row's rounded end when nothing follows it.
-  const watchIsLast =
-    detail === null ||
-    ((checksRollup === null || conflicting || detail.isDraft) && trailingAction === null);
-  const watchSegment =
-    onStopWatching && (detail?.state ?? pr?.state ?? "open") === "open" ? (
-      <>
-        <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <ThreadDetailsControl
-                type="button"
-                variant="ghost"
-                size="sm"
-                part={watchIsLast ? "secondary" : "checks"}
-                className="group/watch"
-                aria-label={`Stop watching #${number}`}
-                onClick={onStopWatching}
-              />
-            }
-          >
-            <EyeIcon aria-hidden className="size-4 group-hover/watch:hidden" />
-            <EyeOffIcon aria-hidden className="hidden size-4 group-hover/watch:block" />
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            Watching: the agent wakes when checks finish, someone comments, or the branch conflicts.
-            Click to stop.
-          </TooltipPopup>
-        </Tooltip>
-      </>
-    ) : null;
-
   return (
     <>
-      {detail ? (
-        <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ThreadDetailsControl
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  part="link-primary"
-                  aria-label={openAriaLabel}
-                  onClick={onOpen}
-                />
-              }
-            >
-              {rowContent}
-            </TooltipTrigger>
-            {rowTooltip}
-          </Tooltip>
-          {watchSegment}
-          {checksRollup !== null && !conflicting && !detail.isDraft ? (
-            <>
-              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-              <PullRequestChecksPopover
-                checksState={checksRollup}
-                checks={detail.checks}
-                variant="count"
-                render={<ThreadDetailsControl part="checks" />}
-              />
-            </>
+      <div ref={anchorRef} className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+        <ThreadDetailsControl
+          type="button"
+          variant="ghost"
+          size="sm"
+          part="link-primary"
+          aria-label={openAriaLabel}
+          onClick={onOpen}
+        >
+          {icon}
+          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+          {trailing ? (
+            <span className="shrink-0 text-3xs font-normal text-muted-foreground/70">
+              {trailing}
+            </span>
           ) : null}
-          {trailingAction ? (
-            <>
-              <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <ThreadDetailsControl
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      part="action"
-                      tone={trailingAction.destructive ? "destructive" : "default"}
-                      disabled={actionPending || handoff !== null}
-                      onClick={trailingAction.onClick}
-                    />
-                  }
-                >
-                  {trailingAction.pending ? trailingAction.pendingLabel : trailingAction.label}
-                  {trailingAction.suffix}
-                </TooltipTrigger>
-                <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
-              </Tooltip>
-            </>
-          ) : null}
-        </div>
-      ) : watchSegment ? (
-        <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ThreadDetailsControl
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  part="link-primary"
-                  aria-label={openAriaLabel}
-                  onClick={onOpen}
-                />
-              }
-            >
-              {rowContent}
-            </TooltipTrigger>
-            {rowTooltip}
-          </Tooltip>
-          {watchSegment}
-        </div>
-      ) : (
-        <Tooltip>
-          <TooltipTrigger
+        </ThreadDetailsControl>
+        <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+        <Menu>
+          <MenuTrigger
             render={
               <ThreadDetailsControl
                 type="button"
                 variant="ghost"
                 size="sm"
-                part="row"
-                aria-label={openAriaLabel}
-                onClick={onOpen}
+                part="secondary"
+                aria-label={`Options for #${number}`}
               />
             }
           >
-            {rowContent}
-          </TooltipTrigger>
-          {rowTooltip}
-        </Tooltip>
-      )}
+            <ChevronDownIcon aria-hidden className={THREAD_DETAILS_PANEL_CHEVRON_CLASS} />
+          </MenuTrigger>
+          <MenuPopup align="end" anchor={anchorRef} className="w-(--anchor-width)">
+            {nextAction ? (
+              <MenuItem
+                variant={nextAction.destructive ? "destructive" : "default"}
+                disabled={actionPending || handoff !== null}
+                onClick={nextAction.onClick}
+              >
+                <MenuItemLabel>
+                  {nextAction.pending ? nextAction.pendingLabel : nextAction.label}
+                </MenuItemLabel>
+                {nextAction.handoff ? (
+                  <ArrowUpRightIcon aria-hidden className="ms-auto size-3.5" />
+                ) : null}
+              </MenuItem>
+            ) : null}
+            {nextAction && menu ? <MenuSeparator /> : null}
+            {menu}
+            {nextAction || menu ? <MenuSeparator /> : null}
+            <MenuItem onClick={() => void writeTextToClipboard(url, "link")}>
+              <MenuItemLabel>Copy link</MenuItemLabel>
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </div>
       {rowAction === "merge" ? (
         <AlertDialog open={confirmingMerge} onOpenChange={(open) => setConfirmingMerge(open)}>
           <AlertDialogPopup>

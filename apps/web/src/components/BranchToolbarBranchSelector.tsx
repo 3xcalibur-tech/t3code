@@ -752,7 +752,7 @@ export function BranchToolbarBranchSelector({
             threadRef={threadRef}
             links={serverThread?.pullRequests ?? []}
             currentLink={currentLinkedPr}
-            onOpenLink={openPrLink}
+            url={prUrl}
             environmentId={environmentId}
             pr={displayedPr}
             number={prNumber}
