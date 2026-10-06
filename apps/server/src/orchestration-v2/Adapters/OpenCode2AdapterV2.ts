@@ -3404,6 +3404,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             (held) => held.messageId === turnInput.message.messageId,
           );
           if (index < 0) return yield* finishTurn(state, { status: "completed" });
+          // Trade-off: a continuation the user reordered ahead of an earlier one
+          // drops that one's reply too, so cancelled ones never pin the session.
           for (const skipped of state.wakes.splice(0, index)) skipped.dropped = true;
           const wake = state.wakes.shift()!;
           const turn = state.active;
