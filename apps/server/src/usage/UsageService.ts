@@ -62,7 +62,6 @@ import { readAntigravityUsage } from "./antigravityUsageReader.ts";
 import {
   CURSOR_ACCOUNT_CACHE_FILE_NAME,
   CURSOR_ACCOUNT_TTL_MS,
-  CursorAccountReader,
   cursorFetchRange,
   decodeCursorAccountCaches,
   encodeCursorAccountCaches,
@@ -71,6 +70,7 @@ import {
   type CursorAccountCache,
   type CursorCredentialSource,
 } from "./cursorAccountCache.ts";
+import * as CursorUsageReader from "./cursorUsageReader.ts";
 import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -106,8 +106,11 @@ const RATES_REFRESH_FLOOR_MS = 60 * 1000;
 const MTIME_SLACK_MS = 36 * 60 * 60 * 1000;
 const MAX_HOURLY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** Longest window the UI offers, plus slack. Older entries are pruned. */
-const CACHE_RETENTION_DAYS = 90;
+/**
+ * The longest window the UI offers, 90 days, plus its `MTIME_SLACK_MS`, rounded
+ * up. Older entries are pruned.
+ */
+const CACHE_RETENTION_DAYS = 92;
 
 const CURSOR_ACCOUNT_READ_ERROR = "Cursor account usage could not be read.";
 
@@ -212,7 +215,7 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcessEnvironment;
   const platform = yield* HostProcessPlatform;
-  const readCursorAccount = yield* CursorAccountReader;
+  const cursorAccountReader = yield* CursorUsageReader.CursorAccountReader;
 
   const fileCache: ScanCache = new Map();
   const sourceCache = new Map<string, typeof CachedSource.Type>();
@@ -662,9 +665,9 @@ export const make = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
     const fetchMissing = (cache: CursorAccountCache | undefined) => {
       const range = cursorFetchRange(cache, retentionStartMs, nowMs);
-      return readCursorAccount(credential, range.sinceMs, range.untilMs).pipe(
-        Effect.map((result) => ({ range, result })),
-      );
+      return cursorAccountReader
+        .read(credential, range.sinceMs, range.untilMs)
+        .pipe(Effect.map((result) => ({ range, result })));
     };
     let base = cursorCaches.get(credentialKey);
     let fetched = yield* fetchMissing(base);
@@ -981,13 +984,12 @@ export const make = Effect.gen(function* () {
       return source === null ? [] : [source];
     });
 
-    // Independent sources scan together. The result keeps this order, since
-    // aggregation keeps the first copy of a duplicate.
+    // Independent sources scan together. Transcript directories go one at a
+    // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
+    // keeps this order, since aggregation keeps the first copy of a duplicate.
     const [transcripts, openCodeDirs, antigravityDirs, cursorDirs] = yield* Effect.all(
       [
-        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs), {
-          concurrency: "unbounded",
-        }),
+        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs)),
         openCode,
         antigravity,
         cursor,

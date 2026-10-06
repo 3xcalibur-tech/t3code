@@ -225,15 +225,14 @@ export function UsagePage() {
       ),
     [loading.providers, providersWithData],
   );
-  // Lines with nothing to draw yet stay flat until their usage lands.
   const chartLoadingProviders = useMemo(
     () =>
       new Set(
         activeProviders.filter(
-          (provider) => loading.providers.has(provider) && !providersWithData.includes(provider),
+          (provider) => loading.everyProvider || loading.providers.has(provider),
         ),
       ),
-    [activeProviders, loading.providers, providersWithData],
+    [activeProviders, loading.everyProvider, loading.providers],
   );
   const selectedModel =
     selectedModelKey === null

@@ -32,7 +32,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { CursorAccountReader } from "./cursorAccountCache.ts";
+import * as CursorUsageReader from "./cursorUsageReader.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 import * as UsageService from "./UsageService.ts";
 
@@ -93,6 +93,7 @@ const layerService = (input: {
 }) =>
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(CursorUsageReader.layer),
     Layer.provideMerge(Layer.succeed(HostProcessPlatform, input.platform ?? "linux")),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
     Layer.provideMerge(
@@ -164,7 +165,7 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
 /** The service's cache retention, which the Cursor account cache always covers. */
-const CURSOR_RETENTION_MS = 90 * 24 * HOUR_MS;
+const CURSOR_RETENTION_MS = 92 * 24 * HOUR_MS;
 
 /**
  * Stands in for Cursor's dashboard API. Each read returns the account's events
@@ -370,7 +371,7 @@ describe("UsageService", () => {
       cursor.state.gate = gate;
       yield* Effect.gen(function* () {
         const service = yield* UsageService.make.pipe(
-          Effect.provideService(CursorAccountReader, cursor.read),
+          Effect.provideService(CursorUsageReader.CursorAccountReader, { read: cursor.read }),
         );
         // Cold: nothing cached yet, so Cursor answers empty while it refreshes.
         const cold = yield* service.readSummary(WINDOW);
@@ -427,7 +428,7 @@ describe("UsageService", () => {
       ];
       yield* Effect.gen(function* () {
         const service = yield* UsageService.make.pipe(
-          Effect.provideService(CursorAccountReader, cursor.read),
+          Effect.provideService(CursorUsageReader.CursorAccountReader, { read: cursor.read }),
         );
         const read = (input: UsageSummaryInput) =>
           service.readSummary({ ...input, awaitRefresh: true });
@@ -476,7 +477,7 @@ describe("UsageService", () => {
       cursor.state.events = [{ timestampMs: CURSOR_NOW - HOUR_MS * 3, outputTokens: 5 }];
       yield* Effect.gen(function* () {
         const service = yield* UsageService.make.pipe(
-          Effect.provideService(CursorAccountReader, cursor.read),
+          Effect.provideService(CursorUsageReader.CursorAccountReader, { read: cursor.read }),
         );
         yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
 
@@ -519,7 +520,7 @@ describe("UsageService", () => {
       ];
       yield* Effect.gen(function* () {
         const first = yield* UsageService.make.pipe(
-          Effect.provideService(CursorAccountReader, before.read),
+          Effect.provideService(CursorUsageReader.CursorAccountReader, { read: before.read }),
         );
         const original = yield* first.readSummary({ ...WINDOW, awaitRefresh: true });
         yield* first.awaitPersisted;
@@ -527,7 +528,7 @@ describe("UsageService", () => {
         const after = makeFakeCursor();
         after.state.events = before.state.events;
         const restarted = yield* UsageService.make.pipe(
-          Effect.provideService(CursorAccountReader, after.read),
+          Effect.provideService(CursorUsageReader.CursorAccountReader, { read: after.read }),
         );
         const restored = yield* restarted.readSummary(WINDOW);
         assert.isUndefined(cursorSource(restored)?.refreshing);

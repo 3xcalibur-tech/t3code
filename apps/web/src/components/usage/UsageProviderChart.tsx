@@ -23,7 +23,7 @@ export type UsageChartMetric = "tokens" | "cost";
 
 interface UsageProviderChartProps {
   readonly providers: readonly UsageProviderKind[];
-  /** Providers without data yet: flat and faded along the bottom, left out of the scale. */
+  /** Providers whose figures are still coming in: their lines are muted. */
   readonly loadingProviders?: ReadonlySet<UsageProviderKind>;
   readonly days: readonly string[];
   readonly daily: readonly DailyTotals[];
@@ -156,9 +156,6 @@ function areaPath(line: string) {
   return line === "" ? "" : `${line} L${VIEW_WIDTH},${VIEW_HEIGHT} L0,${VIEW_HEIGHT} Z`;
 }
 
-/** A loading line: flat along the zero line until its usage lands. */
-const FLAT_LINE = `M0,${VIEW_HEIGHT} L${VIEW_WIDTH},${VIEW_HEIGHT}`;
-
 /**
  * Builds a scale whose maximum is a readable 1/2/5 x 10^n step at or above the
  * peak.
@@ -184,30 +181,23 @@ export function niceScale(peak: number, count: number): { max: number; ticks: re
 const PLACEHOLDER_TICKS = Array.from({ length: TICK_COUNT + 1 }, (_, index) => index);
 
 /**
- * Scales to the providers that have answered. Until any has, unlabeled
- * placeholder gridlines hold their usual spacing so nothing shifts on arrival.
+ * Scales to the largest single provider-period. With nothing to show yet while
+ * providers load, unlabeled placeholder gridlines hold their usual spacing so
+ * nothing shifts on arrival.
  */
 export function chartScale(
   columns: readonly DayColumn[],
-  providers: readonly UsageProviderKind[],
   loadingProviders: ReadonlySet<UsageProviderKind>,
 ) {
-  if (loadingProviders.size > 0 && providers.every((provider) => loadingProviders.has(provider))) {
-    return { max: TICK_COUNT, ticks: PLACEHOLDER_TICKS, labeled: false };
-  }
-  // The scale tops out at the largest single provider-period, not the sum:
-  // layered series each measure from zero, so a combined peak would leave
-  // the plot permanently half empty.
+  // Not the sum: layered series each measure from zero, so a combined peak
+  // would leave the plot permanently half empty.
   const peak = columns.reduce(
-    (max, column) =>
-      column.bands.reduce(
-        (inner, band) =>
-          loadingProviders.has(band.provider) ? inner : Math.max(inner, band.value),
-        max,
-      ),
+    (max, column) => column.bands.reduce((inner, band) => Math.max(inner, band.value), max),
     0,
   );
-  return { ...niceScale(peak, TICK_COUNT), labeled: true };
+  return peak === 0 && loadingProviders.size > 0
+    ? { max: TICK_COUNT, ticks: PLACEHOLDER_TICKS, labeled: false }
+    : { ...niceScale(peak, TICK_COUNT), labeled: true };
 }
 
 // Leave room above the top gridline so the constant-width stroke is not
@@ -216,7 +206,7 @@ function valueToY(value: number, max: number) {
   return max === 0 ? VIEW_HEIGHT : VIEW_HEIGHT - (value / max) * (VIEW_HEIGHT - PLOT_TOP);
 }
 
-/** Per-provider paths in paint order: answered curves heaviest first, loading providers flat. */
+/** Per-provider paths in paint order, heaviest first. */
 function buildChart(
   periods: readonly string[],
   byPeriod: ReadonlyMap<string, DailyTotals | HourlyTotals>,
@@ -225,12 +215,9 @@ function buildChart(
   loadingProviders: ReadonlySet<UsageProviderKind>,
 ) {
   const columns = buildPeriodColumns(periods, byPeriod, metric);
-  const scale = chartScale(columns, providers, loadingProviders);
+  const scale = chartScale(columns, loadingProviders);
   const stepX = periods.length < 2 ? 0 : VIEW_WIDTH / (periods.length - 1);
   const paths = providers.map((provider) => {
-    if (loadingProviders.has(provider)) {
-      return { provider, loading: true, total: 0, line: FLAT_LINE, area: "" };
-    }
     const slot = PROVIDER_ORDER.indexOf(provider);
     const line = curvePath(
       smoothCurve(
@@ -242,7 +229,7 @@ function buildChart(
     );
     return {
       provider,
-      loading: false,
+      loading: loadingProviders.has(provider),
       total: columns.reduce((sum, column) => sum + (column.bands[slot]?.value ?? 0), 0),
       line,
       area: areaPath(line),
@@ -283,10 +270,9 @@ export function UsageProviderChart({
     [byPeriod, loadingProviders, metric, periods, providers],
   );
   const toY = (value: number) => valueToY(value, scale.max);
-  // Once anything has answered, lines still loading fade back behind it.
-  const fadeLoading = providers.some((provider) => !loadingProviders.has(provider));
+  // The delay keeps a quick answer from flashing, as with the page's figures.
   const seriesClassName = (loading: boolean) =>
-    cn("transition-opacity duration-300", fadeLoading && loading && "opacity-30");
+    cn("transition-opacity", loading && "opacity-40 delay-150");
 
   const format = metric === "tokens" ? formatTokens : formatUsd;
 
@@ -348,11 +334,6 @@ export function UsageProviderChart({
 
   const hoveredPeriod = hoverIndex === null ? undefined : periods[hoverIndex];
   const hoveredColumn = hoverIndex === null ? undefined : columns[hoverIndex];
-  const hoveredTotal =
-    hoveredColumn?.bands.reduce(
-      (sum, band) => (loadingProviders.has(band.provider) ? sum : sum + band.value),
-      0,
-    ) ?? 0;
   const partial = providers.some((provider) => loadingProviders.has(provider));
   const formatPeriod = (period: string) =>
     resolution === "hour" ? formatHourShort(period, timeZone) : formatDayShort(period);
@@ -470,29 +451,31 @@ export function UsageProviderChart({
                       />
                       {label}
                     </span>
-                    {loadingProviders.has(provider) ? (
-                      <span className="text-muted-foreground">…</span>
-                    ) : (
-                      <span className="text-foreground tabular-nums">
-                        {format(
-                          hoveredColumn?.bands.find((band) => band.provider === provider)?.value ??
-                            0,
-                        )}
-                      </span>
-                    )}
+                    <span
+                      className={cn(
+                        "tabular-nums",
+                        loadingProviders.has(provider)
+                          ? "text-muted-foreground"
+                          : "text-foreground",
+                      )}
+                    >
+                      {format(
+                        hoveredColumn?.bands.find((band) => band.provider === provider)?.value ?? 0,
+                      )}
+                    </span>
                   </div>
                 );
               })}
               <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1">
                 <span className="text-muted-foreground">Total</span>
-                {scale.labeled ? (
-                  <span className="text-foreground tabular-nums">
-                    {format(hoveredTotal)}
-                    {partial ? <span className="text-muted-foreground">+</span> : null}
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">…</span>
-                )}
+                <span
+                  className={cn(
+                    "tabular-nums",
+                    partial ? "text-muted-foreground" : "text-foreground",
+                  )}
+                >
+                  {format(hoveredColumn?.total ?? 0)}
+                </span>
               </div>
             </div>
           )}

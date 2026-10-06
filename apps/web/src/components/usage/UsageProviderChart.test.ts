@@ -4,28 +4,23 @@ import { buildPeriodColumns, chartScale, niceScale } from "./UsageProviderChart"
 import { providersWithUsage } from "./usageProviders";
 
 describe("chartScale", () => {
-  const columns = [
-    {
-      total: 0,
-      bands: [
-        { provider: "codex" as const, value: 40 },
-        { provider: "cursor" as const, value: 900 },
-      ],
-    },
-  ];
-
-  it("scales to providers that have answered", () => {
-    const scale = chartScale(columns, ["codex", "cursor"], new Set(["cursor" as const]));
-
-    expect(scale.max).toBe(40);
-    expect(scale.labeled).toBe(true);
+  const column = (codex: number) => ({
+    total: codex,
+    bands: [{ provider: "codex" as const, value: codex }],
   });
 
-  it("holds unlabeled placeholder gridlines until something answers", () => {
-    const scale = chartScale(columns, ["codex", "cursor"], new Set(["codex", "cursor"] as const));
+  it("holds unlabeled placeholder gridlines while loading providers have nothing to show", () => {
+    const scale = chartScale([column(0)], new Set(["codex" as const]));
 
     expect(scale.labeled).toBe(false);
     expect(scale.ticks.length).toBeGreaterThan(1);
+  });
+
+  it("scales to what is on screen, loading or not", () => {
+    expect(chartScale([column(40)], new Set(["codex" as const]))).toMatchObject({
+      max: 40,
+      labeled: true,
+    });
   });
 });
 

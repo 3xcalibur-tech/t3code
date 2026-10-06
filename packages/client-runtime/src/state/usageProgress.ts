@@ -95,7 +95,8 @@ export function usageProgress(
  *
  * - `partial`: totals will change because some environment is still answering.
  * - `providers`: providers whose own figures will change. An environment that
- *   has not answered yet could add to any provider, so it sets `everyProvider`.
+ *   has not answered yet, or whose whole summary is stale, could change any
+ *   provider, so it sets `everyProvider`.
  */
 export function usageLoadingState(
   environments: readonly UsageProgressEnvironment[],
@@ -105,11 +106,9 @@ export function usageLoadingState(
   let everyProvider = false;
   for (const environment of environments) {
     const progress = usageEnvironmentProgress(environment, refreshing);
-    if (progress.phase === "loading") everyProvider = true;
+    if (progress.phase === "loading" || progress.phase === "stale") everyProvider = true;
     if (progress.phase === "partway")
       for (const provider of progress.providers) providers.add(provider);
-    if (progress.phase === "stale")
-      for (const bucket of environment.summary?.buckets ?? []) providers.add(bucket.provider);
   }
   return { partial: everyProvider || providers.size > 0, everyProvider, providers };
 }

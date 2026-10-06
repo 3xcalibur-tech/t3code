@@ -12,23 +12,10 @@
  *
  * @module cursorAccountCache
  */
-import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
-
-import { cursorRateModel, readCursorAccountUsage } from "./cursorUsageReader.ts";
+import { cursorRateModel } from "./cursorUsageReader.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 
 export type CursorCredentialSource = string | { readonly kind: "keychain" };
-
-/** Reads one range of account usage. A reference so tests can stand in for Cursor's API. */
-export const CursorAccountReader = Context.Reference(
-  "t3/usage/cursorAccountCache/CursorAccountReader",
-  {
-    defaultValue:
-      () => (credentialSource: CursorCredentialSource, sinceMs: number, untilMs: number) =>
-        Effect.promise(() => readCursorAccountUsage(credentialSource, sinceMs, untilMs)),
-  },
-);
 
 /** Matches the clients' stale time, so a page refetching on focus reuses one fetch. */
 export const CURSOR_ACCOUNT_TTL_MS = 60 * 1000;
