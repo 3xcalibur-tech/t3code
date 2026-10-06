@@ -1235,6 +1235,11 @@ interface CodexSubagentThreadContext {
   startedAt: DateTime.Utc;
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
+  /**
+   * The visible model of whatever spawned this subagent, fixed at registration.
+   * `parentContext` moves to the root's latest turn, whose selection can change.
+   */
+  readonly spawnerModel: string;
   task: OrchestrationV2Subagent;
 }
 
@@ -2676,17 +2681,24 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         /**
          * A subagent a Reserve turn spawns without its own model inherits the
          * hidden wire model (codex-rs/core/src/agent/child_config.rs:109-117),
-         * so Codex reports `gpt-reserve` for it. Every reported subagent model
-         * passes through here so the subagent and its child thread keep the
-         * model Reserve stands in for, or the parent's selection once Reserve
-         * has ended (Reserve only ever replaces that selection).
+         * and a child Codex continues keeps it, so Codex can report
+         * `gpt-reserve` for a subagent long after Reserve ends. Every reported
+         * subagent model passes through here so the subagent and its child
+         * thread show the model Reserve stood in for: the immediate spawner's
+         * visible model, then the Reserve read's normal model.
          */
         const visibleSubagentModel = (model: string, parentModel: string | undefined) =>
           model !== CODEX_LUNA_RESERVE_MODEL
             ? Effect.succeed(model)
             : Ref.get(lunaReserve).pipe(
-                Effect.map((reserve) => reserve?.normalModel ?? parentModel ?? CODEX_LUNA_MODEL),
+                Effect.map((reserve) => parentModel ?? reserve?.normalModel ?? CODEX_LUNA_MODEL),
               );
+
+        /** The visible model of whatever spawns a subagent on this turn. */
+        const spawnerVisibleModel = (context: ActiveCodexTurnContext) =>
+          context.subagent === null
+            ? context.input.modelSelection.model
+            : (context.subagent.task.model ?? context.subagent.spawnerModel);
 
         const updateSubagentModel = Effect.fnUntraced(function* (
           nativeThreadId: string,
@@ -2695,12 +2707,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           const reported = value?.trim();
           if (!reported) return;
           const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
-          const model = yield* visibleSubagentModel(
-            reported,
-            subagent?.parentContext.input.modelSelection.model,
-          );
-          subagentModels.set(nativeThreadId, model);
-          if (subagent === undefined || subagent.task.model === model) return;
+          // Registration resolves an early report against the spawner it learns then.
+          subagentModels.set(nativeThreadId, reported);
+          if (subagent === undefined) return;
+          const model = yield* visibleSubagentModel(reported, subagent.spawnerModel);
+          if (subagent.task.model === model) return;
           subagent.task = { ...subagent.task, model, updatedAt: yield* DateTime.now };
           yield* emitProviderEvent({
             type: "subagent.updated",
@@ -2741,13 +2752,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             });
             const turnItemOrdinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
             const reportedModel = subagentModels.get(input.nativeThreadId) ?? input.model;
+            const spawnerModel = spawnerVisibleModel(input.context);
             const model =
               reportedModel === null
                 ? null
-                : yield* visibleSubagentModel(
-                    reportedModel,
-                    input.context.input.modelSelection.model,
-                  );
+                : yield* visibleSubagentModel(reportedModel, spawnerModel);
             const providerThread = {
               id: idAllocator.derive.providerThread({
                 driver: CODEX_PROVIDER,
@@ -2832,6 +2841,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemId: input.nativeItemId,
               }),
               turnItemOrdinal,
+              spawnerModel,
               task,
             } satisfies CodexSubagentThreadContext;
 
