@@ -53,8 +53,7 @@ export function ThreadDetailsPrRows({
   const monitorable = supportsWatch
     ? [
         ...(currentLink !== null &&
-        isOpen(currentLink) &&
-        (canStart || currentLink.watch !== undefined)
+        (currentLink.watch !== undefined || (isOpen(currentLink) && canStart))
           ? [currentLink]
           : []),
         ...visible.filter((link) => link.watch !== undefined && !isCurrent(link)),
