@@ -1413,10 +1413,14 @@ const make = Effect.gen(function* () {
       const live =
         caller.parent === undefined ||
         Exit.isSuccess(yield* Effect.exit(assertLiveCaller(scope, caller.parent)));
-      const modes = yield* scheduledTaskRunModes(task);
+      // This runs after a save, so a failed lookup of the bound thread hides
+      // the webhook URL instead of reporting a saved task as an error.
+      const modes = yield* scheduledTaskRunModes(task).pipe(Effect.option);
       return scheduledTaskSummary(
         task,
-        live && modes.every((mode) => withinLimits(caller.limits, mode)),
+        live &&
+          Option.isSome(modes) &&
+          modes.value.every((mode) => withinLimits(caller.limits, mode)),
       );
     });
 

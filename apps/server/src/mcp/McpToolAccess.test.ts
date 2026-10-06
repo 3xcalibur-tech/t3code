@@ -193,6 +193,8 @@ const fullAccess = threadCaller(fullAccessThreadId);
 const ended = threadCaller(endedThreadId);
 const supervisedClient = clientCaller("approval-required");
 const fullAccessClient = clientCaller("full-access");
+// A live full-access thread whose credential may use its browser but not control threads.
+const previewOnly = { ...fullAccess, capabilities: new Set(["preview"] as const) };
 
 it.effect.each([
   // Reads are open to every caller, even one whose turn ended.
@@ -210,6 +212,9 @@ it.effect.each([
   ["writes", supervised, {}, "ran"],
   ["writes", ended, {}, "parent_not_active"],
   ["writes", supervisedClient, {}, "ran"],
+  // Uploads, scheduled tasks, projects and settings need a credential that controls threads.
+  ["writes", previewOnly, {}, "capability_denied"],
+  ["writes_environment", previewOnly, {}, "capability_denied"],
 
   // Changing a thread: only one that runs within the caller's modes.
   ["writes_threads", supervised, {}, "ran"],

@@ -18,6 +18,7 @@ import {
   assertTargetWithinLimits,
   type Caller,
   loadCaller,
+  readCaller,
   unavailable,
 } from "./threadAccess.ts";
 
@@ -91,8 +92,15 @@ export class Declaration<out Handler> {
   }
 }
 
-/** The caller of a tool that changes something. */
+/**
+ * The caller of a tool that changes something. Tools that act for a
+ * capability of their own (preview, device, worktree, pull requests) check it
+ * themselves.
+ */
 const writingCaller = loadCaller().pipe(Effect.tap(assertLiveCaller));
+
+/** The same, for tools whose only capability is controlling threads. */
+const orchestratingCaller = readCaller().pipe(Effect.tap(assertLiveCaller));
 
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
@@ -121,7 +129,7 @@ export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A,
 
 /** Changes something that belongs to no thread, such as a pending upload or a scheduled task. */
 export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare((params: P) => writingCaller.pipe(Effect.flatMap(() => handle(params))));
+  declare((params: P) => orchestratingCaller.pipe(Effect.flatMap(() => handle(params))));
 
 /**
  * Changes the threads `threads` names. An omitted id is the caller's own
@@ -191,14 +199,14 @@ export const writesEnvironment = <P, A, E, R>(
     check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
   ) => Effect.Effect<A, E, R>,
 ) => {
-  const check = writingCaller.pipe(
+  const check = orchestratingCaller.pipe(
     Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
   );
   return declare((params: P) => check.pipe(Effect.flatMap(() => handle(params, check))));
 };
 
 /** What a declaration's own check needs. */
-type CheckServices = Effect.Services<typeof writingCaller>;
+type CheckServices = Effect.Services<typeof orchestratingCaller>;
 
 /**
  * Each handler of `Handlers`, built by one of the declarations above. A

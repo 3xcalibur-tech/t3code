@@ -444,5 +444,13 @@ it.effect("a launch binds only an existing checkout that is one of the project's
       { type: "existing_worktree", worktreePath: worktree },
       { type: "existing_worktree", worktreePath: repo },
     ]);
+
+    // A removed worktree stays listed as prunable until `git worktree prune`;
+    // whatever directory is later made at its path is not one of the project's.
+    yield* fileSystem.remove(worktree, { recursive: true });
+    yield* fileSystem.makeDirectory(worktree);
+    expect((yield* launchInto(worktree)).at(-1)?.result).toMatchObject({
+      code: "invalid_request",
+    });
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
