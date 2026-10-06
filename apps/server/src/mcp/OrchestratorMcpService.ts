@@ -66,6 +66,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -74,6 +75,10 @@ import {
   subagentResultForRun,
   delegatedTaskProgress,
 } from "../orchestration-v2/SubagentProjection.ts";
+import {
+  DispatchModeLimit,
+  type DispatchModeRefusal,
+} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -2000,8 +2005,32 @@ const make = Effect.gen(function* () {
               ),
             );
         });
+        // Checked above; a user raising one of these threads meanwhile is
+        // caught again under that thread's lock, which leaves it running.
+        const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
+        const stopWithinLimit = stopChild.pipe(
+          Effect.provideService(DispatchModeLimit, {
+            runtimeMode: parentProjection.thread.runtimeMode,
+            interactionMode: parentProjection.thread.interactionMode,
+            refused,
+          }),
+          Effect.catch((error) =>
+            Effect.flatMap(Ref.get(refused), (refusal) =>
+              Effect.fail(
+                refusal === undefined
+                  ? error
+                  : failure(
+                      refusal.mode === "runtime"
+                        ? "runtime_mode_escalation_denied"
+                        : "interaction_mode_escalation_denied",
+                      `Thread ${refusal.threadId} now runs in ${refusal.runtimeMode}/${refusal.interactionMode} mode, above this thread's; its user changed it while the task was being cancelled.`,
+                    ),
+              ),
+            ),
+          ),
+        );
         if (isTerminalTaskStatus(current.status)) {
-          yield* stopChild;
+          yield* stopWithinLimit;
           yield* disposeCompletionDelivery;
           return {
             taskId: input.taskId,
@@ -2020,7 +2049,7 @@ const make = Effect.gen(function* () {
             `Delegated task ${input.taskId} has no interruptible child run.`,
           );
         }
-        yield* stopChild;
+        yield* stopWithinLimit;
         yield* disposeCompletionDelivery.pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("orchestrator-mcp.cancel-task.delivery-dispose-failed", {

@@ -1,15 +1,20 @@
 import {
-  type OrchestratorMcpFailure,
+  OrchestratorMcpFailure,
   type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import * as Struct from "effect/Struct";
 import type * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
 import type { Tool, Toolkit } from "effect/ai";
 
+import {
+  DispatchModeLimit,
+  type DispatchModeRefusal,
+} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./OrchestratorMcpService.ts";
 import {
@@ -133,7 +138,8 @@ export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>
 
 /**
  * Changes the threads `threads` names. An omitted id is the caller's own
- * thread; any other thread must run within the caller's modes. A thread that
+ * thread; any other thread must run within the caller's modes, checked here
+ * and again by the orchestrator when it applies each command. A thread that
  * does not exist is the handler's to report.
  */
 export const writesThreads = <P, A, E, R>(
@@ -152,9 +158,32 @@ export const writesThreads = <P, A, E, R>(
           yield* assertTargetWithinLimits(caller.limits, target);
         }
       }
-      return yield* handle(params);
+      // The target's user can raise its modes after the check above; the
+      // orchestrator checks again under the thread's lock and records its
+      // refusal here, since handlers wrap dispatch errors their own way.
+      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
+      return yield* handle(params).pipe(
+        Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
+        Effect.catch((error) =>
+          Effect.flatMap(Ref.get(refused), (refusal) =>
+            Effect.fail<E | OrchestratorMcpFailure>(
+              refusal === undefined ? error : escalationDenied(refusal),
+            ),
+          ),
+        ),
+      );
     }),
   );
+
+/** How an agent hears that a thread it targets was raised above its modes mid-call. */
+const escalationDenied = (refusal: DispatchModeRefusal) =>
+  new OrchestratorMcpFailure({
+    code:
+      refusal.mode === "runtime"
+        ? "runtime_mode_escalation_denied"
+        : "interaction_mode_escalation_denied",
+    message: `Thread ${refusal.threadId} now runs in ${refusal.runtimeMode}/${refusal.interactionMode} mode, above this caller's. Its user changed it while this call ran.`,
+  });
 
 /** The modes a started thread runs with: those requested, else the caller's own. */
 export interface StartedModes {

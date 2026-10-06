@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
+  CommandId,
   EnvironmentId,
   NodeId,
   type OrchestrationV2ThreadShell,
@@ -19,7 +20,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
-import { OrchestratorProjectionError } from "../orchestration-v2/Orchestrator.ts";
+import {
+  DispatchModeLimit,
+  type DispatchModeRefusal,
+} from "../orchestration-v2/DispatchModeLimit.ts";
+import {
+  OrchestratorProjectionError,
+  OrchestratorThreadAboveModeLimitError,
+} from "../orchestration-v2/Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -576,7 +584,11 @@ describe("OrchestratorMcpService", () => {
    * A Supervised parent cancels its Supervised child, under which a task
    * now runs at full access. Reports what the cancel did.
    */
-  const cancelOverRaisedGrandchild = (child: { readonly deleted: boolean }) =>
+  const cancelOverRaisedGrandchild = (child: {
+    readonly deleted: boolean;
+    /** The grandchild passes the check, and its user raises it before the stop reaches it. */
+    readonly raisedDuringStop?: boolean;
+  }) =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-cancel-grandchild-parent");
       const childThreadId = ThreadId.make("thread:mcp-cancel-grandchild-child");
@@ -642,7 +654,7 @@ describe("OrchestratorMcpService", () => {
           // to full access.
           getThreadShell: (threadId) =>
             Effect.succeed(
-              threadId === grandchildThreadId
+              threadId === grandchildThreadId && child.raisedDuringStop !== true
                 ? liveThreadShell(threadId)
                 : threadId === childThreadId && child.deleted
                   ? null
@@ -652,7 +664,29 @@ describe("OrchestratorMcpService", () => {
             Ref.update(dispatched, (commands) => [...commands, command]).pipe(
               Effect.as({} as never),
             ),
-          stopDelegatedTasks: () => Ref.set(stoppedBelow, true),
+          // Stands in for the orchestrator, which finds the grandchild raised
+          // under its lock, when the stop runs under the parent's limit.
+          stopDelegatedTasks: () =>
+            Effect.gen(function* () {
+              const limit = yield* DispatchModeLimit;
+              if (child.raisedDuringStop === true && limit?.refused !== undefined) {
+                const refusal: DispatchModeRefusal = {
+                  threadId: grandchildThreadId,
+                  mode: "runtime",
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                };
+                yield* Ref.set(limit.refused, refusal);
+                return yield* new OrchestratorThreadAboveModeLimitError({
+                  commandId: CommandId.make("stop-grandchild"),
+                  threadId: grandchildThreadId,
+                  mode: "runtime",
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                });
+              }
+              yield* Ref.set(stoppedBelow, true);
+            }),
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
@@ -695,6 +729,14 @@ describe("OrchestratorMcpService", () => {
         dispatched: [],
         stoppedBelow: false,
       });
+    }),
+  );
+
+  it.effect("reports a task under the child that its user raises while it is being stopped", () =>
+    Effect.gen(function* () {
+      const outcome = yield* cancelOverRaisedGrandchild({ deleted: false, raisedDuringStop: true });
+      assert.equal(outcome.code, "runtime_mode_escalation_denied");
+      assert.isFalse(outcome.stoppedBelow);
     }),
   );
 
