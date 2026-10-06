@@ -42,8 +42,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
+import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -53,7 +54,7 @@ import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEn
 import { readOpenCodeUsage } from "./opencodeUsageReader.ts";
 import { readAntigravityUsage } from "./antigravityUsageReader.ts";
 import { readCursorAccountUsage } from "./cursorUsageReader.ts";
-import { UsageAggregator } from "./usageAggregation.ts";
+import { resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
@@ -204,6 +205,11 @@ export const make = Effect.gen(function* () {
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const scanCachePath = path.join(config.stateDir, SCAN_CACHE_FILE_NAME);
   const legacyScanCachePath = path.join(config.stateDir, LEGACY_SCAN_CACHE_FILE_NAME);
+  const writeCacheFile = (filePath: string, contents: string) =>
+    writeFileStringAtomically({ filePath, contents }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsagePricing["status"] = "unavailable";
@@ -267,7 +273,7 @@ export const make = Effect.gen(function* () {
     ratesStatus = "fresh";
 
     yield* encodeRatesCache({ fetchedAtMs: now, document: fetched }).pipe(
-      Effect.flatMap((serialized) => fileSystem.writeFileString(ratesCachePath, serialized)),
+      Effect.flatMap((contents) => writeCacheFile(ratesCachePath, contents)),
       Effect.ignoreCause,
     );
   });
@@ -419,8 +425,8 @@ export const make = Effect.gen(function* () {
   );
 
   const writeScanCache = makeScanCacheWriter();
-  // Scans with different windows can finish together; two writes interleaved
-  // in one file would corrupt it.
+  // Scans with different windows can finish together; serializing the writes
+  // keeps an older snapshot from landing after a newer one.
   const persistLock = yield* Semaphore.make(1);
 
   const persistScanCache = Effect.fn("UsageService.persistScanCache")(function* () {
@@ -432,7 +438,7 @@ export const make = Effect.gen(function* () {
     yield* Effect.sync(() =>
       writeScanCache(fileCache, { sources: Object.fromEntries(sourceCache) }),
     ).pipe(
-      Effect.flatMap((serialized) => fileSystem.writeFileString(scanCachePath, serialized)),
+      Effect.flatMap((contents) => writeCacheFile(scanCachePath, contents)),
       // A cache we cannot write is a slower next start, not a failed read.
       Effect.catchCause(() =>
         Effect.sync(() => {
@@ -821,6 +827,7 @@ export const make = Effect.gen(function* () {
       ...hourlyWindow,
       rates,
       priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
+      modelAliases: resolveModelAliases(settings.usageModelAliases),
     });
 
     const sources: UsageSource[] = [];
@@ -925,17 +932,13 @@ export const make = Effect.gen(function* () {
   });
 
   /**
-   * In-flight scans by window and custom prices, so concurrent identical requests (the usage
+   * In-flight scans by window and usage settings, so concurrent identical requests (the usage
    * page open on two clients at once) share one scan instead of racing over
    * the same corpus twice.
    */
   const inflightScans = new Map<string, Deferred.Deferred<UsageSummary, UsageReadError>>();
 
-  const scanKey = (
-    input: UsageSummaryInput,
-    priceOverrides: ServerSettingsValue["usagePriceOverrides"],
-    cursorKeychainUsageEnabled: boolean,
-  ): string =>
+  const scanKey = (input: UsageSummaryInput, settings: ServerSettingsValue): string =>
     JSON.stringify([
       input.timeZone,
       input.sinceDay,
@@ -943,13 +946,14 @@ export const make = Effect.gen(function* () {
       input.resolution ?? "day",
       input.sinceTime ?? null,
       input.untilTime ?? null,
-      priceOverrides,
-      cursorKeychainUsageEnabled,
+      settings.usagePriceOverrides,
+      settings.usageModelAliases,
+      settings.cursorKeychainUsageEnabled,
     ]);
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
     const settings = yield* readSettings;
-    const key = scanKey(input, settings.usagePriceOverrides, settings.cursorKeychainUsageEnabled);
+    const key = scanKey(input, settings);
     const deferred = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const existing = inflightScans.get(key);

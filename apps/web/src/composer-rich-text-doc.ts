@@ -1,5 +1,5 @@
 import { joinBackward, joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
-import { Fragment, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
+import { Fragment, Mark, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import { Code } from "@tiptap/extension-code";
 import { Blockquote } from "@tiptap/extension-blockquote";
 import { CodeBlock } from "@tiptap/extension-code-block";
@@ -9,7 +9,13 @@ import { type Command, type Editor, mergeAttributes } from "@tiptap/core";
 import { BulletList, ListItem, OrderedList } from "@tiptap/extension-list";
 import { TaskItem } from "@tiptap/extension-task-item";
 import { TaskList } from "@tiptap/extension-task-list";
-import { Plugin, Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
+import {
+  type EditorState,
+  Plugin,
+  Selection,
+  TextSelection,
+  type Transaction,
+} from "@tiptap/pm/state";
 
 import { splitPromptIntoComposerSegments } from "~/composer-editor-mentions";
 import { nextOrderedMarkerText } from "~/composer-list-continuation";
@@ -57,7 +63,12 @@ const TIPTAP_TO_MARK: Record<string, RichTextMark> = {
  * spans markdown like `**\`x\`**` parses into and drops the whole insert.
  * Code nests inside emphasis here, so it only excludes itself like the rest.
  */
-export const ComposerCodeExtension = Code.extend({ excludes: "code" });
+export const ComposerCodeExtension = Code.extend({
+  excludes: "code",
+  // ArrowRight leaves code through the caret stops at styled edges, so the
+  // stock exit (inserting a space at the end of a line) is not needed.
+  exitable: false,
+});
 
 /**
  * Tiptap's block extensions each bind a chord that turns the current block
@@ -1463,4 +1474,50 @@ export function pmToFlat(map: RichDocMap, pmPos: number): number {
     if (run.pmPos <= pmPos) best = run.flatStart + run.docLen;
   }
   return Math.max(0, Math.min(best, map.docLength));
+}
+
+// ── Caret stops at styled edges ────────────────────────────────────────────
+//
+// Markers are decorations, not text, so the position where styled text meets
+// unstyled text (or a paragraph edge) is a single document position. The
+// caret gets two stops there: one that types with the marks before the edge
+// and one that types with the marks after it. Stored marks pick the stop, and
+// the revealed markers render on the matching side of the caret, so a pasted
+// `**bold**` at the start of a line can still be typed in front of.
+
+function styledEdge(state: EditorState) {
+  const { selection } = state;
+  if (!selection.empty) return null;
+  const { $from } = selection;
+  if (!$from.parent.inlineContent) return null;
+  const before = $from.nodeBefore?.marks ?? Mark.none;
+  const after = $from.nodeAfter?.marks ?? Mark.none;
+  if (Mark.sameSet(before, after)) return null;
+  return { before, after, current: state.storedMarks ?? $from.marks() };
+}
+
+/** True when the caret sits on a styled edge and types with the marks before it. */
+export function caretTakesMarksBefore(state: EditorState): boolean {
+  const edge = styledEdge(state);
+  return edge !== null && Mark.sameSet(edge.current, edge.before);
+}
+
+/**
+ * Moves the caret to the other stop of the styled edge it sits on, toward
+ * `direction`. Returns null when there is no stop to take, so the arrow key
+ * moves the caret as usual.
+ */
+export function stepCaretAcrossStyledEdge(
+  state: EditorState,
+  direction: -1 | 1,
+): Transaction | null {
+  const edge = styledEdge(state);
+  if (!edge) return null;
+  // Marks the user toggled by hand (neither stop) are theirs: move as usual.
+  if (!Mark.sameSet(edge.current, edge.before) && !Mark.sameSet(edge.current, edge.after)) {
+    return null;
+  }
+  const target = direction === -1 ? edge.before : edge.after;
+  if (Mark.sameSet(edge.current, target)) return null;
+  return state.tr.setStoredMarks(target);
 }
