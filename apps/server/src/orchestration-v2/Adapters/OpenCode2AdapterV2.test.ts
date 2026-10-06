@@ -4398,6 +4398,153 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect(
+    "keeps every subagent a stopped background reply's subagent started off the next turn",
+    () =>
+      Effect.gen(function* () {
+        const CHILD_B = "ses_f1485c529ffeBBBBBBBBBBBBBB";
+        const SPAWNED = "ses_f1485c529ffeDDDDDDDDDDDDDD";
+        const NESTED = "ses_f1485c529ffeNNNNNNNNNNNNNN";
+        const DEEP = "ses_f1485c529ffeEEEEEEEEEEEEEE";
+        const toolB = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-b" };
+        const spawn = { sessionID: SESSION, assistantMessageID: "msg_reply", id: "call-spawn" };
+        const { runtime, thread } = yield* resumed([
+          ...backgroundLaunch(CHILD),
+          // The same turn starts a second background subagent, which runs on.
+          event("session.tool.input.started", { ...toolB, name: "subagent" }),
+          event("session.tool.called", {
+            ...toolB,
+            name: "subagent",
+            input: { description: "Sleep", prompt: "sleep", background: true },
+            executed: false,
+          }),
+          event("session.created", { ...childCreated(CHILD_B), sessionID: CHILD_B }),
+          event("session.tool.progress", {
+            ...toolB,
+            metadata: { sessionID: CHILD_B, status: "running" },
+          }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          event("session.execution.started", { sessionID: CHILD_B }),
+          // The first subagent's report wakes the parent into a reply T3 holds.
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          event("session.inbox.enqueued", {
+            inboxID: "msg_report",
+            sessionID: SESSION,
+            item: {
+              type: "synthetic",
+              payload: {
+                text: `<subagent sessionID="${CHILD}" state="completed" description="Sleep">\nCHILD_OK\n</subagent>`,
+                description: "Sleep",
+                metadata: {
+                  source: "subagent",
+                  childID: CHILD,
+                  agent: "General",
+                  state: "completed",
+                },
+              },
+              delivery: "steer",
+            },
+          }),
+          event("session.execution.started", { sessionID: SESSION }),
+          // The held reply starts a subagent, which starts one, which starts another.
+          event("session.tool.input.started", { ...spawn, name: "subagent" }),
+          event("session.tool.called", {
+            ...spawn,
+            name: "subagent",
+            input: { description: "Sleep", prompt: "sleep", background: true },
+            executed: false,
+          }),
+          event("session.created", { ...childCreated(SPAWNED), sessionID: SPAWNED }),
+          event("session.tool.progress", {
+            ...spawn,
+            metadata: { sessionID: SPAWNED, status: "running" },
+          }),
+          event("session.created", {
+            ...childCreated(NESTED),
+            sessionID: NESTED,
+            parentID: SPAWNED,
+          }),
+          event("session.created", { ...childCreated(DEEP), sessionID: DEEP, parentID: NESTED }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // The second subagent's text, shown live, marks that the reply has ended.
+          event("session.text.ended", {
+            sessionID: CHILD_B,
+            assistantMessageID: "msg_child_b",
+            ordinal: 0,
+            text: "B_WORKING",
+          }),
+          // The user's Stop stops the second subagent and drops the held reply,
+          // then each subagent under the reply, the deepest of which runs on.
+          out("session.interrupt", { sessionID: CHILD_B }),
+          reply("session.interrupt", { interrupted: true }),
+          event("session.execution.interrupted", { sessionID: CHILD_B }),
+          out("session.interrupt", { sessionID: SPAWNED }),
+          reply("session.interrupt", { interrupted: true }),
+          out("session.interrupt", { sessionID: NESTED }),
+          reply("session.interrupt", { interrupted: true }),
+          out("session.interrupt", { sessionID: DEEP }),
+          reply("session.interrupt", {
+            status: 500,
+            body: { _tag: "UnknownError", message: "interrupt failed" },
+          }),
+          // An unrelated prompt runs while the deepest asks for a permission,
+          // which no turn shows: it is refused.
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.execution.started", { sessionID: SESSION }),
+          event("permission.asked", { ...shellAsk.data, id: "per_deep", sessionID: DEEP }),
+          out("permission.reply", { sessionID: DEEP, requestID: "per_deep", decision: "reject" }),
+          reply("permission.reply", null),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ]);
+        const collected: Array<ProviderAdapterV2Event> = [];
+        const replyEnded = yield* Deferred.make<void>();
+        const bothEnded = yield* Deferred.make<void>();
+        yield* runtime.events.pipe(
+          Stream.tap((event) =>
+            Effect.gen(function* () {
+              collected.push(event);
+              if (
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "assistant_message" &&
+                event.turnItem.text === "B_WORKING"
+              ) {
+                yield* Deferred.succeed(replyEnded, undefined);
+              }
+              if (collected.filter((entry) => entry.type === "turn.terminal").length === 2) {
+                yield* Deferred.succeed(bothEnded, undefined);
+              }
+            }),
+          ),
+          Stream.runDrain,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(withLineage(thread));
+        yield* Deferred.await(replyEnded);
+        yield* runtime.interruptTurn({
+          providerThread: thread,
+          providerTurnId: yield* providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        yield* runtime.startTurn({
+          ...secondTurn(thread),
+          appThread: withLineage(thread).appThread,
+        });
+        yield* Deferred.await(bothEnded);
+        // The unrelated turn shows no request it never made.
+        assert.deepEqual(
+          collected.flatMap((event) =>
+            event.type === "runtime_request.updated"
+              ? [
+                  `${event.runtimeRequest.nativeRequestRef?.nativeId}:${event.runtimeRequest.status}`,
+                ]
+              : [],
+          ),
+          [],
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("ends a continuation while a skipped reply's subagent does not answer its Stop", () =>
     Effect.gen(function* () {
       const CHILD_B = "ses_f1485c529ffeBBBBBBBBBBBBBB";

@@ -3459,17 +3459,30 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
      * call outside the held execution is the thread's, and is left alone.
      */
     const discardWakes = (caller: ThreadState, wakes: ReadonlyArray<Wake>) => {
+      const retired = new Set<string>();
+      const retire = (childId: string) => {
+        const info = announced.get(childId);
+        if (info === undefined) return;
+        announced.delete(childId);
+        childOwners.delete(childId);
+        strays.set(childId, caller);
+        retired.add(childId);
+        // OpenCode reports its end to the session that called it; that
+        // report answers no turn, so the execution it wakes is stopped.
+        (threads.get(info.parentID ?? "") ?? caller).stoppedChildren.add(childId);
+      };
       for (const wake of wakes) {
         wake.dropped = true;
-        for (const childId of wake.children) {
-          const info = announced.get(childId);
-          if (info === undefined) continue;
-          announced.delete(childId);
-          childOwners.delete(childId);
-          strays.set(childId, caller);
-          // OpenCode reports its end to the session that called it; that
-          // report answers no turn, so the execution it wakes is stopped.
-          (threads.get(info.parentID ?? "") ?? caller).stoppedChildren.add(childId);
+        for (const childId of wake.children) retire(childId);
+      }
+      // Their own subagents, at any depth, were announced live but no call
+      // of the thread's names them either.
+      for (let grew = retired.size > 0; grew;) {
+        grew = false;
+        for (const [childId, info] of announced) {
+          if (info.parentID === undefined || !retired.has(info.parentID)) continue;
+          retire(childId);
+          grew = true;
         }
       }
     };
