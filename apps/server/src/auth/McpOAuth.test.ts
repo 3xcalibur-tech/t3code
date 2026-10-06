@@ -1,5 +1,3 @@
-import * as NodeCrypto from "node:crypto";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthAdministrativeScopes,
@@ -66,7 +64,8 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ORIGIN = "https://box.example.ts.net";
 const REDIRECT = "http://localhost/callback";
 const verifier = "a".repeat(43) + "-verifier-for-tests";
-const challenge = NodeCrypto.createHash("sha256").update(verifier).digest("base64url");
+/** base64url(SHA-256(verifier)), the S256 challenge for `verifier`. */
+const challenge = "DeB41nTVkPwpbbYecrnqtVq7VXLezustdHAK4SWt13c";
 
 /** Requests as they arrive behind an https proxy: plain http with the public Host. */
 const at = (path: string, init?: RequestInit) =>
