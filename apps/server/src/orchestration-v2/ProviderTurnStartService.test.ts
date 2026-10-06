@@ -1089,6 +1089,7 @@ function makePersistedStartFailureHarness() {
     >;
     readonly projectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
+      eventSink: EventSink.EventSinkV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
   }) =>
     Effect.gen(function* () {
@@ -1124,7 +1125,7 @@ function makePersistedStartFailureHarness() {
                 Layer.succeed(EventSink.EventSinkV2, gatedSink),
                 Layer.succeed(
                   ProjectionStore.ProjectionStoreV2,
-                  options.projectionStore?.(store) ?? store,
+                  options.projectionStore?.(store, eventSink) ?? store,
                 ),
                 IdAllocator.layer,
                 Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
@@ -1169,63 +1170,114 @@ function makePersistedStartFailureHarness() {
   };
 }
 
+// The user accepts the approval the run inherited.
+const acceptApproval = (
+  harness: ReturnType<typeof makePersistedStartFailureHarness>,
+  eventSink: EventSink.EventSinkV2Shape,
+) =>
+  eventSink.write({
+    events: [
+      {
+        id: EventId.make("event-approval-accepted"),
+        type: "runtime-request.updated",
+        threadId: harness.threadId,
+        nodeId: harness.approvalNode.id,
+        occurredAt: harness.now,
+        payload: {
+          ...harness.approvalRequest,
+          status: "resolved",
+          decision: "accept",
+          resolvedAt: harness.now,
+        },
+      },
+      {
+        id: EventId.make("event-approval-node-completed"),
+        type: "node.updated",
+        threadId: harness.threadId,
+        nodeId: harness.approvalNode.id,
+        occurredAt: harness.now,
+        payload: { ...harness.approvalNode, status: "completed", completedAt: harness.now },
+      },
+      {
+        id: EventId.make("event-approval-item-completed"),
+        type: "turn-item.updated",
+        threadId: harness.threadId,
+        nodeId: harness.approvalNode.id,
+        occurredAt: harness.now,
+        payload: {
+          ...harness.approvalItem,
+          status: "completed",
+          completedAt: harness.now,
+          updatedAt: harness.now,
+        },
+      },
+    ],
+  });
+
+const expectApprovalAccepted = (projection: OrchestrationV2ThreadProjection) => {
+  expect(projection.runs.map((run) => run.status)).toEqual(["failed"]);
+  expect(projection.runtimeRequests).toMatchObject([{ status: "resolved", decision: "accept" }]);
+  const approvalNode = projection.nodes.find((node) => node.kind === "approval_request");
+  const approvalItem = projection.turnItems.find((item) => item.type === "approval_request");
+  expect(approvalNode?.status).toBe("completed");
+  expect(approvalItem?.status).toBe("completed");
+};
+
 effectIt.effect("keeps an approval accepted while a failed start is written", () =>
   Effect.gen(function* () {
     const harness = makePersistedStartFailureHarness();
     const projection = yield* harness.run({
       // The user approves after the failure read the approval as pending.
       beforeFailureWrite: Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const { now, threadId } = harness;
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make("event-approval-accepted"),
-              type: "runtime-request.updated",
-              threadId,
-              nodeId: harness.approvalNode.id,
-              occurredAt: now,
-              payload: {
-                ...harness.approvalRequest,
-                status: "resolved",
-                decision: "accept",
-                resolvedAt: now,
-              },
-            },
-            {
-              id: EventId.make("event-approval-node-completed"),
-              type: "node.updated",
-              threadId,
-              nodeId: harness.approvalNode.id,
-              occurredAt: now,
-              payload: { ...harness.approvalNode, status: "completed", completedAt: now },
-            },
-            {
-              id: EventId.make("event-approval-item-completed"),
-              type: "turn-item.updated",
-              threadId,
-              nodeId: harness.approvalNode.id,
-              occurredAt: now,
-              payload: {
-                ...harness.approvalItem,
-                status: "completed",
-                completedAt: now,
-                updatedAt: now,
-              },
-            },
-          ],
-        });
+        yield* acceptApproval(harness, yield* EventSink.EventSinkV2);
       }),
     });
 
-    expect(projection.runs.map((run) => run.status)).toEqual(["failed"]);
-    expect(projection.runtimeRequests).toMatchObject([{ status: "resolved", decision: "accept" }]);
-    expect(projection.nodes.find((node) => node.id === harness.approvalNode.id)?.status).toBe(
-      "completed",
-    );
-    expect(projection.turnItems.find((item) => item.id === harness.approvalItem.id)?.status).toBe(
-      "completed",
-    );
+    expectApprovalAccepted(projection);
+  }),
+);
+
+effectIt.effect("keeps an approval accepted while the failure reads what it inherited", () =>
+  Effect.gen(function* () {
+    const harness = makePersistedStartFailureHarness();
+    let settling = false;
+    let accepted = false;
+    const projection = yield* harness.run({
+      // The user approves while the failure's recovery read runs: it loaded
+      // the approval's node and item as waiting, but the request had left the
+      // pending-requests read, so no cancellation accompanies their settlement.
+      projectionStore: (store, eventSink) => ({
+        ...store,
+        // Only the inherited-work read asks for subagent links.
+        getThreadRecords: (threadId, fields, filter) =>
+          Effect.sync(() => {
+            if (fields.some((field) => field === "subagents")) settling = true;
+          }).pipe(Effect.andThen(store.getThreadRecords(threadId, fields, filter))),
+        getRuntimeRecoveryProjection: (threadId) =>
+          store.getRuntimeRecoveryProjection(threadId).pipe(
+            Effect.flatMap((recovery) =>
+              !settling || accepted
+                ? Effect.succeed(recovery)
+                : Effect.sync(() => {
+                    accepted = true;
+                  }).pipe(
+                    Effect.andThen(acceptApproval(harness, eventSink)),
+                    Effect.orDie,
+                    Effect.as({
+                      ...recovery,
+                      runtimeRequests: recovery.runtimeRequests.filter(
+                        (request) => request.id !== harness.approvalRequest.id,
+                      ),
+                    }),
+                  ),
+            ),
+          ),
+      }),
+    });
+
+    expect(accepted).toBe(true);
+
+    expectApprovalAccepted(projection);
   }),
 );
 

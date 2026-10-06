@@ -277,7 +277,54 @@ const layerBase: Layer.Layer<
       Effect.gen(function* () {
         const staleRequests = new Set<RuntimeRequestId>();
         const staleNodes = new Set<NodeId>();
+        // A run's cleanup settles a request's node and item with the run's own
+        // status, which is not always `cancelled`.
+        const settles = (status: string) =>
+          status === "cancelled" || (allKinds && (status === "failed" || status === "interrupted"));
+        // Whether a request was answered after the cleanup read it. A missing
+        // request leaves nothing to protect.
+        const answered = new Map<RuntimeRequestId, boolean>();
+        const wasAnswered = (threadId: ThreadId, requestId: RuntimeRequestId) =>
+          Effect.gen(function* () {
+            const known = answered.get(requestId);
+            if (known !== undefined) return known;
+            const current = yield* projectionStore.getRuntimeRequest(threadId, requestId);
+            const result =
+              current !== undefined &&
+              (current.status !== "pending" || current.responseCapability.type === "message");
+            answered.set(requestId, result);
+            return result;
+          });
         for (const event of events) {
+          // The cleanup reads nodes, requests and items at different moments,
+          // so it can settle a request's node or item after the request was
+          // answered and left its pending read. Each one is checked against
+          // its own request, with or without a cancellation beside it.
+          if (allKinds && event.type === "node.updated") {
+            const requestId = event.payload.runtimeRequestId;
+            if (
+              requestId !== null &&
+              settles(event.payload.status) &&
+              (yield* wasAnswered(event.payload.threadId, requestId))
+            ) {
+              staleNodes.add(event.payload.id);
+            }
+            continue;
+          }
+          if (
+            allKinds &&
+            event.type === "turn-item.updated" &&
+            (event.payload.type === "user_input_request" ||
+              event.payload.type === "approval_request")
+          ) {
+            if (
+              settles(event.payload.status) &&
+              (yield* wasAnswered(event.payload.threadId, event.payload.requestId))
+            ) {
+              staleRequests.add(event.payload.requestId);
+            }
+            continue;
+          }
           if (
             event.type !== "runtime-request.updated" ||
             (!allKinds && event.payload.kind !== "user_input") ||
@@ -298,10 +345,6 @@ const layerBase: Layer.Layer<
             staleNodes.add(event.payload.nodeId);
           }
         }
-        // A run's cleanup settles a request's node and item with the run's own
-        // status, which is not always `cancelled`.
-        const settles = (status: string) =>
-          status === "cancelled" || (allKinds && (status === "failed" || status === "interrupted"));
         return events.filter((event) => {
           switch (event.type) {
             case "runtime-request.updated":
