@@ -98,7 +98,8 @@ export interface UsageView {
   readonly isPending: boolean;
   /**
    * The usage to draw: this window's once a selected environment answers,
-   * until then the last window answered for the same selection, else null.
+   * until then the last window answered for the same selection. Null while
+   * nothing has answered and something still could.
    */
   readonly shown: { readonly window: UsageSummaryInput; readonly merged: MergedUsage } | null;
   /**
@@ -208,18 +209,19 @@ export function useUsage(
     (NonNullable<UsageView["shown"]> & { readonly selection: typeof selectedEnvironmentIds }) | null
   >(null);
   if (
-    !isPending &&
+    answeredCount > 0 &&
     (lastAnswered?.merged !== merged ||
       lastAnswered.window !== input ||
       lastAnswered.selection !== selectedEnvironmentIds)
   ) {
     setLastAnswered({ window: input, merged, selection: selectedEnvironmentIds });
   }
-  const shown = !isPending
-    ? { window: input, merged }
-    : lastAnswered?.selection === selectedEnvironmentIds
-      ? lastAnswered
-      : null;
+  const kept = lastAnswered?.selection === selectedEnvironmentIds ? lastAnswered : null;
+  // With no answers, even failed ones keep the last answered usage on screen.
+  const shown =
+    answeredCount > 0
+      ? { window: input, merged }
+      : (kept ?? (isPending ? null : { window: input, merged }));
 
   return {
     merged,

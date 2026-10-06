@@ -146,7 +146,6 @@ export function UsagePage() {
     merged: answeredUsage,
     environments,
     selectedEnvironments,
-    isPending,
     shown,
     isPartial,
     refresh,
@@ -156,13 +155,14 @@ export function UsagePage() {
   const shownWindow = shown?.window ?? window;
   const shownHourly = shownWindow.resolution === "hour";
   const refreshingUsage = isRefreshing && !showingLimits;
-  // Kept usage is all old, so every figure waits on the new window.
+  // Usage kept from another window is all old, so every figure stays muted.
+  const showingKept = shown !== null && shown.window !== window;
   const loading = useMemo(
     () =>
-      isPending
+      showingKept
         ? { partial: true, everyProvider: true, providers: new Set<UsageProviderKind>() }
         : usageLoadingState(selectedEnvironments, refreshingUsage),
-    [isPending, refreshingUsage, selectedEnvironments],
+    [showingKept, refreshingUsage, selectedEnvironments],
   );
   const isProviderLoading = (provider: UsageProviderKind) =>
     loading.everyProvider || loading.providers.has(provider);

@@ -178,7 +178,14 @@ describe("usage environment selection", () => {
     expect(latest.isPending).toBe(true);
     expect(latest.shown?.merged.costUsd).toBe(10);
 
+    // A window that fails everywhere keeps it too.
+    testState.environments = [{ ...environment("a", null), isPending: false, error: "Offline" }];
+    await act(() => renderer?.update(<Probe selected={selected} />));
+    expect(latest.isPending).toBe(false);
+    expect(latest.shown?.merged.costUsd).toBe(10);
+
     // Another selection has nothing of its own to show.
+    testState.environments = [environment("a", null)];
     await select("a");
     expect(latest.shown).toBeNull();
   });
