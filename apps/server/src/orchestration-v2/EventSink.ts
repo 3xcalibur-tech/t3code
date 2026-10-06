@@ -298,17 +298,21 @@ const layerBase: Layer.Layer<
             staleNodes.add(event.payload.nodeId);
           }
         }
+        // A run's cleanup settles a request's node and item with the run's own
+        // status, which is not always `cancelled`.
+        const settles = (status: string) =>
+          status === "cancelled" || (allKinds && (status === "failed" || status === "interrupted"));
         return events.filter((event) => {
           switch (event.type) {
             case "runtime-request.updated":
               return event.payload.status !== "cancelled" || !staleRequests.has(event.payload.id);
             case "node.updated":
-              return event.payload.status !== "cancelled" || !staleNodes.has(event.payload.id);
+              return !settles(event.payload.status) || !staleNodes.has(event.payload.id);
             case "turn-item.updated":
               return (
                 (event.payload.type !== "user_input_request" &&
                   event.payload.type !== "approval_request") ||
-                event.payload.status !== "cancelled" ||
+                !settles(event.payload.status) ||
                 !staleRequests.has(event.payload.requestId)
               );
             default:

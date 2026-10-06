@@ -266,7 +266,8 @@ export const layer: Layer.Layer<
       return yield* RunExecutionService.cascadeTerminalizeRunOwnedSubagents({
         run,
         open: linked,
-        status: "cancelled",
+        // The same status a started run's failure gives the work it owned.
+        status: "failed",
         completedAt: input.now,
         allocateEventId: () => idAllocator.allocate.event({ threadId: run.threadId }),
       });

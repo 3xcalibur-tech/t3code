@@ -1153,26 +1153,26 @@ it.live("settles the work a restarted run inherited when its replacement never o
             : [],
         ),
         [
-          ["approval_request", "cancelled"],
-          ["subagent", "cancelled"],
-          ["command_execution", "cancelled"],
+          ["approval_request", "failed"],
+          ["subagent", "failed"],
+          ["command_execution", "failed"],
         ],
       );
       // The provider-native subagent's own thread ends with the run, and so does
       // the thread of a nested subagent whose row already settled.
       assert.deepEqual(nativeChildItems, [
-        ["approval_request", "cancelled"],
+        ["approval_request", "failed"],
         ["subagent", "completed"],
-        ["subagent", "cancelled"],
-        ["command_execution", "cancelled"],
+        ["subagent", "failed"],
+        ["command_execution", "failed"],
       ]);
       assert.isFalse(nativeChildStreaming);
       assert.deepEqual(nativeChildRequests, ["cancelled"]);
       // A subagent the provider-native subagent launched ends with it.
-      assert.deepEqual(nativeChildSubagents, ["cancelled"]);
+      assert.deepEqual(nativeChildSubagents, ["failed"]);
       // So does the subagent's own provider turn, which no run attempt owns.
-      assert.deepEqual(nativeChildProviderTurns, ["cancelled"]);
-      assert.deepEqual(nativeGrandchildItems, [["command_execution", "cancelled"]]);
+      assert.deepEqual(nativeChildProviderTurns, ["failed"]);
+      assert.deepEqual(nativeGrandchildItems, [["command_execution", "failed"]]);
       // The delegated task and its thread keep running.
       assert.deepEqual(
         projection.subagents.flatMap((subagent) =>
