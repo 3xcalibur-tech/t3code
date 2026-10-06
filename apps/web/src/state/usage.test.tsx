@@ -23,6 +23,7 @@ function environment(id: string, cost: number | null, hostId = id): EnvironmentU
     label: id,
     isPending: cost === null,
     canReadDiagnostics: true,
+    isConnected: true,
     error: null,
     needsCursorKeychainAccess: false,
     summary:
