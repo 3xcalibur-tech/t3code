@@ -52,4 +52,22 @@ describe("KiroDriver", () => {
     });
     assert.deepEqual(kiroAuthFromWhoami(undefined, {}), { status: "unknown" });
   });
+
+  // Reported from Kiro CLI 2.27.1 with an IAM Identity Center login (exit 0;
+  // values are placeholders, layout unchanged).
+  it("keeps the account email when whoami appends an Identity Center profile", () => {
+    const stdout = [
+      '{"accountType":"IamIdentityCenter","email":"jane.doe@example.com","region":"us-east-1","startUrl":"https://d-0123456789.awsapps.com/start"}',
+      "",
+      "Profile:",
+      "KiroProfile-us-east-1",
+      "arn:aws:codewhisperer:us-east-1:111122223333:profile/EXAMPLE12345",
+      "",
+    ].join("\n");
+    assert.deepEqual(kiroAuthFromWhoami({ code: 0, stdout }, {}), {
+      status: "authenticated",
+      label: "Kiro account",
+      email: "jane.doe@example.com",
+    });
+  });
 });

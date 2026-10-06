@@ -103,7 +103,9 @@ const decodeKiroWhoami = Schema.decodeUnknownOption(KiroWhoami);
 /**
  * Reads `kiro-cli whoami --format json`. Kiro 2.27 prints
  * `{"accountType":"ApiKey","email":null}` and exits 0 when signed in (or when
- * `KIRO_API_KEY` is set), and `{"account":null}` with exit 1 when not.
+ * `KIRO_API_KEY` is set), and `{"account":null}` with exit 1 when not. An IAM
+ * Identity Center login follows the JSON line with a plain-text `Profile:`
+ * block, so only the first line is decoded.
  */
 export function kiroAuthFromWhoami(
   output: { readonly code: number; readonly stdout: string } | undefined,
@@ -115,7 +117,8 @@ export function kiroAuthFromWhoami(
       ? { status: "unauthenticated" }
       : { status: "unknown" };
   }
-  const account = Option.getOrUndefined(decodeKiroWhoami(output.stdout.trim()));
+  const firstLine = output.stdout.trimStart().split("\n", 1)[0] ?? "";
+  const account = Option.getOrUndefined(decodeKiroWhoami(firstLine.trim()));
   if (account?.accountType === "ApiKey" || environment[KIRO_API_KEY_ENV]?.trim()) {
     return { status: "authenticated", type: "api_key", label: "Kiro API key" };
   }
