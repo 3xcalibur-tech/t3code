@@ -1598,7 +1598,7 @@ describe("OpenCode2 adapter", () => {
 
   it.effect("ends a background reply's continuation after a lost stream took a Stop's end", () =>
     Effect.gen(function* () {
-      const offered = yield* Deferred.make<void>();
+      const offered = yield* Deferred.make<ProviderContinuationRequest>();
       const gate = makeProviderReplayGate(["drop", "reply"]);
       const { runtime, thread } = yield* resumed(
         [
@@ -1659,7 +1659,7 @@ describe("OpenCode2 adapter", () => {
         { replayGate: gate },
       ).pipe(
         Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
-          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          offer: (request) => Deferred.succeed(offered, request).pipe(Effect.asVoid),
           take: Effect.never,
         }),
       );
@@ -1688,27 +1688,26 @@ describe("OpenCode2 adapter", () => {
       yield* Fiber.join(interrupt);
       yield* runtime.startTurn({ ...secondTurn(thread), appThread: withLineage(thread).appThread });
       gate.release("drop");
-      yield* Deferred.await(offered);
       yield* runtime.startTurn({
-        ...withLineage(thread),
-        runId: RunId.make("run:opencode2-adapter:wake"),
+        ...continuationTurn(thread, yield* Deferred.await(offered)),
         runOrdinal: 3,
         providerTurnOrdinal: 3,
-        attemptId: RunAttemptId.make("attempt:opencode2-adapter:wake"),
-        message: {
-          ...turnInput(thread).message,
-          messageId: MessageId.make("message:opencode2-adapter:wake"),
-          createdBy: "agent" as const,
-          creationSource: "provider" as const,
-        },
       });
       gate.release("reply");
       // The reply's own end finishes its continuation: the lost Stop's end does not take it.
+      const events = [...(yield* Fiber.join(collected))];
       assert.deepEqual(
-        [...(yield* Fiber.join(collected))].flatMap((event) =>
-          event.type === "turn.terminal" ? [event.status] : [],
-        ),
+        events.flatMap((event) => (event.type === "turn.terminal" ? [event.status] : [])),
         ["interrupted", "failed", "completed"],
+      );
+      // The continuation replayed the reply.
+      assert.include(
+        events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+            ? [event.turnItem.text]
+            : [],
+        ),
+        "CHILD_OK",
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
@@ -1720,7 +1719,7 @@ describe("OpenCode2 adapter", () => {
    */
   const replyAfterUnclearFailure = (endedFirst: boolean) =>
     Effect.gen(function* () {
-      const offered = yield* Deferred.make<void>();
+      const offered = yield* Deferred.make<ProviderContinuationRequest>();
       const gate = makeProviderReplayGate(endedFirst ? ["wake"] : ["wake", "reply"]);
       const { runtime, thread } = yield* resumed(
         [
@@ -1771,7 +1770,7 @@ describe("OpenCode2 adapter", () => {
         { replayGate: gate },
       ).pipe(
         Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
-          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          offer: (request) => Deferred.succeed(offered, request).pipe(Effect.asVoid),
           take: Effect.never,
         }),
       );
@@ -1806,21 +1805,12 @@ describe("OpenCode2 adapter", () => {
         .startTurn({ ...secondTurn(thread), appThread: withLineage(thread).appThread })
         .pipe(Effect.ignore);
       gate.release("wake");
-      yield* Deferred.await(offered);
       // Everything up to the subagent's next run has been read: the reply ended.
       if (endedFirst) yield* Deferred.await(childRan);
       yield* runtime.startTurn({
-        ...withLineage(thread),
-        runId: RunId.make("run:opencode2-adapter:wake"),
+        ...continuationTurn(thread, yield* Deferred.await(offered)),
         runOrdinal: 3,
         providerTurnOrdinal: 3,
-        attemptId: RunAttemptId.make("attempt:opencode2-adapter:wake"),
-        message: {
-          ...turnInput(thread).message,
-          messageId: MessageId.make("message:opencode2-adapter:wake"),
-          createdBy: "agent" as const,
-          creationSource: "provider" as const,
-        },
       });
       if (!endedFirst) gate.release("reply");
       // The reply's own end finishes its continuation: the failed prompt's mark does not take it.
