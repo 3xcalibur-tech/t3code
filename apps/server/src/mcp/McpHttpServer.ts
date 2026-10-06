@@ -783,7 +783,4 @@ export const layer = Layer.mergeAll(
   layerDeviceToolkit,
   layerHtmlToolkit,
   layerReviewToolkit,
-).pipe(
-  Layer.provide(OrchestratorMcpService.layer),
-  Layer.provideMerge(layerMcpTransport),
-);
+).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provideMerge(layerMcpTransport));

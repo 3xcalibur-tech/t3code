@@ -25,7 +25,7 @@ export const layer = ReviewToolkit.toLayer({
       const preview = yield* review
         .getScopedDiffPreview({
           cwd: thread.worktreePath ?? project.value.workspaceRoot,
-          workspaceRoot: project.value.workspaceRoot,
+          workspaceRoot: thread.worktreePath ?? project.value.workspaceRoot,
           baseRef: input.baseRef,
           source: input.source,
           file: input.file,
