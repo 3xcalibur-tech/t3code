@@ -464,7 +464,22 @@ export const layer: Layer.Layer<
             guardPendingRequestCancellations: true,
             events:
               status === "failed"
-                ? [...(yield* inheritedWorkSettlement({ run, now })), ...events]
+                ? [
+                    // Failing the run matters more than settling what it
+                    // inherited: a read that fails here must not leave it
+                    // `starting`.
+                    ...(yield* inheritedWorkSettlement({ run, now }).pipe(
+                      Effect.catchCause((cause) =>
+                        Cause.hasInterruptsOnly(cause)
+                          ? Effect.failCause(cause)
+                          : Effect.logWarning(
+                              "provider turn start could not settle the work a failed run inherited",
+                              { threadId: projection.thread.id, runId, cause: Cause.pretty(cause) },
+                            ).pipe(Effect.as([])),
+                      ),
+                    )),
+                    ...events,
+                  ]
                 : events,
           });
         },

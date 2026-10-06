@@ -1228,3 +1228,31 @@ effectIt.effect("keeps an approval accepted while a failed start is written", ()
     );
   }),
 );
+
+effectIt.effect("fails the run when the work it inherited cannot be read", () =>
+  Effect.gen(function* () {
+    const harness = makePersistedStartFailureHarness();
+    const projection = yield* harness.run({
+      // The start's own reads succeed; only the inherited-work read fails.
+      projectionStore: (store) => ({
+        ...store,
+        getThreadRecords: (threadId, fields, filter) =>
+          fields.some((field) => field === "subagents")
+            ? Effect.fail(
+                new ProjectionStore.ProjectionStoreReadError({
+                  threadId,
+                  cause: "database unavailable",
+                }),
+              )
+            : store.getThreadRecords(threadId, fields, filter),
+      }),
+    });
+
+    expect(projection.runs.map((run) => run.status)).toEqual(["failed"]);
+    expect(projection.attempts.map((attempt) => attempt.status)).toEqual(["failed"]);
+    expect(projection.turnItems).toMatchObject([
+      { type: "approval_request", status: "waiting" },
+      { type: "error", title: "Provider session failed to open" },
+    ]);
+  }),
+);
