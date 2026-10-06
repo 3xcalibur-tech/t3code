@@ -4713,7 +4713,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentThreadId !== null &&
         projection.thread.lineage.relationshipToParent === "subagent" &&
         childOrigin?.type === "node" &&
-        command.creationSource !== "server"
+        command.notification === undefined &&
+        command.scheduledTaskId === undefined &&
+        (command.creationSource !== "server" || command.createdBy === "user")
       ) {
         const pendingTask = (yield* Ref.get(events)).findLast(
           (event) =>

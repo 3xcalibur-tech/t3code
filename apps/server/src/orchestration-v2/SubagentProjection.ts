@@ -206,11 +206,16 @@ export function subagentResultForRun(
   };
 }
 
-/** Requested task work excludes automatic wakes. Restart continuations retain their source work. */
+/** Task results follow requested work, explicit user answers, and its restart continuations.
+ * Notification and scheduled wakes cannot replace that work.
+ */
 export function delegatedWorkRuns(projection: {
   readonly runs: OrchestrationV2ThreadProjection["runs"];
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "id" | "runId" | "creationSource" | "notification">
+    Pick<
+      OrchestrationV2ConversationMessage,
+      "id" | "runId" | "createdBy" | "creationSource" | "notification" | "scheduledTaskId"
+    >
   >;
 }) {
   const requests = new Map(projection.messages.map((message) => [message.id, message]));
@@ -218,9 +223,11 @@ export function delegatedWorkRuns(projection: {
   for (const run of projection.runs.toSorted((a, b) => a.ordinal - b.ordinal)) {
     const request = requests.get(run.userMessageId);
     if (
-      request?.notification?.source.kind !== "monitor" &&
+      request?.notification === undefined &&
+      request?.scheduledTaskId === undefined &&
       (request?.creationSource !== "server" ||
-        (run.ordinal === 1 && request.notification === undefined) ||
+        request.createdBy === "user" ||
+        run.ordinal === 1 ||
         (run.restartContinuationOfRunId !== undefined &&
           workRunIds.has(run.restartContinuationOfRunId)))
     )
@@ -233,7 +240,10 @@ export function delegatedWorkRuns(projection: {
 export function delegatedTaskProgress(projection: {
   readonly runs: OrchestrationV2ThreadProjection["runs"];
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "id" | "runId" | "creationSource" | "notification">
+    Pick<
+      OrchestrationV2ConversationMessage,
+      "id" | "runId" | "createdBy" | "creationSource" | "notification" | "scheduledTaskId"
+    >
   >;
   readonly subagents: ReadonlyArray<
     Pick<OrchestrationV2ThreadProjection["subagents"][number], "status" | "completionDelivery">

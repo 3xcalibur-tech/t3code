@@ -610,8 +610,26 @@ describe("V2 environment commands", () => {
           },
         ],
       };
+      // Keep the interrupt target compatible with older servers while a queue
+      // exists. The current server still selects live work under its own lock.
+      const queuedProjection = {
+        ...projection,
+        runs: [
+          ...projection.runs,
+          {
+            ...projection.runs[0]!,
+            id: RunId.make("queued-after-active"),
+            ordinal: 2,
+            status: "queued" as const,
+          },
+        ],
+      };
       const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({ commands, projects: [], projection });
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        projection: queuedProjection,
+      });
 
       const result = yield* interruptThreadTurn({ threadId: v2ThreadId }).pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),

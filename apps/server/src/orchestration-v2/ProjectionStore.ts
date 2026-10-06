@@ -3517,8 +3517,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     WHERE message.thread_id = child.thread_id
                       AND message.message_id = json_extract(terminal.payload_json, '$.userMessageId')
                       AND CASE WHEN json_valid(message.payload_json) THEN
-                        json_extract(message.payload_json, '$.notification.source.kind') = 'monitor'
+                        json_extract(message.payload_json, '$.notification') IS NOT NULL
+                        OR json_extract(message.payload_json, '$.scheduledTaskId') IS NOT NULL
                         OR (json_extract(message.payload_json, '$.creationSource') = 'server'
+                          AND json_extract(message.payload_json, '$.createdBy') IS NOT 'user'
                           AND NOT (
                             (terminal.ordinal = 1 AND json_extract(message.payload_json, '$.notification') IS NULL)
                             OR json_extract(terminal.payload_json, '$.restartContinuationOfRunId') IS NOT NULL
@@ -6304,42 +6306,40 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         ),
       getThreadSnapshotWindow: (threadId, options) =>
         service.getThreadSnapshot(threadId).pipe(
-          Effect.flatMap((snapshot) =>
-            Effect.gen(function* () {
-              const anchorIndex =
-                options.anchorItemId === undefined
-                  ? snapshot.projection.visibleTurnItems.length
-                  : snapshot.projection.visibleTurnItems.findIndex(
-                      (row) => row.sourceItemId === options.anchorItemId,
-                    ) + 1;
-              const candidates = snapshot.projection.visibleTurnItems.slice(0, anchorIndex);
-              const turnAnchors =
-                options.userTurnLimit === undefined
-                  ? []
-                  : candidates.flatMap((row, index) =>
-                      isThreadHistoryTurnStart(row.item) ? [index] : [],
-                    );
-              const rawStart = turnAnchors.at(-(THREAD_HISTORY_MAX_RAW_TURNS + 2)) ?? 0;
-              const anchors = turnAnchors.filter(
-                (index) => index >= rawStart && isThreadHistoryUserTurn(candidates[index]!.item),
-              );
-              const anchorLimit = (options.userTurnLimit ?? 0) + 2;
-              const start =
-                anchors.length > 0
-                  ? anchors.length < anchorLimit
-                    ? rawStart
-                    : anchors.at(-anchorLimit)!
-                  : Math.max(0, anchorIndex - options.rowLimit);
-              const visibleTurnItems = candidates.slice(start);
-              return {
-                ...snapshot,
-                projection: {
-                  ...snapshot.projection,
-                  visibleTurnItems,
-                },
-              };
-            }),
-          ),
+          Effect.map((snapshot) => {
+            const anchorIndex =
+              options.anchorItemId === undefined
+                ? snapshot.projection.visibleTurnItems.length
+                : snapshot.projection.visibleTurnItems.findIndex(
+                    (row) => row.sourceItemId === options.anchorItemId,
+                  ) + 1;
+            const candidates = snapshot.projection.visibleTurnItems.slice(0, anchorIndex);
+            const turnAnchors =
+              options.userTurnLimit === undefined
+                ? []
+                : candidates.flatMap((row, index) =>
+                    isThreadHistoryTurnStart(row.item) ? [index] : [],
+                  );
+            const rawStart = turnAnchors.at(-(THREAD_HISTORY_MAX_RAW_TURNS + 2)) ?? 0;
+            const anchors = turnAnchors.filter(
+              (index) => index >= rawStart && isThreadHistoryUserTurn(candidates[index]!.item),
+            );
+            const anchorLimit = (options.userTurnLimit ?? 0) + 2;
+            const start =
+              anchors.length > 0
+                ? anchors.length < anchorLimit
+                  ? rawStart
+                  : anchors.at(-anchorLimit)!
+                : Math.max(0, anchorIndex - options.rowLimit);
+            const visibleTurnItems = candidates.slice(start);
+            return {
+              ...snapshot,
+              projection: {
+                ...snapshot.projection,
+                visibleTurnItems,
+              },
+            };
+          }),
         ),
     };
 

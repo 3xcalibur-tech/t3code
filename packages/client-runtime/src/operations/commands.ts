@@ -782,7 +782,12 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
   let runId = input.runId ?? (input.turnId as RunId | undefined);
   if (runId === undefined) {
     const parentProjection = yield* getProjection(input.threadId);
-    runId = parentProjection.runs.at(-1)?.id;
+    runId =
+      parentProjection.runs.findLast((run) =>
+        ["preparing", "starting", "running", "waiting"].includes(run.status),
+      )?.id ??
+      parentProjection.runs.findLast((run) => run.status !== "queued")?.id ??
+      parentProjection.runs.at(-1)?.id;
     if (runId === undefined) {
       let result = { sequence: 0 };
       for (const link of visibleThreadPullRequests(parentProjection.thread.pullRequests ?? [])) {

@@ -438,7 +438,7 @@ export function layerWithRegistry<Error>(
     Layer.provide(layerOrchestratorProvided),
     Layer.provide(
       Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
-        ensureTranscript: () => Effect.void,
+        ensureTranscript: () => Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
       }),
     ),
   );

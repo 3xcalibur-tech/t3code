@@ -4196,14 +4196,16 @@ describe("orchestrator MCP toolkit", () => {
           archivedIntake: false,
           followupStatus,
         })),
-        ...(["server_wakes", "stop_idle", "stop_active"] as const).map((scenario) => ({
-          completionWake: "always" as const,
-          delayedDelivery: false,
-          closedCohort: false,
-          archivedIntake: false,
-          followupStatus: "completed" as const,
-          scenario,
-        })),
+        ...(["server_wakes", "stop_idle", "stop_active", "user_answer"] as const).map(
+          (scenario) => ({
+            completionWake: "always" as const,
+            delayedDelivery: false,
+            closedCohort: false,
+            archivedIntake: false,
+            followupStatus: "completed" as const,
+            scenario,
+          }),
+        ),
       ] as const
     ).map((testCase) => ({ scenario: "normal" as const, ...testCase })),
   )(
@@ -4455,8 +4457,11 @@ describe("orchestrator MCP toolkit", () => {
                 );
                 yield* orchestrator.dispatch({
                   type: "message.dispatch",
-                  createdBy: "agent",
-                  creationSource: "server",
+                  createdBy: source === undefined ? "user" : "agent",
+                  creationSource: source === undefined ? "web" : "server",
+                  ...(source === undefined
+                    ? { scheduledTaskId: ScheduledTaskId.make("automatic-schedule") }
+                    : {}),
                   commandId: CommandId.make(`wake-comparison:auto:${index}`),
                   threadId: worker.childThreadId!,
                   messageId: MessageId.make(`wake-comparison:auto:${index}`),
@@ -4490,8 +4495,8 @@ describe("orchestrator MCP toolkit", () => {
               );
               yield* orchestrator.dispatch({
                 type: "message.dispatch",
-                createdBy: "agent",
-                creationSource: "mcp",
+                createdBy: scenario === "user_answer" ? "user" : "agent",
+                creationSource: scenario === "user_answer" ? "server" : "mcp",
                 commandId: CommandId.make(`wake-comparison:followup:${index}`),
                 threadId: worker.childThreadId!,
                 messageId: MessageId.make(`wake-comparison:followup:${index}`),

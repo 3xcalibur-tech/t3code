@@ -20,6 +20,7 @@ import {
   RuntimeRequestId,
   RunAttemptId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
   TurnItemId,
   type ThreadPullRequestLink,
@@ -544,6 +545,13 @@ const followUpResultRecovery = Effect.gen(function* () {
         ...(yield* store.getThreadProjection(childId)).messages.at(-1)!,
         id: wake.userMessageId,
         runId: wake.id,
+        ...(source === undefined
+          ? {
+              creationSource: "web",
+              createdBy: "user",
+              scheduledTaskId: ScheduledTaskId.make("automatic-schedule"),
+            }
+          : {}),
         notification:
           source === undefined
             ? undefined

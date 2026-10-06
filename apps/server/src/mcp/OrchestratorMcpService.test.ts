@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  ScheduledTaskId,
   ThreadId,
   type OrchestrationV2ThreadProjection,
   type ServerProvider,
@@ -111,7 +112,11 @@ describe("OrchestratorMcpService", () => {
                   {
                     id: MessageId.make("message:mcp-ack-monitor"),
                     runId: monitorRunId,
-                    creationSource: "server",
+                    creationSource: wakeKind === "scheduled" ? "web" : "server",
+                    createdBy: wakeKind === "scheduled" ? "user" : "agent",
+                    ...(wakeKind === "scheduled"
+                      ? { scheduledTaskId: ScheduledTaskId.make("mcp-ack-schedule") }
+                      : {}),
                     role: "user",
                     ...(wakeKind === "scheduled"
                       ? {}
