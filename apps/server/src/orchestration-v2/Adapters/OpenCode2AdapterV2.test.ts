@@ -4424,6 +4424,7 @@ describe("OpenCode2 adapter", () => {
           },
         });
       const offers: Array<ProviderContinuationRequest> = [];
+      const bothOffered = yield* Deferred.make<void>();
       const { runtime, thread } = yield* resumed([
         ...backgroundLaunch(CHILD),
         event("session.tool.input.started", { ...toolB, name: "subagent" }),
@@ -4467,15 +4468,18 @@ describe("OpenCode2 adapter", () => {
         reply("session.interrupt", "<hang>"),
       ]).pipe(
         Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
-          offer: (request) => Effect.sync(() => void offers.push(request)),
+          offer: (request) =>
+            Effect.suspend(() =>
+              offers.push(request) === 2
+                ? Deferred.succeed(bothOffered, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
           take: Effect.never,
         }),
       );
       const ended = yield* terminals(runtime, 2);
       yield* runtime.startTurn(withLineage(thread));
-      yield* Effect.gen(function* () {
-        while (offers.length < 2) yield* Effect.yieldNow;
-      }).pipe(Effect.timeout("2 seconds"), Effect.orDie);
+      yield* Deferred.await(bothOffered);
       yield* runtime.startTurn(continuationTurn(thread, offers[1]!, "wake-b"));
       // B's reply replays and ends its turn while that Stop still waits.
       assert.deepEqual(
