@@ -420,11 +420,13 @@ export function openRunOwnedWorkFromProjection(input: {
       !(item.type === "subagent" && item.origin === "app_owned"),
   );
   return {
+    // A linked child's own subagents carry no run id, so they are taken by
+    // the thread they run on.
     subagents: new Map(
       rows((thread) => thread.subagents)
         .filter(
           (subagent) =>
-            subagent.runId === run.id &&
+            owns(subagent) &&
             subagent.origin === "provider_native" &&
             !isSettledSubagentStatus(subagent.status),
         )

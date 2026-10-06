@@ -127,6 +127,7 @@ function openTurnWork(
   const grandchildThreadId = providerNativeChildThreadId(childThreadId);
   const childApprovalNodeId = NodeId.make(`node:child-approval:${input.attemptId}`);
   const childRequestId = RuntimeRequestId.make(`request:child-approval:${input.attemptId}`);
+  const nestedRunningSubagentId = NodeId.make(`node:nested-running-subagent:${input.attemptId}`);
   const requestId = RuntimeRequestId.make(`request:approval:${input.attemptId}`);
   return [
     {
@@ -352,6 +353,54 @@ function openTurnWork(
         childThreadId: grandchildThreadId,
         prompt: "Search for TODOs",
         result: "done",
+      },
+    },
+    // Another subagent it launched is still running. Like every row on the
+    // subagent's thread, it carries no run id.
+    {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        id: nestedRunningSubagentId,
+        threadId: childThreadId,
+        runId: null,
+        parentNodeId: subagentNodeId,
+        origin: "provider_native",
+        createdBy: "agent",
+        driver,
+        providerInstanceId: input.modelSelection.instanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        prompt: "Read the docs",
+        title: null,
+        model: null,
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    },
+    {
+      type: "turn_item.updated",
+      driver,
+      turnItem: {
+        ...base,
+        id: TurnItemId.make(`turn-item:nested-running-subagent:${input.attemptId}`),
+        threadId: childThreadId,
+        runId: null,
+        nodeId: null,
+        ordinal: 4,
+        status: "running",
+        type: "subagent",
+        subagentId: nestedRunningSubagentId,
+        origin: "provider_native",
+        driver,
+        providerInstanceId: input.modelSelection.instanceId,
+        childThreadId: null,
+        prompt: "Read the docs",
+        result: null,
       },
     },
     {
@@ -884,6 +933,7 @@ it.live("settles the work a restarted run inherited when its replacement never o
         nativeChildItems,
         nativeChildStreaming,
         nativeChildRequests,
+        nativeChildSubagents,
         nativeGrandchildItems,
         delegatedItems,
       } = yield* Effect.gen(function* () {
@@ -1051,6 +1101,9 @@ it.live("settles the work a restarted run inherited when its replacement never o
           nativeChildRequests: (yield* orchestrator.getThreadProjection(
             providerNativeChildThreadId(threadId),
           )).runtimeRequests.map((request) => request.status),
+          nativeChildSubagents: (yield* orchestrator.getThreadProjection(
+            providerNativeChildThreadId(threadId),
+          )).subagents.map((subagent) => subagent.status),
           nativeGrandchildItems: openItems(
             yield* orchestrator.getThreadProjection(
               providerNativeChildThreadId(providerNativeChildThreadId(threadId)),
@@ -1088,10 +1141,13 @@ it.live("settles the work a restarted run inherited when its replacement never o
       assert.deepEqual(nativeChildItems, [
         ["approval_request", "cancelled"],
         ["subagent", "completed"],
+        ["subagent", "cancelled"],
         ["command_execution", "cancelled"],
       ]);
       assert.isFalse(nativeChildStreaming);
       assert.deepEqual(nativeChildRequests, ["cancelled"]);
+      // A subagent the provider-native subagent launched ends with it.
+      assert.deepEqual(nativeChildSubagents, ["cancelled"]);
       assert.deepEqual(nativeGrandchildItems, [["command_execution", "cancelled"]]);
       // The delegated task and its thread keep running.
       assert.deepEqual(
