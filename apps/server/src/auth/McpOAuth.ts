@@ -1,5 +1,3 @@
-import * as NodeCrypto from "node:crypto";
-
 import {
   AuthAccessWriteScope,
   type AuthMcpApprovalDecision,
@@ -146,13 +144,6 @@ const sameResource = (urls: McpOAuthUrls, presented: string | undefined): boolea
   }
 };
 
-const pkceVerifies = (verifier: string, challenge: string): boolean =>
-  CODE_VERIFIER_PATTERN.test(verifier) &&
-  timingSafeEqualBase64Url(
-    NodeCrypto.createHash("sha256").update(verifier).digest("base64url"),
-    challenge,
-  );
-
 const ClientIdPayload = Schema.Struct({
   v: Schema.Literal(1),
   n: Schema.String,
@@ -295,6 +286,14 @@ const make = Effect.gen(function* () {
       ),
     );
   };
+
+  const pkceVerifies = (verifier: string, challenge: string) =>
+    CODE_VERIFIER_PATTERN.test(verifier)
+      ? crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(
+          Effect.orDie,
+          Effect.map((digest) => timingSafeEqualBase64Url(base64UrlEncode(digest), challenge)),
+        )
+      : Effect.succeed(false);
 
   const csrfToken = (sessionId: string, authorization: AuthorizationRequest) =>
     sign(
@@ -519,7 +518,7 @@ const make = Effect.gen(function* () {
         pending.redirectUri !== redirectUri ||
         pending.resource !== urls.resource ||
         !sameResource(urls, token.resource) ||
-        !pkceVerifies(verifier, pending.codeChallenge)
+        !(yield* pkceVerifies(verifier, pending.codeChallenge))
       ) {
         return yield* fail("invalid_grant", "The authorization code is invalid or expired.");
       }
