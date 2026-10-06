@@ -1,11 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as ClientIntents from "../../../clientIntents.ts";
-import { readThread } from "../../threadAccess.ts";
+import { readMutationCaller, readThread } from "../../threadAccess.ts";
 import { ClientToolkit } from "./tools.ts";
 
 export const layer = ClientToolkit.toLayer({
   t3_client_open_thread: (input) =>
     Effect.gen(function* () {
+      yield* readMutationCaller();
       const {
         scope,
         projection: { thread },

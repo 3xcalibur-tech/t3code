@@ -1,10 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { createEnvironmentRpcSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
+import { subscribeDynamic } from "@t3tools/client-runtime/rpc";
+import { createEnvironmentSubscriptionAtomFamily } from "@t3tools/client-runtime/state/runtime";
 import { WS_METHODS, type EnvironmentId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { clientIntentWindowId } from "~/lib/backgroundActivityReporter";
 import { connectionAtomRuntime } from "~/connection/runtime";
@@ -13,9 +15,15 @@ import type { AppRouter } from "~/router";
 import { useEnvironments } from "~/state/environments";
 import { buildThreadRouteParams } from "~/threadRoutes";
 
-const clientIntents = createEnvironmentRpcSubscriptionAtomFamily(connectionAtomRuntime, {
+const clientIntents = createEnvironmentSubscriptionAtomFamily(connectionAtomRuntime, {
   label: "environment-data:client-intents",
-  tag: WS_METHODS.subscribeClientIntents,
+  subscribe: () =>
+    subscribeDynamic(WS_METHODS.subscribeClientIntents, () =>
+      Effect.sync(() => ({
+        clientId: clientIntentWindowId,
+        focused: document.hasFocus(),
+      })),
+    ),
   // Intents are commands, not cached data: a remount must not replay the last one.
   idleTtlMs: 0,
 });
@@ -41,12 +49,8 @@ function ClientIntentHost(props: {
   readonly router: AppRouter;
 }) {
   const { environmentId, router } = props;
-  const input = useMemo(
-    () => ({ clientId: clientIntentWindowId, focused: document.hasFocus() }),
-    [],
-  );
   const intent = Option.getOrNull(
-    AsyncResult.value(useAtomValue(clientIntents({ environmentId, input }))),
+    AsyncResult.value(useAtomValue(clientIntents({ environmentId, input: {} }))),
   );
   const handledIntentIdRef = useRef<string | null>(null);
   useEffect(() => {

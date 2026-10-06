@@ -353,7 +353,7 @@ const ThreadComment = Schema.Struct({
 
 const ReadPullRequestTool = Tool.make("t3_pull_request_read", {
   description:
-    "Read a pull request from its host (pass url, or repository plus number; threadId picks the project whose credentials are used, default this thread). section: overview (default: title, body, state, branches, mergeability, reviewers, labels, checks), checks (current check runs), conversation (comments and line review threads with resolution state; spend the text budget on unresolved threads and the newest comments first), or review_thread (more comments of one review thread: pass reviewThreadId and the cursor from its nextCommentsCursor). Text is cut to maxCharacters in total (default 20,000, max 100,000) with truncated set when cut. Check logs are not available; follow a check's url.",
+    "Read a pull request from its host (pass url, or repository plus number; threadId picks the project whose credentials are used, default this thread). section: overview (default: title, body, state, branches, mergeability, reviewers, labels, checks), checks (current check runs), conversation (comments and line review threads with resolution state; spend the text budget on unresolved threads and the newest comments first), or review_thread (more comments of one review thread: pass reviewThreadId and the cursor from its nextCommentsCursor). Display text is cut to maxCharacters in total (default 20,000, max 100,000) with truncated set when cut; identifiers, URLs, timestamps, cursors, and enum values stay intact. Check logs are not available; follow a check's url.",
   parameters: Schema.Struct({
     ...PullRequestTargetInput.fields,
     section: Schema.optional(
@@ -386,10 +386,12 @@ const ReadPullRequestTool = Tool.make("t3_pull_request_read", {
         updatedAt: Schema.String,
         reviewers: Schema.Array(Schema.String),
         labels: Schema.Array(Schema.String),
-        checks: Schema.Array(PullRequestCheck),
+        checks: Schema.Array(Schema.Struct({ ...PullRequestCheck.fields, name: Schema.String })),
       }),
     ),
-    checks: Schema.NullOr(Schema.Array(PullRequestCheck)),
+    checks: Schema.NullOr(
+      Schema.Array(Schema.Struct({ ...PullRequestCheck.fields, name: Schema.String })),
+    ),
     conversation: Schema.NullOr(
       Schema.Struct({
         /** The host's own count, which can exceed what was read. */

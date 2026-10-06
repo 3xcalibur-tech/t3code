@@ -464,9 +464,10 @@ const make = Effect.gen(function* () {
         const budget = textBudget(input.maxCharacters ?? DEFAULT_PULL_REQUEST_CHARACTERS);
         const empty = { overview: null, checks: null, conversation: null, reviewThread: null };
         const login = (actor: { readonly login: string } | null | undefined) =>
-          actor?.login ?? null;
+          actor == null ? null : budget.take(actor.login);
         const checkOf = (check: PullRequestCheck) => ({
           ...check,
+          name: budget.take(check.name),
           description: check.description === null ? null : budget.take(check.description),
         });
         const threadComment = (comment: PullRequestThreadComment) => ({
@@ -480,13 +481,13 @@ const make = Effect.gen(function* () {
           case "overview": {
             const detail = yield* service.detail(ref).pipe(Effect.mapError(hostFailure));
             const overview = {
-              title: detail.title,
+              title: budget.take(detail.title),
               body: budget.take(detail.body),
               state: detail.state,
               isDraft: detail.isDraft,
               author: login(detail.author),
-              headBranch: detail.headBranch,
-              baseBranch: detail.baseBranch,
+              headBranch: budget.take(detail.headBranch),
+              baseBranch: budget.take(detail.baseBranch),
               mergeability: detail.mergeability,
               baseComparison: detail.baseComparison ?? null,
               autoMergeEnabled: detail.autoMergeEnabled ?? null,
@@ -495,8 +496,8 @@ const make = Effect.gen(function* () {
               changedFiles: detail.changedFiles,
               createdAt: detail.createdAt,
               updatedAt: detail.updatedAt,
-              reviewers: detail.reviewers.map((reviewer) => reviewer.login),
-              labels: detail.labels.map((label) => label.name),
+              reviewers: detail.reviewers.map((reviewer) => budget.take(reviewer.login)),
+              labels: detail.labels.map((label) => budget.take(label.name)),
               checks: detail.checks.map(checkOf),
             };
             return { ...target, ...empty, overview, truncated: budget.truncated };
@@ -510,7 +511,7 @@ const make = Effect.gen(function* () {
             const activity = yield* service.activity(ref).pipe(Effect.mapError(hostFailure));
             const reviewThreadOf = (thread: PullRequestReviewThread) => ({
               id: thread.id,
-              path: thread.path,
+              path: budget.take(thread.path),
               line: thread.line,
               side: thread.side,
               isResolved: thread.isResolved,
@@ -529,7 +530,7 @@ const make = Effect.gen(function* () {
               .map((comment) => ({
                 ...threadComment(comment),
                 kind: comment.kind,
-                path: comment.path,
+                path: comment.path === null ? null : budget.take(comment.path),
                 reviewState: comment.reviewState,
               }))
               .toReversed();
@@ -540,7 +541,10 @@ const make = Effect.gen(function* () {
               ...target,
               ...empty,
               conversation: { commentCount: activity.commentCount, comments, reviewThreads },
-              truncated: budget.truncated || activity.commentsTruncated,
+              truncated:
+                budget.truncated ||
+                activity.commentsTruncated ||
+                activity.reviewThreadsTruncated === true,
             };
           }
           case "review_thread": {
