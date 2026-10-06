@@ -63,11 +63,11 @@ import {
   CURSOR_ACCOUNT_CACHE_FILE_NAME,
   CURSOR_ACCOUNT_TTL_MS,
   CursorAccountReader,
-  cursorFetchRanges,
+  cursorFetchRange,
   decodeCursorAccountCaches,
   encodeCursorAccountCaches,
   isCursorCacheFresh,
-  mergeCursorFetches,
+  mergeCursorFetch,
   type CursorAccountCache,
   type CursorCredentialSource,
 } from "./cursorAccountCache.ts";
@@ -229,16 +229,8 @@ export const make = Effect.gen(function* () {
     string,
     { readonly atMs: number; readonly error: string | null }
   >();
-  /**
-   * The newest refresh per credential source. A request for a window it
-   * covers joins it; a wider one queues its own behind it.
-   */
-  const cursorRefreshes = new Map<
-    string,
-    { readonly windowStartMs: number; readonly done: Deferred.Deferred<void> }
-  >();
-  // A refresh reads, extends and replaces the cache; two must not interleave.
-  const cursorLock = yield* Semaphore.make(1);
+  /** The refresh in flight per credential source, which every read joins. */
+  const cursorRefreshes = new Map<string, Deferred.Deferred<void>>();
   const isWithinDirectory = (filePath: string, dir: string) => {
     const relative = path.relative(dir, filePath);
     return relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
@@ -658,81 +650,75 @@ export const make = Effect.gen(function* () {
     return { provider, dir, volumeId, files: parsedFiles } satisfies ScannedDir;
   });
 
-  /** Fetches what one account cache is missing for the window, then persists it. */
+  /** Fetches what one account cache is missing, then persists it if anything changed. */
   const refreshCursorAccount = Effect.fn("UsageService.refreshCursorAccount")(function* (
     credential: CursorCredentialSource,
     credentialKey: string,
-    windowStartMs: number,
+    retentionStartMs: number,
   ) {
     const nowMs = yield* Clock.currentTimeMillis;
-    const fetchMissing = (cache: CursorAccountCache | undefined) =>
-      Effect.forEach(
-        cursorFetchRanges(cache, windowStartMs, nowMs),
-        (range) =>
-          readCursorAccount(credential, range.sinceMs, range.untilMs).pipe(
-            Effect.map((result) => ({ range, result })),
-          ),
-        { concurrency: "unbounded" },
+    const fetchMissing = (cache: CursorAccountCache | undefined) => {
+      const range = cursorFetchRange(cache, retentionStartMs, nowMs);
+      return readCursorAccount(credential, range.sinceMs, range.untilMs).pipe(
+        Effect.map((result) => ({ range, result })),
       );
-    const cached = cursorCaches.get(credentialKey);
-    let base = cached;
+    };
+    let base = cursorCaches.get(credentialKey);
     let fetched = yield* fetchMissing(base);
-    // A refresh queued behind another can find nothing left to fetch.
-    if (fetched.length === 0) return;
     // Another login's history replaces the cached account's, even if reading it fails.
     if (
-      cached !== undefined &&
-      fetched.some(
-        ({ result }) => result.accountKey !== null && result.accountKey !== cached.accountKey,
-      )
+      base !== undefined &&
+      fetched.result.accountKey !== null &&
+      fetched.result.accountKey !== base.accountKey
     ) {
       cursorCaches.delete(credentialKey);
       cursorCacheDirty = true;
       base = undefined;
       fetched = yield* fetchMissing(base);
     }
-    const failed = fetched.find(({ result }) => result.missing || result.error !== null)?.result;
-    const accountKey = fetched[0]?.result.accountKey ?? null;
-    if (failed !== undefined || accountKey === null) {
+    const { range, result } = fetched;
+    if (result.missing || result.error !== null || result.accountKey === null) {
       cursorFailures.set(credentialKey, {
         atMs: nowMs,
-        error: failed === undefined ? CURSOR_ACCOUNT_READ_ERROR : failed.error,
+        error: result.missing || result.error !== null ? result.error : CURSOR_ACCOUNT_READ_ERROR,
       });
       yield* schedulePersist;
       return;
     }
-    cursorCaches.set(
-      credentialKey,
-      mergeCursorFetches(
-        base,
-        accountKey,
-        fetched.map(({ range, result }) => ({ range, records: result.records })),
-        nowMs,
-        nowMs - CACHE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-      ),
+    const merged = mergeCursorFetch(
+      base,
+      result.accountKey,
+      range,
+      result.records,
+      nowMs,
+      retentionStartMs,
     );
+    cursorCaches.set(credentialKey, merged.cache);
     cursorFailures.delete(credentialKey);
-    cursorCacheDirty = true;
-    yield* schedulePersist;
+    // An unchanged edge is not worth rewriting the file for: after a restart
+    // the cache just refetches a slightly wider edge.
+    if (merged.changed) {
+      cursorCacheDirty = true;
+      yield* schedulePersist;
+    }
   });
 
-  /** Joins the newest refresh when it covers the window, or starts one. */
+  /** Joins the refresh in flight, or starts one. */
   const startCursorRefresh = (
     credential: CursorCredentialSource,
     credentialKey: string,
-    windowStartMs: number,
+    retentionStartMs: number,
   ) =>
     // Enrollment and fork are atomic, so an interrupted caller cannot leave a
     // registered refresh that nothing will finish.
     Effect.uninterruptible(
       Effect.gen(function* () {
         const current = cursorRefreshes.get(credentialKey);
-        if (current !== undefined && current.windowStartMs <= windowStartMs) return current.done;
-        const refresh = { windowStartMs, done: Deferred.makeUnsafe<void>() };
-        cursorRefreshes.set(credentialKey, refresh);
+        if (current !== undefined) return current;
+        const done = Deferred.makeUnsafe<void>();
+        cursorRefreshes.set(credentialKey, done);
         // Detached: a departing client must not cancel a fetch later reads reuse.
-        yield* refreshCursorAccount(credential, credentialKey, windowStartMs).pipe(
-          cursorLock.withPermit,
+        yield* refreshCursorAccount(credential, credentialKey, retentionStartMs).pipe(
           Effect.catchCause(() =>
             Clock.currentTimeMillis.pipe(
               Effect.map((atMs) =>
@@ -742,15 +728,13 @@ export const make = Effect.gen(function* () {
           ),
           Effect.ensuring(
             Effect.suspend(() => {
-              if (cursorRefreshes.get(credentialKey) === refresh) {
-                cursorRefreshes.delete(credentialKey);
-              }
-              return Deferred.succeed(refresh.done, undefined);
+              cursorRefreshes.delete(credentialKey);
+              return Deferred.succeed(done, undefined);
             }),
           ),
           Effect.forkDetach,
         );
-        return refresh.done;
+        return done;
       }),
     );
 
@@ -763,6 +747,7 @@ export const make = Effect.gen(function* () {
     credential: CursorCredentialSource,
     authPath: string,
     windowStartMs: number,
+    retentionStartMs: number,
     awaitRefresh: boolean,
   ) {
     // No saved login means there is no account source to report, not a setup error.
@@ -778,9 +763,9 @@ export const make = Effect.gen(function* () {
     let refreshing = false;
     if (
       (recentFailure === undefined || nowMs - recentFailure.atMs >= CURSOR_ACCOUNT_TTL_MS) &&
-      !isCursorCacheFresh(cursorCaches.get(credentialKey), windowStartMs, nowMs)
+      !isCursorCacheFresh(cursorCaches.get(credentialKey), nowMs)
     ) {
-      const refresh = yield* startCursorRefresh(credential, credentialKey, windowStartMs);
+      const refresh = yield* startCursorRefresh(credential, credentialKey, retentionStartMs);
       if (awaitRefresh) yield* Deferred.await(refresh);
       else refreshing = true;
     }
@@ -986,9 +971,8 @@ export const make = Effect.gen(function* () {
       const source = yield* cursorAccountSource(
         useKeychain ? { kind: "keychain" } : cursorAuthPath,
         cursorAuthPath,
-        // Clamped to the retention, which prunes the cache: a wider start
-        // would never be covered and would refetch on every read.
-        Math.max(windowStartMs, retentionCutoffMs),
+        windowStartMs,
+        retentionCutoffMs,
         awaitRefresh,
       );
       return source === null ? [] : [source];

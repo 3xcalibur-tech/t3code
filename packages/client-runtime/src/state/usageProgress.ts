@@ -17,18 +17,16 @@ interface UsageProgressEnvironment {
  * - `partway`: answered this round while slow sources finish refreshing.
  * - `ready`: answered.
  *
- * `refreshingFrom` holds the summaries on screen when a manual refresh began.
- * They count as stale until replaced, since the refresh reaches each query only
- * after its environment refreshes pricing.
+ * While a manual `refreshing` runs, every summary counts as stale.
  */
 export function usageEnvironmentProgress(
   environment: UsageProgressEnvironment,
-  refreshingFrom: ReadonlySet<UsageSummary> | null = null,
+  refreshing = false,
 ) {
   const { summary } = environment;
   if (!environment.isConnected || environment.error !== null) return { phase: "inactive" } as const;
   if (summary === null) return { phase: "loading" } as const;
-  if (refreshingFrom?.has(summary)) return { phase: "stale" } as const;
+  if (refreshing) return { phase: "stale" } as const;
   // A refreshing source without a pending follow-up has nothing left to wait on.
   if (!environment.isPending) return { phase: "ready" } as const;
   const providers = [
@@ -60,16 +58,16 @@ export function updatingProvidersLabel(
 export function usageProgress(
   environments: readonly UsageProgressEnvironment[],
   {
-    refreshingFrom = null,
+    refreshing = false,
     providerLabel,
   }: {
-    readonly refreshingFrom?: ReadonlySet<UsageSummary> | null;
+    readonly refreshing?: boolean;
     readonly providerLabel: (provider: UsageProviderKind) => string;
   },
 ) {
   const progress = environments.map((environment) => ({
     label: environment.label,
-    ...usageEnvironmentProgress(environment, refreshingFrom),
+    ...usageEnvironmentProgress(environment, refreshing),
   }));
   const waiting = progress.filter(({ phase }) => phase === "loading" || phase === "stale");
   const providers = [
@@ -101,12 +99,12 @@ export function usageProgress(
  */
 export function usageLoadingState(
   environments: readonly UsageProgressEnvironment[],
-  refreshingFrom: ReadonlySet<UsageSummary> | null = null,
+  refreshing = false,
 ) {
   const providers = new Set<UsageProviderKind>();
   let everyProvider = false;
   for (const environment of environments) {
-    const progress = usageEnvironmentProgress(environment, refreshingFrom);
+    const progress = usageEnvironmentProgress(environment, refreshing);
     if (progress.phase === "loading") everyProvider = true;
     if (progress.phase === "partway")
       for (const provider of progress.providers) providers.add(provider);

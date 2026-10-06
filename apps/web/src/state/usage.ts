@@ -19,7 +19,7 @@ import { needsCursorKeychainAccess, refreshUsage } from "@t3tools/client-runtime
 import { resolveUsageAccess } from "@t3tools/client-runtime/state/usage-access";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@t3tools/shared/usageMerge";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -96,6 +96,11 @@ export interface UsageView {
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   /** True until at least one selected environment has answered. */
   readonly isPending: boolean;
+  /**
+   * The usage to draw: this window's once a selected environment answers,
+   * until then the last window answered for the same selection, else null.
+   */
+  readonly shown: { readonly window: UsageSummaryInput; readonly merged: MergedUsage } | null;
   /**
    * True while environments that have not failed are still answering. Failed
    * environments are reported through their own error rows: totals will not
@@ -195,12 +200,33 @@ export function useUsage(
   const stillReporting = selectedEnvironments.filter(
     (environment) => environment.summary === null && environment.error === null,
   ).length;
+  const isPending = answeredCount === 0 && stillReporting > 0;
+
+  // Stored during render, as React recommends for state that follows props, so
+  // the kept usage is on screen in the same frame the new window starts pending.
+  const [lastAnswered, setLastAnswered] = useState<
+    (NonNullable<UsageView["shown"]> & { readonly selection: typeof selectedEnvironmentIds }) | null
+  >(null);
+  if (
+    !isPending &&
+    (lastAnswered?.merged !== merged ||
+      lastAnswered.window !== input ||
+      lastAnswered.selection !== selectedEnvironmentIds)
+  ) {
+    setLastAnswered({ window: input, merged, selection: selectedEnvironmentIds });
+  }
+  const shown = !isPending
+    ? { window: input, merged }
+    : lastAnswered?.selection === selectedEnvironmentIds
+      ? lastAnswered
+      : null;
 
   return {
     merged,
     environments,
     selectedEnvironments,
-    isPending: answeredCount === 0 && stillReporting > 0,
+    isPending,
+    shown,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
   };

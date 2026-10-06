@@ -163,8 +163,8 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 /** Inside `WINDOW`: the time Cursor tests run at. */
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
 const HOUR_MS = 60 * 60 * 1000;
-/** `WINDOW` starts at its first midnight, less the service's 36-hour slack. */
-const CURSOR_WINDOW_START = Date.parse("2026-07-31T00:00:00Z") - 36 * HOUR_MS;
+/** The service's cache retention, which the Cursor account cache always covers. */
+const CURSOR_RETENTION_MS = 90 * 24 * HOUR_MS;
 
 /**
  * Stands in for Cursor's dashboard API. Each read returns the account's events
@@ -411,7 +411,7 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
-  it.live("refetches only the Cursor history its cache is missing", () =>
+  it.live("caches Cursor's whole retention and then refetches only the newest edge", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
       yield* writeCursorLogin(home);
@@ -419,6 +419,7 @@ describe("UsageService", () => {
       const cursor = makeFakeCursor();
       // Two identical billed rows inside the refetched hour must both survive it, once each.
       cursor.state.events = [
+        { timestampMs: Date.parse("2026-07-10T10:00:00Z"), outputTokens: 17 },
         { timestampMs: CURSOR_NOW - 24 * HOUR_MS, outputTokens: 5 },
         { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
         { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
@@ -431,8 +432,13 @@ describe("UsageService", () => {
           service.readSummary({ ...input, awaitRefresh: true });
         assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 19);
         assert.deepStrictEqual(cursor.state.calls, [
-          { sinceMs: CURSOR_WINDOW_START, untilMs: CURSOR_NOW },
+          { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
         ]);
+
+        // A wider window is answered from the same cache.
+        const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
+        assert.strictEqual(totalOutputTokens(yield* read(wide)), 36);
+        assert.strictEqual(cursor.state.calls.length, 1);
 
         // An event finalized late, inside the overlap, and a new one.
         cursor.state.events.push(
@@ -446,25 +452,11 @@ describe("UsageService", () => {
           untilMs: CURSOR_NOW + 2 * HOUR_MS,
         });
 
-        // A wider window fetches only the older history.
-        const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
-        cursor.state.events.push({
-          timestampMs: Date.parse("2026-07-10T10:00:00Z"),
-          outputTokens: 17,
-        });
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
-        assert.deepStrictEqual(cursor.state.calls.slice(2), [
-          {
-            sinceMs: Date.parse("2026-07-01T00:00:00Z") - 36 * HOUR_MS,
-            untilMs: CURSOR_WINDOW_START,
-          },
-        ]);
-
         // Another login replaces the cached account's history instead of adding to it.
         cursor.state.accountKey = "account-b";
         yield* TestClock.adjust(Duration.minutes(2));
         assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
-        assert.strictEqual(cursor.state.calls.length, 5);
+        assert.strictEqual(cursor.state.calls.length, 4);
         assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
       }).pipe(
         Effect.provide(

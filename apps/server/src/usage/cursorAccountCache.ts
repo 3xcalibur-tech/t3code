@@ -2,9 +2,8 @@
  * Cursor account usage, cached per credential source.
  *
  * Cursor's dashboard API takes about 20 seconds for a 30-day window, so fetched
- * records are kept with the time range they are complete for, and a refresh
- * fetches only what the cache is missing: the newest edge, and older history
- * when a wider window is asked for.
+ * records are kept for the whole retention period, whatever window was asked
+ * for. After one full fetch, a refresh fetches only the newest edge.
  *
  * A record's dedupe key carries its timestamp and an occurrence index counted
  * within one fetch. A refetched range therefore replaces every cached record in
@@ -52,84 +51,66 @@ interface CursorFetchRange {
   readonly untilMs: number;
 }
 
-/** Whether the cache answers a window without a refresh. */
+/** Whether the cache answers without a refresh. */
 export function isCursorCacheFresh(
   cache: CursorAccountCache | undefined,
-  windowStartMs: number,
   nowMs: number,
 ): cache is CursorAccountCache {
-  return (
-    cache !== undefined &&
-    nowMs - cache.fetchedAtMs < CURSOR_ACCOUNT_TTL_MS &&
-    cache.sinceMs <= windowStartMs
-  );
+  return cache !== undefined && nowMs - cache.fetchedAtMs < CURSOR_ACCOUNT_TTL_MS;
 }
 
 /**
- * Ranges to fetch so the cache covers `[windowStartMs, nowMs]`. A cache that
- * ends before the window starts is useless; its replacement is a full fetch.
+ * The range to fetch so the cache covers `[retentionStartMs, nowMs]`: the
+ * newest edge, or everything when the cache does not reach back that far.
  */
-export function cursorFetchRanges(
+export function cursorFetchRange(
   cache: CursorAccountCache | undefined,
-  windowStartMs: number,
+  retentionStartMs: number,
   nowMs: number,
-): readonly CursorFetchRange[] {
-  if (cache === undefined || cache.untilMs - REFETCH_OVERLAP_MS < windowStartMs) {
-    return [{ sinceMs: windowStartMs, untilMs: nowMs }];
-  }
-  const ranges: CursorFetchRange[] = [];
-  if (nowMs - cache.fetchedAtMs >= CURSOR_ACCOUNT_TTL_MS) {
-    ranges.push({
-      sinceMs: Math.max(cache.sinceMs, cache.untilMs - REFETCH_OVERLAP_MS),
-      untilMs: nowMs,
-    });
-  }
-  if (windowStartMs < cache.sinceMs) {
-    ranges.push({ sinceMs: windowStartMs, untilMs: cache.sinceMs });
-  }
-  return ranges;
+): CursorFetchRange {
+  return cache === undefined ||
+    cache.sinceMs > retentionStartMs ||
+    cache.untilMs - REFETCH_OVERLAP_MS < retentionStartMs
+    ? { sinceMs: retentionStartMs, untilMs: nowMs }
+    : { sinceMs: cache.untilMs - REFETCH_OVERLAP_MS, untilMs: nowMs };
 }
 
 /**
- * Applies fetched ranges to the cache, each replacing the cached records it
- * covers. A range that does not touch the covered range starts the cache over,
- * since the gap between them was never fetched. Pass `undefined` for a cache
- * that belongs to another account.
+ * Applies a fetched range to the cache, replacing the cached records it covers
+ * and dropping those before the retention start. Pass `undefined` for a cache
+ * that belongs to another account. `changed` is false when the fetch only
+ * confirmed the cached records, so there is nothing new to persist.
  */
-export function mergeCursorFetches(
+export function mergeCursorFetch(
   cache: CursorAccountCache | undefined,
   accountKey: string,
-  fetches: readonly {
-    readonly range: CursorFetchRange;
-    readonly records: readonly UsageRecord[];
-  }[],
+  range: CursorFetchRange,
+  fetched: readonly UsageRecord[],
   nowMs: number,
-  retentionCutoffMs: number,
-): CursorAccountCache {
-  let records = cache?.records ?? [];
-  let sinceMs = cache?.sinceMs ?? Number.POSITIVE_INFINITY;
-  let untilMs = cache?.untilMs ?? Number.NEGATIVE_INFINITY;
-  let fetchedAtMs = cache?.fetchedAtMs ?? nowMs;
-  for (const { range, records: fetched } of fetches) {
-    if (range.sinceMs > untilMs || range.untilMs < sinceMs) {
-      records = [];
-      sinceMs = Number.POSITIVE_INFINITY;
-      untilMs = Number.NEGATIVE_INFINITY;
-    }
-    const inRange = (record: UsageRecord) =>
-      record.timestampMs >= range.sinceMs && record.timestampMs <= range.untilMs;
-    records = [...records.filter((record) => !inRange(record)), ...fetched.filter(inRange)];
-    sinceMs = Math.min(sinceMs, range.sinceMs);
-    if (range.untilMs >= untilMs) {
-      untilMs = range.untilMs;
-      fetchedAtMs = nowMs;
-    }
-  }
-  if (sinceMs < retentionCutoffMs) {
-    sinceMs = retentionCutoffMs;
-    records = records.filter((record) => record.timestampMs >= retentionCutoffMs);
-  }
-  return { accountKey, sinceMs, untilMs, fetchedAtMs, records };
+  retentionStartMs: number,
+) {
+  const inRange = (record: UsageRecord) =>
+    record.timestampMs >= range.sinceMs && record.timestampMs <= range.untilMs;
+  const previous = cache?.records ?? [];
+  const added = fetched.filter(inRange);
+  const replacedKeys = new Set(previous.filter(inRange).map((record) => record.dedupeKey));
+  const changed =
+    cache === undefined ||
+    replacedKeys.size !== added.length ||
+    added.some((record) => !replacedKeys.has(record.dedupeKey));
+  return {
+    changed,
+    cache: {
+      accountKey,
+      sinceMs: retentionStartMs,
+      untilMs: range.untilMs,
+      fetchedAtMs: nowMs,
+      records: [
+        ...previous.filter((record) => !inRange(record) && record.timestampMs >= retentionStartMs),
+        ...added,
+      ],
+    } satisfies CursorAccountCache,
+  };
 }
 
 /**

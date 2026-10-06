@@ -7,8 +7,6 @@ import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type UsageProviderKind,
-  type UsageSummary,
-  type UsageSummaryInput,
 } from "@t3tools/contracts";
 import { CircleAlertIcon, ChevronDownIcon, InfoIcon, SlidersHorizontalIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
@@ -65,6 +63,7 @@ import {
 import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
+import { Skeleton } from "../ui/skeleton";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -133,9 +132,7 @@ export function UsagePage() {
   }));
   const metric = preferences.metric;
   const showingLimits = metric === "limits";
-  // Summaries on screen when a manual refresh began; empty while limits refresh.
-  const [refreshingFrom, setRefreshingFrom] = useState<ReadonlySet<UsageSummary> | null>(null);
-  const isRefreshing = refreshingFrom !== null;
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const refreshingRef = useRef(false);
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
@@ -150,33 +147,22 @@ export function UsagePage() {
     environments,
     selectedEnvironments,
     isPending,
+    shown,
     isPartial,
     refresh,
   } = useUsage(window, selectedEnvironmentIds);
-  // Captured when the window changes: until the new window's first answer, the
-  // previous usage stays on screen, muted, so the chart can move between them.
-  const [keptUsage, setKeptUsage] = useState<{
-    readonly window: UsageSummaryInput;
-    readonly merged: MergedUsage;
-    readonly selection: ReadonlySet<EnvironmentId> | null;
-  } | null>(null);
-  // Nothing renders until some environment answers: only then is the provider
-  // list known.
-  const shown = !isPending
-    ? { window, merged: answeredUsage }
-    : keptUsage?.selection === selectedEnvironmentIds
-      ? keptUsage
-      : null;
+  // Until a new window's first answer, the previous one stays on screen, muted.
   const merged = shown?.merged ?? answeredUsage;
   const shownWindow = shown?.window ?? window;
   const shownHourly = shownWindow.resolution === "hour";
+  const refreshingUsage = isRefreshing && !showingLimits;
   // Kept usage is all old, so every figure waits on the new window.
   const loading = useMemo(
     () =>
       isPending
         ? { partial: true, everyProvider: true, providers: new Set<UsageProviderKind>() }
-        : usageLoadingState(selectedEnvironments, refreshingFrom),
-    [isPending, refreshingFrom, selectedEnvironments],
+        : usageLoadingState(selectedEnvironments, refreshingUsage),
+    [isPending, refreshingUsage, selectedEnvironments],
   );
   const isProviderLoading = (provider: UsageProviderKind) =>
     loading.everyProvider || loading.providers.has(provider);
@@ -270,18 +256,8 @@ export function UsagePage() {
   );
   const timeValueColumnWidth = `${60 / (activeProviders.length + 2)}%`;
 
-  const keepShownUsage = () => {
-    if (shown !== null) {
-      setKeptUsage({
-        window: shown.window,
-        merged: shown.merged,
-        selection: selectedEnvironmentIds,
-      });
-    }
-  };
   const selectWindow = (days: number) => {
     if (!isUsageWindowDays(days)) return;
-    keepShownUsage();
     const nextPreferences = { metric, windowDays: days };
     setPreferences(nextPreferences);
     saveUsagePagePreferences(nextPreferences);
@@ -346,10 +322,10 @@ export function UsagePage() {
 
     if (showingLimits) {
       refreshingRef.current = true;
-      setRefreshingFrom(new Set());
+      setIsRefreshing(true);
       void refreshLimits().finally(() => {
         refreshingRef.current = false;
-        setRefreshingFrom(null);
+        setIsRefreshing(false);
       });
       return;
     }
@@ -360,16 +336,13 @@ export function UsagePage() {
       nextWindow.sinceTime !== window.sinceTime ||
       nextWindow.untilTime !== window.untilTime
     ) {
-      keepShownUsage();
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
     refreshingRef.current = true;
-    setRefreshingFrom(
-      new Set(selectedEnvironments.flatMap(({ summary }) => (summary === null ? [] : [summary]))),
-    );
+    setIsRefreshing(true);
     void refresh(nextWindow).finally(() => {
       refreshingRef.current = false;
-      setRefreshingFrom(null);
+      setIsRefreshing(false);
     });
   };
   const connectedLimitsEnvironments = [...presentations]
@@ -407,7 +380,7 @@ export function UsagePage() {
             selectedEnvironmentIds={selectedEnvironmentIds}
             onSelectionChange={setSelectedEnvironmentIds}
             showUsageStatus={!showingLimits}
-            refreshingFrom={refreshingFrom}
+            refreshing={refreshingUsage}
             isPartial={isPartial}
             duplicateSources={merged.duplicateSources}
             contractMismatches={merged.contractMismatches}
@@ -562,7 +535,9 @@ export function UsagePage() {
                   ) : null
                 }
               />
-            ) : shown === null ? null : !canReadDiagnostics ? (
+            ) : shown === null ? (
+              <UsageSkeleton />
+            ) : !canReadDiagnostics ? (
               <div className="space-y-2 py-12 text-center text-sm text-muted-foreground">
                 {selectedEnvironments.map((environment) => (
                   <p key={environment.environmentId}>
@@ -1249,7 +1224,7 @@ function UsageEnvironmentFilter({
   selectedEnvironmentIds,
   onSelectionChange,
   showUsageStatus,
-  refreshingFrom,
+  refreshing,
   isPartial,
   duplicateSources,
   contractMismatches,
@@ -1260,7 +1235,7 @@ function UsageEnvironmentFilter({
   readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
   readonly onSelectionChange: (ids: ReadonlySet<EnvironmentId> | null) => void;
   readonly showUsageStatus: boolean;
-  readonly refreshingFrom: ReadonlySet<UsageSummary> | null;
+  readonly refreshing: boolean;
   readonly isPartial: boolean;
   readonly duplicateSources: readonly string[];
   readonly contractMismatches: MergedUsage["contractMismatches"];
@@ -1307,7 +1282,7 @@ function UsageEnvironmentFilter({
           const checked =
             selectedEnvironmentIds === null ||
             selectedEnvironmentIds.has(environment.environmentId);
-          const progress = usageEnvironmentProgress(environment, refreshingFrom);
+          const progress = usageEnvironmentProgress(environment, refreshing);
           const status =
             environment.error !== null
               ? "Unavailable"
@@ -1376,5 +1351,82 @@ function UsageEnvironmentFilter({
         </MenuItem>
       </MenuPopup>
     </Menu>
+  );
+}
+
+/**
+ * Stand-in with the loaded page's shape, using the shared `Skeleton` bars so it
+ * breathes with the same `animate-skeleton` pulse as every other loading state.
+ * Replaced by results as soon as the first environment answers.
+ */
+function UsageSkeleton() {
+  return (
+    <>
+      <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-1">
+            <Skeleton className="h-10 w-36" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          {PROVIDER_ORDER.map((provider) => (
+            <div key={provider} className="flex flex-col gap-1">
+              <div className="flex min-h-5 items-center justify-between gap-4">
+                <span className="flex items-center gap-2">
+                  <Skeleton shape="pill" className="size-2 shrink-0" />
+                  <Skeleton shape="pill" className="size-4 shrink-0" />
+                  <Skeleton className="h-3.5 w-20" />
+                </span>
+                <Skeleton className="h-3.5 w-14" />
+              </div>
+              <Skeleton className="h-4 w-36" />
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-5 w-24" />
+          <div className="flex flex-col gap-1">
+            <Skeleton className="ml-16 h-56" />
+            <Skeleton className="ml-16 h-4" />
+          </div>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-foreground">Totals</h2>
+        <MetricSkeletons
+          labels={["Processed tokens", "Cached input", "Uncached input", "Output", "Cache savings"]}
+        />
+      </section>
+
+      <section className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
+        <div className="flex flex-col gap-2.5">
+          <Skeleton className="h-5 w-28" />
+          <Skeleton className="h-2" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium text-foreground">Breakdown</h2>
+          <Skeleton shape="card" className="h-7 w-28" />
+        </div>
+        <Skeleton className="h-44" />
+      </section>
+    </>
+  );
+}
+
+function MetricSkeletons({ labels }: { readonly labels: readonly string[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-6 gap-y-4 py-1 md:grid-cols-5">
+      {labels.map((label) => (
+        <div key={label} className="flex flex-col gap-0.5">
+          <span className="text-xs text-muted-foreground">{label}</span>
+          <Skeleton className="h-6 w-16" />
+        </div>
+      ))}
+    </div>
   );
 }

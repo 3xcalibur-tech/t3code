@@ -1,6 +1,6 @@
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import type { UsageProviderKind } from "@t3tools/contracts";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
 import {
@@ -13,25 +13,17 @@ import {
 import { cn } from "~/lib/utils";
 import { PROVIDER_ORDER, PROVIDER_PRESENTATION } from "./usageProviders";
 
-export const VIEW_WIDTH = 960;
+const VIEW_WIDTH = 960;
 const VIEW_HEIGHT = 260;
 const TICK_COUNT = 4;
 const PLOT_TOP = 8;
-const SAMPLE_COUNT = 193;
-const MORPH_MS = 500;
 const NONE_LOADING: ReadonlySet<UsageProviderKind> = new Set();
-
-/** The fixed x grid every morph resamples onto, so any two curves can blend. */
-export const SAMPLE_XS = Array.from(
-  { length: SAMPLE_COUNT },
-  (_, index) => (index * VIEW_WIDTH) / (SAMPLE_COUNT - 1),
-);
 
 export type UsageChartMetric = "tokens" | "cost";
 
 interface UsageProviderChartProps {
   readonly providers: readonly UsageProviderKind[];
-  /** Providers without data yet: flat along the bottom, left out of the scale, rising when they land. */
+  /** Providers without data yet: flat and faded along the bottom, left out of the scale. */
   readonly loadingProviders?: ReadonlySet<UsageProviderKind>;
   readonly days: readonly string[];
   readonly daily: readonly DailyTotals[];
@@ -130,7 +122,7 @@ interface CurveSegment {
   readonly to: Point;
 }
 
-export function smoothCurve(points: readonly Point[]): readonly CurveSegment[] {
+function smoothCurve(points: readonly Point[]): readonly CurveSegment[] {
   if (points.length < 2) return [];
   const tangents = monotoneTangents(points);
   const segments: CurveSegment[] = [];
@@ -160,42 +152,11 @@ function curvePath(segments: readonly CurveSegment[]): string {
   return path;
 }
 
-/**
- * Evaluates a curve at ascending x positions. Control points sit at x thirds,
- * so x is linear in t and each y is exact, wherever the periods fall.
- */
-export function sampleCurve(segments: readonly CurveSegment[], xs: readonly number[]) {
-  let index = 0;
-  return xs.map((x) => {
-    while (index < segments.length - 1 && x > (segments[index]?.to.x ?? x)) index += 1;
-    const segment = segments[index];
-    if (segment === undefined) return VIEW_HEIGHT;
-    const { from, c1, c2, to } = segment;
-    const span = to.x - from.x;
-    const t = span === 0 ? 0 : Math.min(1, Math.max(0, (x - from.x) / span));
-    const u = 1 - t;
-    return u * u * u * from.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * to.y;
-  });
-}
-
-/** Blends two sample sets on the shared grid: progress 0 is `from`, 1 is `to`. */
-export function mixSamples(from: readonly number[], to: readonly number[], progress: number) {
-  return from.map((y, index) => y + ((to[index] ?? y) - y) * progress);
-}
-
-/** Straight segments through samples; the grid is dense enough to read as a curve. */
-function polylinePath(xs: readonly number[], ys: readonly number[]) {
-  return ys
-    .map((y, index) => `${index === 0 ? "M" : "L"}${(xs[index] ?? 0).toFixed(2)},${y.toFixed(2)}`)
-    .join(" ");
-}
-
 function areaPath(line: string) {
   return line === "" ? "" : `${line} L${VIEW_WIDTH},${VIEW_HEIGHT} L0,${VIEW_HEIGHT} Z`;
 }
 
 /** A loading line: flat along the zero line until its usage lands. */
-const FLAT_SAMPLES = SAMPLE_XS.map(() => VIEW_HEIGHT);
 const FLAT_LINE = `M0,${VIEW_HEIGHT} L${VIEW_WIDTH},${VIEW_HEIGHT}`;
 
 /**
@@ -255,7 +216,7 @@ function valueToY(value: number, max: number) {
   return max === 0 ? VIEW_HEIGHT : VIEW_HEIGHT - (value / max) * (VIEW_HEIGHT - PLOT_TOP);
 }
 
-/** Per-provider shapes in paint order: answered curves heaviest first, loading providers flat. */
+/** Per-provider paths in paint order: answered curves heaviest first, loading providers flat. */
 function buildChart(
   periods: readonly string[],
   byPeriod: ReadonlyMap<string, DailyTotals | HourlyTotals>,
@@ -266,165 +227,30 @@ function buildChart(
   const columns = buildPeriodColumns(periods, byPeriod, metric);
   const scale = chartScale(columns, providers, loadingProviders);
   const stepX = periods.length < 2 ? 0 : VIEW_WIDTH / (periods.length - 1);
-  const shapes = providers.map((provider) => {
+  const paths = providers.map((provider) => {
+    if (loadingProviders.has(provider)) {
+      return { provider, loading: true, total: 0, line: FLAT_LINE, area: "" };
+    }
     const slot = PROVIDER_ORDER.indexOf(provider);
-    if (loadingProviders.has(provider))
-      return { provider, kind: "loading" as const, slot, total: 0 };
-    const segments = smoothCurve(
-      columns.map((column, periodIndex) => ({
-        x: periodIndex * stepX,
-        y: valueToY(column.bands[slot]?.value ?? 0, scale.max),
-      })),
+    const line = curvePath(
+      smoothCurve(
+        columns.map((column, periodIndex) => ({
+          x: periodIndex * stepX,
+          y: valueToY(column.bands[slot]?.value ?? 0, scale.max),
+        })),
+      ),
     );
-    const line = curvePath(segments);
     return {
       provider,
-      kind: "data" as const,
-      slot,
+      loading: false,
       total: columns.reduce((sum, column) => sum + (column.bands[slot]?.value ?? 0), 0),
-      segments,
       line,
+      area: areaPath(line),
     };
   });
 
   // Paint the heavier series first so the lighter one is not buried.
-  return { columns, scale, stepX, shapes: shapes.toSorted((a, b) => b.total - a.total) };
-}
-
-type ChartShape = ReturnType<typeof buildChart>["shapes"][number];
-
-/** One provider's drawn paths, its exact curve on the sample grid, and the morph moving it. */
-interface DrawnSeries {
-  readonly shape: ChartShape;
-  readonly fill: SVGPathElement | null;
-  readonly line: SVGPathElement | null;
-  /** Null for a curve with fewer than two periods. */
-  readonly curve: readonly number[] | null;
-  motion: { readonly from: readonly number[]; readonly start: number } | null;
-}
-
-const easeOutCubic = (progress: number) => 1 - (1 - progress) ** 3;
-
-/**
- * What a series shows at `time`, so an interrupted morph continues from the
- * screen. Null when there is no curve to show.
- */
-function shownSamples(series: DrawnSeries, time: number) {
-  const { motion, curve: target } = series;
-  if (motion === null || target === null || time >= motion.start + MORPH_MS) return target;
-  const progress = Math.max(0, (time - motion.start) / MORPH_MS);
-  return mixSamples(motion.from, target, easeOutCubic(progress));
-}
-
-function sameTarget(a: ChartShape, b: ChartShape) {
-  return a.kind === "loading" ? b.kind === "loading" : b.kind === "data" && a.line === b.line;
-}
-
-/**
- * Writes one frame of a series straight to its paths and returns whether a
- * morph is still running. A settled curve gets its exact path.
- */
-function drawSeries(series: DrawnSeries, time: number) {
-  const moving = series.motion !== null && time < series.motion.start + MORPH_MS;
-  const samples = shownSamples(series, time);
-  const line = moving
-    ? samples === null
-      ? ""
-      : polylinePath(SAMPLE_XS, samples)
-    : series.shape.kind === "data"
-      ? series.shape.line
-      : FLAT_LINE;
-  series.line?.setAttribute("d", line);
-  series.fill?.setAttribute("d", areaPath(line));
-  return moving;
-}
-
-/**
- * Drives the series paths outside React with short morphs between shapes. The
- * rAF loop runs only while a morph is in flight on a visible chart.
- */
-function createSeriesAnimator() {
-  let series: Map<UsageProviderKind, DrawnSeries> | null = null;
-  let visible = true;
-  let frame: number | null = null;
-  let motionQuery: MediaQueryList | null = null;
-
-  const reducedMotion = () => {
-    motionQuery ??= window.matchMedia("(prefers-reduced-motion: reduce)");
-    return motionQuery.matches;
-  };
-  const active = (entries: ReadonlyMap<UsageProviderKind, DrawnSeries>) =>
-    [...entries.values()].some((entry) => entry.motion !== null);
-
-  const tick = (time: number) => {
-    frame = null;
-    if (series === null) return;
-    for (const entry of series.values()) {
-      if (entry.motion !== null && !drawSeries(entry, time)) entry.motion = null;
-    }
-    if (active(series)) frame = requestAnimationFrame(tick);
-  };
-
-  const start = () => {
-    if (frame === null && visible && series !== null && active(series)) {
-      frame = requestAnimationFrame(tick);
-    }
-  };
-
-  // A hidden chart lands every morph at once rather than resuming midway.
-  const stop = () => {
-    if (frame !== null) cancelAnimationFrame(frame);
-    frame = null;
-    for (const entry of series?.values() ?? []) {
-      entry.motion = null;
-      drawSeries(entry, performance.now());
-    }
-  };
-
-  return {
-    /**
-     * Points each provider's paths at its new shape. Changed series morph from
-     * what is on screen; the first draw, an off-screen chart, and reduced
-     * motion snap.
-     */
-    sync(shapes: readonly ChartShape[], svg: SVGSVGElement) {
-      const now = performance.now();
-      const animate = series !== null && visible && !reducedMotion();
-      const next = new Map<UsageProviderKind, DrawnSeries>();
-      for (const shape of shapes) {
-        const kept = series?.get(shape.provider);
-        if (kept !== undefined && sameTarget(kept.shape, shape)) {
-          next.set(shape.provider, kept);
-          continue;
-        }
-        const curve =
-          shape.kind === "loading"
-            ? FLAT_SAMPLES
-            : shape.segments.length > 0
-              ? sampleCurve(shape.segments, SAMPLE_XS)
-              : null;
-        // A provider that just appeared rises from the zero line.
-        const from = !animate ? null : kept === undefined ? FLAT_SAMPLES : shownSamples(kept, now);
-        const entry: DrawnSeries = {
-          shape,
-          fill: svg.querySelector<SVGPathElement>(`path[data-fill="${shape.provider}"]`),
-          line: svg.querySelector<SVGPathElement>(`path[data-line="${shape.provider}"]`),
-          curve,
-          motion: from === null || curve === null ? null : { from, start: now },
-        };
-        next.set(shape.provider, entry);
-        drawSeries(entry, now);
-      }
-      series = next;
-      start();
-    },
-    setVisible(next: boolean) {
-      visible = next;
-      if (visible) start();
-      else stop();
-    },
-    stop,
-  };
+  return { columns, scale, stepX, paths: paths.toSorted((a, b) => b.total - a.total) };
 }
 
 export function UsageProviderChart({
@@ -451,46 +277,16 @@ export function UsageProviderChart({
   const plotRef = useRef<HTMLDivElement | null>(null);
   const tooltipRef = useRef<HTMLDivElement | null>(null);
   const hoverPositionRef = useRef<{ x: number; y: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const [animator] = useState(createSeriesAnimator);
 
-  const { columns, scale, shapes, stepX } = useMemo(
+  const { columns, scale, paths, stepX } = useMemo(
     () => buildChart(periods, byPeriod, metric, providers, loadingProviders),
     [byPeriod, loadingProviders, metric, periods, providers],
   );
   const toY = (value: number) => valueToY(value, scale.max);
   // Once anything has answered, lines still loading fade back behind it.
   const fadeLoading = providers.some((provider) => !loadingProviders.has(provider));
-  const seriesClassName = (kind: ChartShape["kind"]) =>
-    cn("transition-opacity duration-300", fadeLoading && kind === "loading" && "opacity-30");
-
-  // Series paths are written by the animator rather than rendered, so morphs
-  // never re-render.
-  useLayoutEffect(() => {
-    if (svgRef.current !== null) animator.sync(shapes, svgRef.current);
-  }, [animator, shapes]);
-
-  // Morphs land at once while the chart is off screen or the tab is hidden.
-  useEffect(() => {
-    const plot = plotRef.current;
-    let intersecting = true;
-    const update = () =>
-      animator.setVisible(intersecting && document.visibilityState === "visible");
-    const observer =
-      plot === null || typeof IntersectionObserver === "undefined"
-        ? null
-        : new IntersectionObserver((entries) => {
-            for (const entry of entries) intersecting = entry.isIntersecting;
-            update();
-          });
-    if (plot !== null) observer?.observe(plot);
-    document.addEventListener("visibilitychange", update);
-    return () => {
-      observer?.disconnect();
-      document.removeEventListener("visibilitychange", update);
-      animator.stop();
-    };
-  }, [animator]);
+  const seriesClassName = (loading: boolean) =>
+    cn("transition-opacity duration-300", fadeLoading && loading && "opacity-30");
 
   const format = metric === "tokens" ? formatTokens : formatUsd;
 
@@ -593,7 +389,6 @@ export function UsageProviderChart({
           }}
         >
           <svg
-            ref={svgRef}
             className="h-full w-full"
             viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
             preserveAspectRatio="none"
@@ -618,20 +413,20 @@ export function UsageProviderChart({
             })}
 
             {/* Fills first, then every stroke, so no series covers another's line. */}
-            {shapes.map(({ provider, kind }) => (
+            {paths.map(({ provider, loading, area }) => (
               <path
                 key={provider}
-                data-fill={provider}
-                className={seriesClassName(kind)}
+                d={area}
+                className={seriesClassName(loading)}
                 fill={PROVIDER_PRESENTATION[provider].color}
                 fillOpacity={0.12}
               />
             ))}
-            {shapes.map(({ provider, kind }) => (
+            {paths.map(({ provider, loading, line }) => (
               <path
                 key={provider}
-                data-line={provider}
-                className={seriesClassName(kind)}
+                d={line}
+                className={seriesClassName(loading)}
                 fill="none"
                 stroke={PROVIDER_PRESENTATION[provider].color}
                 strokeWidth={2}

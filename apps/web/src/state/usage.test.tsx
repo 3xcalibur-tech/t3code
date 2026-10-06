@@ -166,4 +166,20 @@ describe("usage environment selection", () => {
     expect(latest.isPending).toBe(false);
     expect(latest.isPartial).toBe(false);
   });
+
+  it("shows the last answered usage until the next window answers, for the same selection", async () => {
+    const selected = new Set([EnvironmentId.make("a")]);
+    await act(() => renderer?.update(<Probe selected={selected} />));
+    expect(latest.shown?.merged.costUsd).toBe(10);
+
+    // A new window that nothing has answered yet.
+    testState.environments = [environment("a", null)];
+    await act(() => renderer?.update(<Probe selected={selected} />));
+    expect(latest.isPending).toBe(true);
+    expect(latest.shown?.merged.costUsd).toBe(10);
+
+    // Another selection has nothing of its own to show.
+    await select("a");
+    expect(latest.shown).toBeNull();
+  });
 });

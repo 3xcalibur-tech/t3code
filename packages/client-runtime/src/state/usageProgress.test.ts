@@ -116,20 +116,11 @@ describe("usageProgress", () => {
     expect(usageEnvironmentProgress(ignored[0]!)).toEqual({ phase: "inactive" });
   });
 
-  it("keeps a manual refresh dimmed until a new summary replaces the old one", () => {
-    const onScreen = [summary(), summary()] as const;
-    const a = environment("a", { summary: onScreen[0] });
-    const b = environment("b", { summary: onScreen[1] });
-    const refreshing = { ...options, refreshingFrom: new Set(onScreen) };
+  it("dims every answered environment while a manual refresh runs", () => {
     // Pricing refreshes first, so neither query is pending yet.
-    expect(usageProgress([a, b], refreshing)).toEqual({
-      dimmed: true,
-      label: "Updating 2 environments…",
-    });
-    expect(usageProgress([a, environment("b")], refreshing)).toEqual({
-      dimmed: false,
-      label: "Updating a…",
-    });
+    expect(
+      usageProgress([environment("a"), environment("b")], { ...options, refreshing: true }),
+    ).toEqual({ dimmed: true, label: "Updating 2 environments…" });
   });
 });
 

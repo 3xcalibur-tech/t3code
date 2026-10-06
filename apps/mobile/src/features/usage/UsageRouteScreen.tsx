@@ -1,11 +1,6 @@
 import { ChatGptUsageSummary } from "./ChatGptUsageSummary";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
-import {
-  EnvironmentId,
-  USAGE_CONTRACT_VERSION,
-  type UsageProviderKind,
-  type UsageSummary,
-} from "@t3tools/contracts";
+import { EnvironmentId, USAGE_CONTRACT_VERSION, type UsageProviderKind } from "@t3tools/contracts";
 import { type RouteProp, useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
 import { cursorKeychainAccessEnvironments } from "@t3tools/client-runtime/state/usage";
 import {
@@ -171,11 +166,13 @@ export function UsageRouteScreen() {
     [isPast24Hours, merged.daily, merged.hourly],
   );
 
-  // Summaries on screen when a pull to refresh began.
-  const [refreshingFrom, setRefreshingFrom] = useState<ReadonlySet<UsageSummary> | null>(null);
+  const [refreshingUsage, setRefreshingUsage] = useState(false);
   const refreshingRef = useRef(false);
   const showingLimits = tab === "limits";
-  const progress = usageProgress(selectedEnvironments, { refreshingFrom, providerLabel });
+  const progress = usageProgress(selectedEnvironments, {
+    refreshing: refreshingUsage,
+    providerLabel,
+  });
   const selectWindow = (days: number) => {
     setWindowSelection({
       days,
@@ -194,12 +191,10 @@ export function UsageRouteScreen() {
       setWindowSelection({ days: windowDays, window: nextWindow });
     }
     refreshingRef.current = true;
-    setRefreshingFrom(
-      new Set(selectedEnvironments.flatMap(({ summary }) => (summary === null ? [] : [summary]))),
-    );
+    setRefreshingUsage(true);
     void refresh(nextWindow).finally(() => {
       refreshingRef.current = false;
-      setRefreshingFrom(null);
+      setRefreshingUsage(false);
     });
   };
 
@@ -219,14 +214,14 @@ export function UsageRouteScreen() {
       ...environments.map((environment) => ({
         id: environment.environmentId,
         title: environment.label,
-        subtitle: usageEnvironmentStatus(environment, refreshingFrom),
+        subtitle: usageEnvironmentStatus(environment, refreshingUsage),
         state:
           selectedEnvironmentIds === null || selectedEnvironmentIds.has(environment.environmentId)
             ? ("on" as const)
             : ("off" as const),
       })),
     ],
-    [environments, refreshingFrom, selectedEnvironmentIds],
+    [environments, refreshingUsage, selectedEnvironmentIds],
   );
   const selectEnvironment = useCallback(
     (value: string) => {
@@ -282,7 +277,7 @@ export function UsageRouteScreen() {
         refreshControl={
           showingLimits || canReadDiagnostics ? (
             <RefreshControl
-              refreshing={showingLimits ? limits.refreshing : refreshingFrom !== null}
+              refreshing={showingLimits ? limits.refreshing : refreshingUsage}
               onRefresh={showingLimits ? () => void limits.refresh() : refreshWindow}
             />
           ) : undefined
@@ -914,10 +909,7 @@ function ModelsSection(props: { readonly merged: MergedUsage; readonly metric: U
  * one that failed, or one whose transcripts another environment already
  * reported.
  */
-function usageEnvironmentStatus(
-  environment: EnvironmentUsageStatus,
-  refreshingFrom: ReadonlySet<UsageSummary> | null,
-): string {
+function usageEnvironmentStatus(environment: EnvironmentUsageStatus, refreshing: boolean): string {
   if (
     environment.summary &&
     !isCompatibleUsageContractVersion(environment.summary.contractVersion, USAGE_CONTRACT_VERSION)
@@ -934,7 +926,7 @@ function usageEnvironmentStatus(
     return environment.summary ? `${environment.error} Showing saved totals.` : environment.error;
   if (!environment.isConnected)
     return environment.summary ? "Disconnected · showing saved usage" : "Waiting for connection…";
-  const progress = usageEnvironmentProgress(environment, refreshingFrom);
+  const progress = usageEnvironmentProgress(environment, refreshing);
   if (progress.phase === "loading") return "Loading usage…";
   if (progress.phase === "stale") return "Updating usage…";
   if (progress.phase === "partway")

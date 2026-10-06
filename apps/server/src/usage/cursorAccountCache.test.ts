@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { cursorFetchRanges, mergeCursorFetches } from "./cursorAccountCache.ts";
+import { cursorFetchRange, mergeCursorFetch } from "./cursorAccountCache.ts";
 import type { UsageRecord } from "./usageTranscripts.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -23,7 +23,7 @@ const record = (timestampMs: number): UsageRecord => ({
 });
 
 describe("cursorAccountCache", () => {
-  it("does not claim the unfetched gap after a cache that ended before the window", () => {
+  it("refetches everything once the cache no longer reaches the retention start", () => {
     const cache = {
       accountKey: "a",
       sinceMs: 0,
@@ -31,25 +31,50 @@ describe("cursorAccountCache", () => {
       fetchedAtMs: 10 * DAY_MS,
       records: [record(5 * DAY_MS)],
     };
-    const nowMs = 60 * DAY_MS;
-    const ranges = cursorFetchRanges(cache, 59 * DAY_MS, nowMs);
-    assert.deepStrictEqual(ranges, [{ sinceMs: 59 * DAY_MS, untilMs: nowMs }]);
+    const nowMs = 100 * DAY_MS;
+    const range = cursorFetchRange(cache, 10 * DAY_MS, nowMs);
+    assert.deepStrictEqual(range, { sinceMs: 10 * DAY_MS, untilMs: nowMs });
 
-    const merged = mergeCursorFetches(
+    const { cache: merged } = mergeCursorFetch(
       cache,
       "a",
-      ranges.map((range) => ({ range, records: [record(59.5 * DAY_MS)] })),
+      range,
+      [record(50 * DAY_MS)],
       nowMs,
-      0,
+      10 * DAY_MS,
     );
-    assert.strictEqual(merged.sinceMs, 59 * DAY_MS);
     assert.deepStrictEqual(
       merged.records.map((entry) => entry.timestampMs),
-      [59.5 * DAY_MS],
+      [50 * DAY_MS],
     );
-    // A wider window now fetches the history it is missing.
-    assert.deepStrictEqual(cursorFetchRanges(merged, 30 * DAY_MS, nowMs), [
-      { sinceMs: 30 * DAY_MS, untilMs: 59 * DAY_MS },
-    ]);
+    // Then only the newest edge.
+    assert.deepStrictEqual(cursorFetchRange(merged, 11 * DAY_MS, nowMs + DAY_MS), {
+      sinceMs: nowMs - 60 * 60 * 1000,
+      untilMs: nowMs + DAY_MS,
+    });
+  });
+
+  it("reports an edge that only confirms the cache as unchanged", () => {
+    const cache = {
+      accountKey: "a",
+      sinceMs: 0,
+      untilMs: 10 * DAY_MS,
+      fetchedAtMs: 10 * DAY_MS,
+      records: [record(DAY_MS), record(10 * DAY_MS)],
+    };
+    const range = cursorFetchRange(cache, 0, 11 * DAY_MS);
+    assert.isFalse(
+      mergeCursorFetch(cache, "a", range, [record(10 * DAY_MS)], 11 * DAY_MS, 0).changed,
+    );
+    assert.isTrue(
+      mergeCursorFetch(
+        cache,
+        "a",
+        range,
+        [record(10 * DAY_MS), record(10.5 * DAY_MS)],
+        11 * DAY_MS,
+        0,
+      ).changed,
+    );
   });
 });
