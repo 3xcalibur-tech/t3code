@@ -346,7 +346,7 @@ function canPerformPullRequestAction(
   );
 }
 
-export function isPullRequestConflicting(
+function isPullRequestConflicting(
   detail: Pick<PullRequestActionableDetail, "state" | "mergeability"> | null,
 ): boolean {
   return detail?.state === "open" && detail.mergeability === "conflicting";
