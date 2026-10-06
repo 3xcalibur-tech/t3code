@@ -1691,6 +1691,140 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  /**
+   * A prompt fails without a clear rejection, OpenCode never took it, and a
+   * background subagent's report then wakes the parent into a reply. With
+   * `endedFirst` that reply ends before its continuation takes it.
+   */
+  const replyAfterUnclearFailure = (endedFirst: boolean) =>
+    Effect.gen(function* () {
+      const offered = yield* Deferred.make<void>();
+      const gate = makeProviderReplayGate(endedFirst ? ["wake"] : ["wake", "reply"]);
+      const { runtime, thread } = yield* resumed(
+        [
+          ...backgroundLaunch(CHILD),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          out("session.update", { sessionID: CHILD, permissions: t3Rules }),
+          reply("session.update", null),
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          reply("session.prompt", {
+            status: 502,
+            body: { _tag: "UnknownError", message: "bad gateway" },
+          }),
+          // The subagent ends and OpenCode answers its report on its own.
+          event("session.execution.succeeded", { sessionID: CHILD }, "wake"),
+          event("session.inbox.enqueued", {
+            inboxID: "msg_report",
+            sessionID: SESSION,
+            item: {
+              type: "synthetic",
+              payload: {
+                text: `<subagent sessionID="${CHILD}" state="completed" description="Sleep">\nCHILD_OK\n</subagent>`,
+                description: "Sleep",
+                metadata: {
+                  source: "subagent",
+                  childID: CHILD,
+                  agent: "General",
+                  state: "completed",
+                },
+              },
+              delivery: "steer",
+            },
+          }),
+          event("session.execution.started", { sessionID: SESSION }),
+          event(
+            "session.text.ended",
+            {
+              sessionID: SESSION,
+              assistantMessageID: "msg_followup",
+              ordinal: 0,
+              text: "CHILD_OK",
+            },
+            endedFirst ? undefined : "reply",
+          ),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+          // The subagent's session runs again: a turn of its own, after the reply's end.
+          event("session.execution.started", { sessionID: CHILD }),
+        ],
+        { replayGate: gate },
+      ).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      // The single reader of the runtime's events.
+      const launched = yield* Deferred.make<void>();
+      const childRan = yield* Deferred.make<void>();
+      const ended: Array<ProviderAdapterV2Event> = [];
+      const allEnded = yield* Deferred.make<void>();
+      yield* runtime.events.pipe(
+        Stream.tap((event) =>
+          Effect.gen(function* () {
+            if (
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.nativeTurnRef?.nativeId?.startsWith(`${CHILD}:turn:`) === true
+            ) {
+              yield* Deferred.succeed(childRan, undefined);
+            }
+            if (event.type !== "turn_item.updated" && event.type !== "turn.terminal") return;
+            ended.push(event);
+            if (event.type === "turn.terminal") yield* Deferred.succeed(launched, undefined);
+            if (ended.filter((entry) => entry.type === "turn.terminal").length === 3) {
+              yield* Deferred.succeed(allEnded, undefined);
+            }
+          }),
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(withLineage(thread));
+      yield* Deferred.await(launched);
+      yield* runtime
+        .startTurn({ ...secondTurn(thread), appThread: withLineage(thread).appThread })
+        .pipe(Effect.ignore);
+      gate.release("wake");
+      yield* Deferred.await(offered);
+      // Everything up to the subagent's next run has been read: the reply ended.
+      if (endedFirst) yield* Deferred.await(childRan);
+      yield* runtime.startTurn({
+        ...withLineage(thread),
+        runId: RunId.make("run:opencode2-adapter:wake"),
+        runOrdinal: 3,
+        providerTurnOrdinal: 3,
+        attemptId: RunAttemptId.make("attempt:opencode2-adapter:wake"),
+        message: {
+          ...turnInput(thread).message,
+          messageId: MessageId.make("message:opencode2-adapter:wake"),
+          createdBy: "agent" as const,
+          creationSource: "provider" as const,
+        },
+      });
+      if (!endedFirst) gate.release("reply");
+      // The reply's own end finishes its continuation: the failed prompt's mark does not take it.
+      yield* Deferred.await(allEnded);
+      assert.deepEqual(
+        ended.flatMap((event) => (event.type === "turn.terminal" ? [event.status] : [])),
+        ["completed", "failed", "completed"],
+      );
+      assert.include(
+        ended.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "assistant_message"
+            ? [event.turnItem.text]
+            : [],
+        ),
+        "CHILD_OK",
+      );
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()));
+
+  it.effect("ends a background reply's continuation after a prompt failed unclearly", () =>
+    replyAfterUnclearFailure(false),
+  );
+
+  it.effect("ends a finished background reply's continuation after a prompt failed unclearly", () =>
+    replyAfterUnclearFailure(true),
+  );
+
   it.effect("does not report a Stop the server says did nothing", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

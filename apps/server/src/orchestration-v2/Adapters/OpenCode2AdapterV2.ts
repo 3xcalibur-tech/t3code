@@ -2512,14 +2512,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return yield* route(event, sessionId);
     });
 
-    /** Handles one event for its session, as the turn running there sees it. */
+    /**
+     * Handles one event for its session, as the turn running there sees it.
+     * `held` is set for a held execution's events as its turn replays them.
+     */
     const route = Effect.fnUntraced(function* (
       event: OpenCode2StreamEvent,
       sessionId: string | undefined,
+      held = false,
     ) {
       // The end of the run a timed-out Stop left behind; no turn is its own.
+      // A held execution's end is its own: any such run was over, or was this
+      // execution, before it started.
       const ended =
-        event.type === "unreadable.execution.ended" || executionEnd(event.type)
+        !held && (event.type === "unreadable.execution.ended" || executionEnd(event.type))
           ? threads.get(sessionId ?? "")
           : undefined;
       if (ended?.unsettled === true) {
@@ -3390,7 +3396,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     /** Feeds a held execution's events to the turn now running on its session. */
     const replay = Effect.fnUntraced(function* (wake: Wake) {
       wake.dropped = true;
-      for (const event of wake.events) yield* route(event, sessionOfEvent(event));
+      for (const event of wake.events) yield* route(event, sessionOfEvent(event), true);
     });
 
     /**
@@ -3425,6 +3431,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (turn !== undefined && wake.first !== undefined) {
             turn.providerTurn = { ...turn.providerTurn, nativeTurnRef: ref(wake.first, "weak") };
           }
+          // The execution still runs, so the run a mark waits on is this one or
+          // was over before it started: its end, still to come, is this turn's.
+          if (wake.running) state.unsettled = false;
           yield* replay(wake);
         }),
       );
