@@ -16,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import { projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { nextTerminalId } from "@t3tools/shared/terminalLabels";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,7 +24,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as NodeUtil from "node:util";
 import * as Project from "../project/ProjectService.ts";
-import { makeKeyedSerialExecutor } from "../orchestration-v2/KeyedSerialExecutor.ts";
 import * as TerminalManager from "./Manager.ts";
 
 const DEFAULT_OUTPUT_CHARACTERS = 10_000;
@@ -125,7 +125,7 @@ function plainText(history: string) {
 const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const projects = yield* Project.ProjectService;
-  const opens = yield* makeKeyedSerialExecutor<string>();
+  const opens = yield* KeyedLock.make<string>();
 
   /** The thread's terminals from the metadata snapshot the terminal panel starts from. */
   const list: ThreadTerminals["Service"]["list"] = Effect.fn("ThreadTerminals.list")(
