@@ -15,7 +15,6 @@ import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
-import * as LegacyV1ThreadImporter from "../legacy/LegacyV1ThreadImporter.ts";
 import * as ThreadManagementService from "../ThreadManagementService.ts";
 import * as McpSessionRegistryTestkit from "../../mcp/McpSessionRegistry.testkit.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
@@ -436,11 +435,6 @@ export function layerWithRegistry<Error>(
   );
   const layerThreadManagementProvided = ThreadManagementService.layer.pipe(
     Layer.provide(layerOrchestratorProvided),
-    Layer.provide(
-      Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
-        ensureTranscript: () => Effect.succeed({ importedThreadCount: 0, importedMessageCount: 0 }),
-      }),
-    ),
   );
   const layerContinuationWorkerProvided =
     options.runContinuationWorker === true
