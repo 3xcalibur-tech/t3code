@@ -2673,14 +2673,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             });
           });
 
+        /**
+         * A subagent a Reserve turn spawns without its own model inherits the
+         * hidden wire model (codex-rs/core/src/agent/child_config.rs:109-117),
+         * so Codex reports `gpt-reserve` for it. Every reported subagent model
+         * passes through here so the subagent and its child thread keep the
+         * model Reserve stands in for, or the parent's selection once Reserve
+         * has ended (Reserve only ever replaces that selection).
+         */
+        const visibleSubagentModel = (model: string, parentModel: string | undefined) =>
+          model !== CODEX_LUNA_RESERVE_MODEL
+            ? Effect.succeed(model)
+            : Ref.get(lunaReserve).pipe(
+                Effect.map((reserve) => reserve?.normalModel ?? parentModel ?? CODEX_LUNA_MODEL),
+              );
+
         const updateSubagentModel = Effect.fnUntraced(function* (
           nativeThreadId: string,
           value: string | null,
         ) {
-          const model = value?.trim();
-          if (!model) return;
-          subagentModels.set(nativeThreadId, model);
+          const reported = value?.trim();
+          if (!reported) return;
           const subagent = (yield* Ref.get(subagentThreads)).get(nativeThreadId);
+          const model = yield* visibleSubagentModel(
+            reported,
+            subagent?.parentContext.input.modelSelection.model,
+          );
+          subagentModels.set(nativeThreadId, model);
           if (subagent === undefined || subagent.task.model === model) return;
           subagent.task = { ...subagent.task, model, updatedAt: yield* DateTime.now };
           yield* emitProviderEvent({
@@ -2721,6 +2740,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeThreadId: input.nativeThreadId,
             });
             const turnItemOrdinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
+            const reportedModel = subagentModels.get(input.nativeThreadId) ?? input.model;
+            const model =
+              reportedModel === null
+                ? null
+                : yield* visibleSubagentModel(
+                    reportedModel,
+                    input.context.input.modelSelection.model,
+                  );
             const providerThread = {
               id: idAllocator.derive.providerThread({
                 driver: CODEX_PROVIDER,
@@ -2762,7 +2789,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeTaskRef: codexNativeItemRef(input.nativeItemId),
               prompt: input.prompt,
               title: input.title,
-              model: subagentModels.get(input.nativeThreadId) ?? input.model,
+              model,
               status: "running",
               result: null,
               startedAt: now,

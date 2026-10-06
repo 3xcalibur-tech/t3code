@@ -6901,6 +6901,283 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  // A child spawned without a model inherits the parent's effective model
+  // (codex-rs/core/src/agent/child_config.rs:109-117 at rust-v0.156.1), so a
+  // Reserve turn's subagent reports the hidden gpt-reserve model.
+  it.effect.each(["spawnAgent", "thread/read", "thread/settings/updated"] as const)(
+    "shows the normal model for a Luna Reserve subagent reported through %s",
+    (boundary) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const limitTurn = "native-codex-reserve-limit-turn";
+          const reserveTurn = "native-codex-reserve-turn";
+          const reservePrompt = "Spawn a sub-agent on Reserve.";
+          const preamble = codexReplayPreamble({
+            nativeThreadId: RESUME_NATIVE_THREAD,
+            nativeTurnId: limitTurn,
+            prompt: "Use up the ordinary quota.",
+          });
+          const ordinaryTurnStart = preamble.find(
+            (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+          );
+          if (ordinaryTurnStart?.type !== "expect_outbound") {
+            return yield* Effect.die("Codex replay preamble is missing turn/start.");
+          }
+          const ordinaryParams = (ordinaryTurnStart.frame as { params: Record<string, unknown> })
+            .params;
+          const usage = {
+            limitId: "codex",
+            limitName: null,
+            normalModelSlug: null,
+            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1790313600 },
+            secondary: null,
+            credits: null,
+            individualLimit: null,
+            spendControlReached: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          };
+          const reserveSettings: CodexReplay.CodexAppServerReplayEntry = {
+            type: "emit_inbound",
+            label: "thread/settings/updated/child",
+            frame: {
+              method: "thread/settings/updated",
+              params: {
+                threadId: RESUME_CHILD_THREAD,
+                threadSettings: {
+                  disabledPluginIds: [],
+                  cwd: "/workspace",
+                  approvalPolicy: "never",
+                  approvalsReviewer: "user",
+                  sandboxPolicy: { type: "dangerFullAccess" },
+                  activePermissionProfile: null,
+                  model: "gpt-reserve",
+                  modelProvider: "openai",
+                  serviceTier: null,
+                  effort: "medium",
+                  summary: "detailed",
+                  collaborationMode: {
+                    mode: "default",
+                    settings: {
+                      model: "gpt-reserve",
+                      reasoning_effort: "medium",
+                      developer_instructions: null,
+                    },
+                  },
+                  multiAgentMode: "explicitRequestOnly",
+                  personality: null,
+                },
+              },
+            },
+          };
+          const spawn: CodexReplay.CodexAppServerReplayEntry = {
+            type: "emit_inbound",
+            label: "item/completed/spawn",
+            frame: {
+              method: "item/completed",
+              params: {
+                item:
+                  boundary === "spawnAgent"
+                    ? {
+                        type: "collabAgentToolCall",
+                        id: "call-codex-reserve-spawn",
+                        tool: "spawnAgent",
+                        status: "completed",
+                        senderThreadId: RESUME_NATIVE_THREAD,
+                        receiverThreadIds: [RESUME_CHILD_THREAD],
+                        prompt: "Reply exactly: reserve child done",
+                        model: "gpt-reserve",
+                        reasoningEffort: "medium",
+                        agentsStates: {
+                          [RESUME_CHILD_THREAD]: { status: "pendingInit", message: null },
+                        },
+                      }
+                    : {
+                        type: "subAgentActivity",
+                        id: "call-codex-reserve-spawn",
+                        kind: "started",
+                        agentThreadId: RESUME_CHILD_THREAD,
+                        agentPath: "/root/reserve_agent",
+                      },
+                threadId: RESUME_NATIVE_THREAD,
+                turnId: reserveTurn,
+                completedAtMs: 1782622441000,
+              },
+            },
+          };
+          const transcript = makeCodexReplayTranscript({
+            scenario: `codex-reserve-subagent-${boundary.replaceAll("/", "-")}`,
+            entries: [
+              ...preamble,
+              {
+                type: "emit_inbound",
+                label: "turn/completed/limit",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: RESUME_NATIVE_THREAD,
+                    turn: {
+                      ...makeCodexReplayTurn({ id: limitTurn, status: "failed" }),
+                      error: {
+                        message: "You've hit your usage limit.",
+                        codexErrorInfo: "usageLimitExceeded",
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "account/rateLimits/read",
+                frame: {
+                  id: 4,
+                  method: "account/rateLimits/read",
+                  params: { supportsLunaReserve: true },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "account/rateLimits/read",
+                frame: {
+                  id: 4,
+                  result: {
+                    ordinaryUsageAllowed: false,
+                    rateLimits: usage,
+                    rateLimitsByLimitId: {
+                      codex: usage,
+                      base_model_inference: {
+                        ...usage,
+                        limitId: "base_model_inference",
+                        limitName: "gpt-reserve",
+                        normalModelSlug: CODEX_TEST_MODEL_SELECTION.model,
+                        primary: {
+                          usedPercent: 48,
+                          windowDurationMins: 10080,
+                          resetsAt: 1790640000,
+                        },
+                      },
+                    },
+                    rateLimitResetCredits: { availableCount: 0, credits: null },
+                    accountId: "workspace-replay",
+                    rateLimitUpsell: {
+                      banner_type: "luna_reserve",
+                      presentation: "dismissible",
+                      title: "You're now using Luna, a faster model for simpler tasks.",
+                      description: "Add credits or upgrade to continue.",
+                      ctas: [{ action: "add_credits", label: "Add credits" }],
+                    },
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "turn/start/reserve",
+                frame: {
+                  id: 5,
+                  method: "turn/start",
+                  params: {
+                    ...ordinaryParams,
+                    input: [{ type: "text", text: reservePrompt }],
+                    model: "gpt-reserve",
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/start/reserve",
+                frame: {
+                  id: 5,
+                  result: { turn: makeCodexReplayTurn({ id: reserveTurn, status: "inProgress" }) },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/started/reserve",
+                frame: {
+                  method: "turn/started",
+                  params: {
+                    threadId: RESUME_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({ id: reserveTurn, status: "inProgress" }),
+                  },
+                },
+              },
+              spawn,
+              childTurnStarted(RESUME_CHILD_TURN_1),
+              ...(boundary === "thread/settings/updated" ? [reserveSettings] : []),
+              childAgentMessage({
+                id: "child-reserve-answer",
+                text: "reserve child done",
+                turnId: RESUME_CHILD_TURN_1,
+                completedAtMs: 1782622442000,
+              }),
+              childTurnCompleted(RESUME_CHILD_TURN_1),
+              {
+                type: "emit_inbound",
+                label: "turn/completed/reserve",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: RESUME_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({ id: reserveTurn, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            undefined,
+            undefined,
+            (threadId) =>
+              Effect.succeed(
+                boundary === "thread/read"
+                  ? { thread: { id: threadId, model: "gpt-reserve" } }
+                  : { thread: { id: threadId }, model: null },
+              ),
+          );
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-reserve-limit"),
+              text: "Use up the ordinary quota.",
+            }),
+          );
+          yield* harness.firstTerminal;
+          yield* harness.runtime.startTurn({
+            ...makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-reserve-turn"),
+              text: reservePrompt,
+            }),
+            runOrdinal: 2,
+            providerTurnOrdinal: 2,
+          });
+          yield* awaitUntil(
+            () =>
+              harness.terminalEvents().length === 2 &&
+              harness.subagentUpdates().some((event) => event.subagent.model !== null),
+            "Reserve turn with a reported subagent model",
+          );
+
+          const reportedModels = harness
+            .subagentUpdates()
+            .flatMap((event) => (event.subagent.model === null ? [] : [event.subagent.model]));
+          assert.notInclude(reportedModels, "gpt-reserve");
+          assert.equal(harness.subagentUpdates().at(-1)?.subagent.model, "gpt-5.4");
+          const childThread = harness.events.find(
+            (event): event is Extract<ProviderAdapterV2Event, { type: "app_thread.created" }> =>
+              event.type === "app_thread.created",
+          )?.appThread;
+          assert.equal(childThread?.modelSelection.model, "gpt-5.4");
+        }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+      ),
+  );
+
   it.effect("preserves a subagent result across a trailing empty final and resume", () =>
     Effect.scoped(
       Effect.gen(function* () {
