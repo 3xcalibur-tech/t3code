@@ -45,7 +45,7 @@ function layer(input: {
 
 describe("ReviewService", () => {
   it.effect.each([false, true])(
-    "reads working-tree changes with an unrelated base (committed: %s)",
+    "reads a registered project outside the launch folder with an unrelated base (committed: %s)",
     (committed) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -55,7 +55,7 @@ describe("ReviewService", () => {
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcess.layer))),
           Layer.provideMerge(GitVcsDriver.layer),
           Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(ServerConfig.layerTest(cwd, baseDir)),
+          Layer.provide(ServerConfig.layerTest(baseDir, baseDir)),
           Layer.provideMerge(NodeServices.layer),
         );
 
@@ -77,6 +77,7 @@ describe("ReviewService", () => {
 
           const preview = yield* review.getScopedDiffPreview({
             cwd,
+            workspaceRoot: cwd,
             source: "working-tree",
             baseRef: "missing-base",
           });
@@ -92,7 +93,12 @@ describe("ReviewService", () => {
 
           if (committed) {
             const error = yield* review
-              .getScopedDiffPreview({ cwd, source: "branch-range", baseRef: "main" })
+              .getScopedDiffPreview({
+                cwd,
+                workspaceRoot: cwd,
+                source: "branch-range",
+                baseRef: "main",
+              })
               .pipe(Effect.flip);
             assert.strictEqual(error._tag, "GitCommandError");
             if (error._tag === "GitCommandError") {
