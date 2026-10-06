@@ -134,20 +134,34 @@ it.layer(layerTest)("DispatchModeLimit", (it) => {
         threadId: sourceThreadId,
         runtimeMode: "full-access",
       });
+      const fork = {
+        type: "thread.fork",
+        commandId: CommandId.make("fork"),
+        sourceThreadId,
+        targetThreadId,
+        sourcePoint: { type: "latest_stable" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      } as const;
       const refused = yield* orchestrator
-        .dispatch({
-          type: "thread.fork",
-          commandId: CommandId.make("fork"),
-          sourceThreadId,
-          targetThreadId,
-          sourcePoint: { type: "latest_stable" },
-          createdBy: "agent",
-          creationSource: "mcp",
-        })
+        .dispatch(fork)
         .pipe(Effect.provideService(DispatchModeLimit, supervised), Effect.flip);
       assert.ok(refused._tag === "OrchestratorThreadAboveModeLimitError");
       assert.equal(refused.threadId, sourceThreadId);
       assert.isNull(yield* projections.getThreadShell(targetThreadId));
+
+      // The refusal records no receipt: once the source is lowered, the same
+      // command is planned again (and fails only for want of a finished run).
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("lower-source"),
+        threadId: sourceThreadId,
+        runtimeMode: "approval-required",
+      });
+      const retried = yield* orchestrator
+        .dispatch(fork)
+        .pipe(Effect.provideService(DispatchModeLimit, supervised), Effect.flip);
+      assert.equal(retried._tag, "OrchestratorDispatchError");
     }),
   );
 });
