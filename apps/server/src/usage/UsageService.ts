@@ -510,6 +510,9 @@ export const make = Effect.gen(function* () {
   const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
     Effect.asVoid,
   );
+  // A write still running when the service shuts down finishes first, so the
+  // next start does not lose the last scan.
+  yield* Effect.addFinalizer(() => awaitPersisted);
 
   /**
    * Parses one transcript, reusing the cached result when it is unchanged.

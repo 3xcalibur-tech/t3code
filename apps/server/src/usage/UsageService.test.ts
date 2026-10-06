@@ -264,6 +264,9 @@ describe("UsageService", () => {
           const service = yield* UsageService.make;
           return yield* service.readSummary(WINDOW);
         }).pipe(
+          // Scoped inside the state directory, so pending cache writes land
+          // before it is removed.
+          Effect.scoped,
           Effect.provide(
             layerService({
               prefix: "usage-managed-accounts",
@@ -405,9 +408,7 @@ describe("UsageService", () => {
         assert.isUndefined(cursorSource(fresh)?.refreshing);
         assert.strictEqual(totalOutputTokens(fresh), 12);
         assert.strictEqual(cursor.state.calls.length, 2);
-      }).pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-cursor-swr", home, settings })),
-      );
+      }).pipe(Effect.provide(layerService({ prefix: "usage-service-cursor-swr", home, settings })));
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
@@ -460,7 +461,7 @@ describe("UsageService", () => {
         assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
       }).pipe(
         Effect.provide(
-          serviceLayers({ prefix: "usage-service-cursor-incremental", home, settings }),
+          layerService({ prefix: "usage-service-cursor-incremental", home, settings }),
         ),
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
@@ -501,7 +502,7 @@ describe("UsageService", () => {
         assert.strictEqual(cursorSource(switched)?.message, cursor.state.error);
         assert.strictEqual(totalOutputTokens(switched), 0);
       }).pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-cursor-failure", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-cursor-failure", home, settings })),
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
@@ -542,7 +543,7 @@ describe("UsageService", () => {
           { sinceMs: CURSOR_NOW - HOUR_MS, untilMs: CURSOR_NOW + 2 * 60 * 1000 },
         ]);
       }).pipe(
-        Effect.provide(serviceLayers({ prefix: "usage-service-cursor-restart", home, settings })),
+        Effect.provide(layerService({ prefix: "usage-service-cursor-restart", home, settings })),
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
@@ -1259,6 +1260,9 @@ describe("UsageService", () => {
         assert.deepStrictEqual(outsideWindow.buckets, []);
         assert.strictEqual(outsideWindow.sources[0]?.distinctSessions, 0);
       }).pipe(
+        // Scoped inside the state directory, so pending cache writes land
+        // before it is removed.
+        Effect.scoped,
         Effect.provide(
           layerService({
             prefix: "usage-service-cleanup-test",
