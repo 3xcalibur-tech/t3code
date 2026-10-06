@@ -206,11 +206,34 @@ export function subagentResultForRun(
   };
 }
 
+/** Requested task work excludes automatic wakes. Restart continuations retain their source work. */
+export function delegatedWorkRuns(projection: {
+  readonly runs: OrchestrationV2ThreadProjection["runs"];
+  readonly messages: ReadonlyArray<
+    Pick<OrchestrationV2ConversationMessage, "id" | "runId" | "creationSource" | "notification">
+  >;
+}) {
+  const requests = new Map(projection.messages.map((message) => [message.id, message]));
+  const workRunIds = new Set<OrchestrationV2Run["id"]>();
+  for (const run of projection.runs.toSorted((a, b) => a.ordinal - b.ordinal)) {
+    const request = requests.get(run.userMessageId);
+    if (
+      request?.notification?.source.kind !== "monitor" &&
+      (request?.creationSource !== "server" ||
+        (run.ordinal === 1 && request.notification === undefined) ||
+        (run.restartContinuationOfRunId !== undefined &&
+          workRunIds.has(run.restartContinuationOfRunId)))
+    )
+      workRunIds.add(run.id);
+  }
+  return projection.runs.filter((run) => workRunIds.has(run.id));
+}
+
 /** A finished turn can still own live children or queued completion follow-ups. */
 export function delegatedTaskProgress(projection: {
   readonly runs: OrchestrationV2ThreadProjection["runs"];
   readonly messages: ReadonlyArray<
-    Pick<OrchestrationV2ConversationMessage, "runId" | "notification">
+    Pick<OrchestrationV2ConversationMessage, "id" | "runId" | "creationSource" | "notification">
   >;
   readonly subagents: ReadonlyArray<
     Pick<OrchestrationV2ThreadProjection["subagents"][number], "status" | "completionDelivery">
@@ -221,14 +244,7 @@ export function delegatedTaskProgress(projection: {
 }) {
   const terminal = (status: string) =>
     ["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(status);
-  const monitorRuns = new Set(
-    projection.messages
-      .filter((message) => message.notification?.source.kind === "monitor")
-      .map((message) => message.runId),
-  );
-  const workRuns = projection.runs.filter(
-    (run) => !monitorRuns.has(run.id) && run.status !== "rolled_back",
-  );
+  const workRuns = delegatedWorkRuns(projection).filter((run) => run.status !== "rolled_back");
   const active = workRuns.some((run) => !terminal(run.status));
   const children =
     projection.subagents.some(

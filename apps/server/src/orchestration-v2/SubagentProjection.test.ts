@@ -238,7 +238,12 @@ it("waits for nested work and retains the report across monitor acknowledgements
   };
   assert.equal(delegatedTaskProgress({ ...projection, runs: [run, pending] }).state, "working");
   const report = { ...pending, status: "completed" as const, startedAt: parentCreatedAt };
-  const monitor = { ...report, id: RunId.make("monitor"), ordinal: 3 };
+  const monitor = {
+    ...report,
+    id: RunId.make("monitor"),
+    userMessageId: MessageId.make("monitor-message"),
+    ordinal: 3,
+  };
   const artifacts = makeSubagentConversationArtifacts({
     messageId: MessageId.make("monitor-message"),
     turnItemId: TurnItemId.make("monitor-item"),
@@ -305,4 +310,69 @@ it("exposes the provider failure rather than a progress message from the failed 
   assert.equal(result.text, failure.message);
   assert.equal(result.turnItemId, artifacts.turnItem.id);
   assert.isNull(result.messageId);
+});
+
+it("automatic steers retain the requested result and restart continuations retain its work", () => {
+  const { projection, run } = taskFixture();
+  const artifacts = makeSubagentConversationArtifacts({
+    messageId: run.userMessageId,
+    turnItemId: TurnItemId.make("request"),
+    threadId: parentThreadId,
+    rootNodeId: NodeId.make("root"),
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    role: "user",
+    text: "Requested task",
+    ordinal: 1,
+    now: childCreatedAt,
+  });
+  const monitorSteer = {
+    ...artifacts.message,
+    id: MessageId.make("monitor-steer"),
+    runId: run.id,
+    creationSource: "server" as const,
+    notification: {
+      source: { kind: "monitor" as const },
+      outcome: "updated" as const,
+      summary: "Monitor update",
+    },
+  };
+  const wake = {
+    ...run,
+    id: RunId.make("wake"),
+    ordinal: 2,
+    userMessageId: MessageId.make("wake-request"),
+    status: "running" as const,
+  };
+  const continuation = {
+    ...run,
+    id: RunId.make("continuation"),
+    ordinal: 3,
+    userMessageId: MessageId.make("continuation-request"),
+    restartContinuationOfRunId: run.id,
+  };
+  const wakeContinuation = {
+    ...continuation,
+    id: RunId.make("wake-continuation"),
+    ordinal: 4,
+    userMessageId: MessageId.make("wake-continuation-request"),
+    restartContinuationOfRunId: wake.id,
+  };
+  const progress = delegatedTaskProgress({
+    ...projection,
+    runs: [run, wake, continuation, wakeContinuation],
+    messages: [
+      { ...artifacts.message, runId: run.id },
+      monitorSteer,
+      ...[wake, continuation, wakeContinuation].map((candidate) => ({
+        ...artifacts.message,
+        id: candidate.userMessageId,
+        runId: candidate.id,
+        creationSource: "server" as const,
+      })),
+    ],
+  });
+  assert.equal(progress.state, "result_available");
+  assert.equal(progress.resultRun?.id, continuation.id);
 });

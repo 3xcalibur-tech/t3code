@@ -15,12 +15,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as DateTime from "effect/DateTime";
 import * as Ref from "effect/Ref";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "./ProviderContinuationRequests.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 it.effect.each([
   { oldFollowup: false, tracked: false, stopped: false, active: false },
@@ -34,7 +34,7 @@ it.effect.each([
   ({ oldFollowup, tracked, stopped, active }) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const databaseContext = yield* Layer.build(SqlitePersistenceMemory);
+        const databaseContext = yield* Layer.build(SqlitePersistence.layerMemory);
         const databaseLayer = Layer.succeedContext(databaseContext);
         const storeContext = yield* Layer.build(
           ProjectionStore.layer.pipe(Layer.provide(databaseLayer)),
@@ -258,13 +258,13 @@ it.effect.each([
           ReadonlyArray<ProviderContinuationRequests.ProviderContinuationRequest>
         >([]);
         const registry = Layer.merge(
-          ProviderAdapterRegistry.makeLayer([]),
+          ProviderAdapterRegistry.layerFromAdapters([]),
           Layer.succeed(ProviderContinuationRequests.ProviderContinuationRequests, {
             offer: (request) => Ref.update(offers, (existing) => [...existing, request]),
             take: Effect.never,
           }),
         );
-        const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+        const layer = ProviderReplayHarness.layerWithRegistry(
           { name: "review-startup" },
           registry,
           { databaseLayer, runEffectWorker: false },

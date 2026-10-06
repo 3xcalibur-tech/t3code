@@ -31,7 +31,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
@@ -41,9 +41,9 @@ import {
   THREAD_HISTORY_PAGE_POLICY,
 } from "./threadHistoryPaging.ts";
 
-const TestLayer = Layer.mergeAll(
-  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-  SqlitePersistenceMemory,
+const layerTest = Layer.mergeAll(
+  ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
+  SqlitePersistence.layerMemory,
 );
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
@@ -487,6 +487,7 @@ const followUpResultRecovery = Effect.gen(function* () {
   const monitor = {
     ...followup,
     id: RunId.make("run:monitor-follow-up"),
+    userMessageId: MessageId.make("message:monitor-follow-up"),
     ordinal: 6,
     status: "completed" as const,
   };
@@ -521,16 +522,54 @@ const followUpResultRecovery = Effect.gen(function* () {
     payload: monitor,
   });
   assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  for (const [index, source] of [
+    { kind: "background_task" as const },
+    { kind: "command" as const },
+    { kind: "delegated_task" as const, taskIds: [] },
+    undefined,
+  ].entries()) {
+    const wake = {
+      ...monitor,
+      id: RunId.make(`run:automatic-follow-up:${index}`),
+      userMessageId: MessageId.make(`message:automatic-follow-up:${index}`),
+      ordinal: index + 7,
+    };
+    yield* store.apply({
+      id: EventId.make(`automatic-follow-up:message:${index}`),
+      type: "message.updated",
+      threadId: childId,
+      runId: wake.id,
+      occurredAt: now,
+      payload: {
+        ...(yield* store.getThreadProjection(childId)).messages.at(-1)!,
+        id: wake.userMessageId,
+        runId: wake.id,
+        notification:
+          source === undefined
+            ? undefined
+            : { source, outcome: "completed", summary: "Automatic update" },
+      },
+    });
+    yield* store.apply({
+      id: EventId.make(`automatic-follow-up:run:${index}`),
+      type: "run.updated",
+      threadId: childId,
+      runId: wake.id,
+      occurredAt: now,
+      payload: wake,
+    });
+    assert.notInclude(yield* store.getRecoveryThreadIds("subagent-results"), childId);
+  }
 });
 
 it.effect("recovers only undelivered follow-up results in memory", () =>
   followUpResultRecovery.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
 it.effect("recovers only undelivered follow-up results in SQLite", () =>
-  followUpResultRecovery.pipe(Effect.provide(TestLayer)),
+  followUpResultRecovery.pipe(Effect.provide(layerTest)),
 );
 
-it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+it.layer(layerTest)("ProjectionStoreV2", (it) => {
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,
@@ -3050,6 +3089,73 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       }),
   );
 
+  it.effect("selects the latest waiting secret only from active runs", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const suffix = "shell-pending-secret";
+      const threadId = yield* addRolledBackRecoveryCandidate(suffix);
+      const runId = RunId.make(`run:${suffix}:rolled-back`);
+      const nodeId = NodeId.make(`node:${suffix}:rolled-back`);
+      const now = yield* DateTime.now;
+      const addSecret = (id: string, ordinal: number, status: "waiting" | "completed") =>
+        projectionStore.apply({
+          id: EventId.make(`event:${id}`),
+          type: "turn-item.updated",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(id),
+            threadId,
+            runId,
+            nodeId,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status,
+            title: null,
+            startedAt: now,
+            completedAt: null,
+            updatedAt: now,
+            type: "secret_request",
+            label: "Test credential",
+            reason: "Test pending input",
+            secretStatus: status === "waiting" ? "pending" : "saved",
+          },
+        });
+      yield* addSecret("secret:a", 2, "waiting");
+      yield* addSecret("secret:b", 3, "waiting");
+      yield* addSecret("secret:c", 4, "completed");
+
+      for (const status of [
+        "preparing",
+        "starting",
+        "running",
+        "waiting",
+        "completed",
+        "rolled_back",
+      ]) {
+        yield* sql`
+          UPDATE orchestration_v2_projection_runs
+          SET status = ${status}, payload_json = json_set(payload_json, '$.status', ${status})
+          WHERE run_id = ${runId}
+        `;
+        const shell = yield* projectionStore.getShellSnapshot();
+        const thread = shell.threads.find((candidate) => candidate.id === threadId);
+        assert.isDefined(thread);
+        assert.equal(
+          thread?.pendingRuntimeRequest?.id ?? null,
+          status === "completed" || status === "rolled_back" ? null : "secret:b",
+        );
+      }
+    }),
+  );
+
   it.effect("builds shell snapshots without decoding full turn item payloads", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
@@ -3962,6 +4068,21 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         (yield* projectionStore.getThreadProjection(sourceThreadId)).messages,
       );
       const targetAfterRollback = yield* projectionStore.getThreadProjection(targetThreadId);
+      // Both shell reads drop the rolled-back run from the source count, while
+      // the fork keeps the prefix it inherited.
+      const shellSnapshot = yield* projectionStore.getShellSnapshot();
+      for (const shell of [
+        yield* projectionStore.getThreadShell(sourceThreadId),
+        shellSnapshot.threads.find((thread) => thread.id === sourceThreadId),
+      ]) {
+        assert.equal(shell?.itemCount, 2);
+      }
+      for (const shell of [
+        yield* projectionStore.getThreadShell(targetThreadId),
+        shellSnapshot.threads.find((thread) => thread.id === targetThreadId),
+      ]) {
+        assert.equal(shell?.visibleItemCount, targetAfterRollback.visibleTurnItems.length);
+      }
       const forwardPage = yield* projectionStore.getTimelinePage(targetThreadId, {
         view: "activity",
         limit: 2,

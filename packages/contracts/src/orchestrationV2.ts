@@ -1350,6 +1350,26 @@ export const OrchestrationV2WebSearchResult = Schema.Struct({
 });
 export type OrchestrationV2WebSearchResult = typeof OrchestrationV2WebSearchResult.Type;
 
+export const OrchestrationV2SecretRequestStatus = Schema.Literals([
+  "pending",
+  "saved",
+  "declined",
+  "cancelled",
+]);
+export type OrchestrationV2SecretRequestStatus = typeof OrchestrationV2SecretRequestStatus.Type;
+
+/**
+ * A secret an agent asked the user for. The value never passes through
+ * orchestration: the item carries only what was asked and how it was answered.
+ */
+const OrchestrationV2SecretRequestFields = {
+  type: Schema.Literal("secret_request"),
+  label: TrimmedNonEmptyString,
+  reason: Schema.String,
+  placeholder: Schema.optional(Schema.String),
+  secretStatus: OrchestrationV2SecretRequestStatus,
+} as const;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1528,6 +1548,10 @@ export const OrchestrationV2TurnItem = Schema.Union([
     targetRunId: Schema.NullOr(RunId),
     targetProviderInstanceId: ProviderInstanceId,
     targetModel: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemBaseFields,
+    ...OrchestrationV2SecretRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1761,16 +1785,6 @@ export type OrchestrationV2DomainEvent = typeof OrchestrationV2DomainEvent.Type;
 
 export const OrchestrationV2ThreadProjection = Schema.Struct({
   thread: OrchestrationV2AppThread,
-  /** Requested by Stop; derived from current child work, never persisted. */
-  childInterruptTargets: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        threadId: ThreadId,
-        runId: RunId,
-        action: Schema.Literals(["interrupt", "cancel"]),
-      }),
-    ),
-  ),
   runs: Schema.Array(OrchestrationV2Run),
   attempts: Schema.Array(OrchestrationV2RunAttempt),
   nodes: Schema.Array(OrchestrationV2ExecutionNode),
@@ -2308,6 +2322,10 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     targetRunId: Schema.NullOr(RunId),
     targetProviderInstanceId: ProviderInstanceId,
     targetModel: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2TurnItemJsonBaseFields,
+    ...OrchestrationV2SecretRequestFields,
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3028,6 +3046,7 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     targetRunId: Schema.NullOr(RunId),
   }),
+
   Schema.Struct({
     type: Schema.Literal("provider.switch"),
     commandId: CommandId,
@@ -3095,6 +3114,22 @@ const OrchestrationV2InternalCommand = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     reason: Schema.optional(Schema.String),
+  }),
+  /**
+   * Records or updates a secret an agent asked the user for. Internal so no
+   * client can mark a request saved without the value being stored.
+   */
+  Schema.Struct({
+    type: Schema.Literal("secret_request.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    nodeId: NodeId,
+    turnItemId: TurnItemId,
+    label: TrimmedNonEmptyString,
+    reason: Schema.String,
+    placeholder: Schema.optional(Schema.String),
+    secretStatus: OrchestrationV2SecretRequestStatus,
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;
@@ -3181,7 +3216,6 @@ export type OrchestrationV2DispatchCommandResult = typeof OrchestrationV2Dispatc
 
 export const OrchestrationV2GetThreadProjectionInput = Schema.Struct({
   threadId: ThreadId,
-  includeInterruptTargets: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2GetThreadProjectionInput =
   typeof OrchestrationV2GetThreadProjectionInput.Type;

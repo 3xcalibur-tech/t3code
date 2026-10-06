@@ -5,7 +5,6 @@ import {
   CheckpointId,
   CheckpointScopeId,
   ORCHESTRATION_V2_WS_METHODS,
-  isProviderNativeSubagentThread,
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
@@ -28,7 +27,6 @@ import {
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -774,152 +772,33 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
 });
 
 /**
- * Stop for the thread's latest work: interrupts the active run, or the settled run whose
- * background work still runs. With no run to stop, it ends the thread's pull request
- * watches, the only background work that has no run.
+ * Stop holds the whole thread on the server before stopping delegated children.
+ * The server selects its current run, including work that started after the projection read.
+ * A thread with no runs can only own pull request watches.
  */
 export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThreadTurn")(function* (
   input: InterruptThreadTurnInput,
 ) {
   let runId = input.runId ?? (input.turnId as RunId | undefined);
-  const parentProjection = yield* request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, {
-    threadId: input.threadId,
-    includeInterruptTargets: true,
-  });
   if (runId === undefined) {
-    const projection = parentProjection;
-    runId = projection.runs.findLast(
-      (run) =>
-        run.status === "preparing" ||
-        run.status === "starting" ||
-        run.status === "running" ||
-        run.status === "waiting",
-    )?.id;
+    const parentProjection = yield* getProjection(input.threadId);
+    runId = parentProjection.runs.at(-1)?.id;
     if (runId === undefined) {
-      const latestRun = projection.runs.at(-1);
-      if (
-        derivePendingBackgroundWork({
-          latestRun,
-          providerThreads: projection.providerThreads,
-          turnItems: projection.turnItems,
-          activeProviderThreadId: projection.thread.activeProviderThreadId,
-          runs: projection.runs,
-        }).length > 0
-      ) {
-        runId = latestRun?.id;
-      }
-    }
-  }
-  let childSequence = 0;
-  // Older servers lack derived targets. Use their task links to discover
-  // resumed children when stopping a settled parent's background work.
-  const resumedChildThreadIds =
-    parentProjection.childInterruptTargets === undefined &&
-    !parentProjection.runs.some((run) =>
-      ["preparing", "starting", "running"].includes(run.status),
-    ) &&
-    ["completed", "waiting", "failed", "interrupted", "cancelled"].includes(
-      parentProjection.runs.at(-1)?.status ?? "",
-    )
-      ? parentProjection.subagents.flatMap((task) =>
-          task.origin === "app_owned" &&
-          task.childThreadId !== null &&
-          ["completed", "failed", "interrupted", "cancelled"].includes(task.status)
-            ? [task.childThreadId]
-            : [],
-        )
-      : [];
-  if (
-    !parentProjection.runs.some((run) => ["preparing", "starting", "running"].includes(run.status))
-  ) {
-    for (const target of parentProjection.childInterruptTargets ?? []) {
-      const commandId = CommandId.make(
-        `${yield* allocateCommandId(input)}:child:${target.threadId}:${target.runId}`,
-      );
-      const result = yield* dispatch(
-        target.action === "interrupt"
-          ? {
-              type: "run.interrupt",
-              commandId,
-              threadId: target.threadId,
-              runId: target.runId,
-              holdQueue: true,
-            }
-          : {
-              type: "queued-run.cancel",
-              commandId,
-              threadId: target.threadId,
-              runId: target.runId,
-            },
-      );
-      childSequence = result.sequence;
-    }
-  }
-  for (const childThreadId of new Set(resumedChildThreadIds)) {
-    const child = yield* getProjection(childThreadId);
-    if (
-      child.thread.lineage.parentThreadId !== input.threadId ||
-      child.thread.lineage.relationshipToParent !== "subagent" ||
-      isProviderNativeSubagentThread(child.thread) ||
-      child.thread.deletedAt !== null ||
-      child.thread.archivedAt !== null
-    )
-      continue;
-    let childRun = child.runs.findLast((run) =>
-      ["preparing", "starting", "running", "waiting"].includes(run.status),
-    );
-    const latestChildRun = child.runs.at(-1);
-    if (
-      childRun === undefined &&
-      derivePendingBackgroundWork({
-        latestRun: latestChildRun,
-        providerThreads: child.providerThreads,
-        turnItems: child.turnItems,
-        activeProviderThreadId: child.thread.activeProviderThreadId,
-        runs: child.runs,
-      }).length > 0
-    )
-      childRun = latestChildRun;
-    const childCommandId = CommandId.make(
-      `${yield* allocateCommandId(input)}:child:${childThreadId}`,
-    );
-    if (childRun !== undefined) {
-      const result = yield* dispatch({
-        type: "run.interrupt",
-        commandId: childCommandId,
-        threadId: childThreadId,
-        runId: childRun.id,
-        holdQueue: true,
-      });
-      childSequence = result.sequence;
-    } else {
-      // A queued follow-up has no provider turn to interrupt yet.
-      for (const queued of child.runs.filter((run) => run.status === "queued")) {
-        const result = yield* dispatch({
-          type: "queued-run.cancel",
-          commandId: CommandId.make(`${childCommandId}:${queued.id}`),
-          threadId: childThreadId,
-          runId: queued.id,
+      let result = { sequence: 0 };
+      for (const link of visibleThreadPullRequests(parentProjection.thread.pullRequests ?? [])) {
+        if (link.watch === undefined) continue;
+        result = yield* dispatch({
+          type: "thread.pull-request.watch",
+          commandId: yield* allocateCommandId(result.sequence === 0 ? input : {}),
+          threadId: input.threadId,
+          host: link.host,
+          repository: link.repository,
+          number: link.number,
+          watching: false,
         });
-        childSequence = result.sequence;
       }
+      return result;
     }
-  }
-  if (runId === undefined) {
-    let result = { sequence: childSequence };
-    for (const link of visibleThreadPullRequests(parentProjection.thread.pullRequests ?? [])) {
-      if (link.watch === undefined) continue;
-      result = yield* dispatch({
-        type: "thread.pull-request.watch",
-        commandId: yield* allocateCommandId(result.sequence === 0 ? input : {}),
-        threadId: input.threadId,
-        host: link.host,
-        repository: link.repository,
-        number: link.number,
-        watching: false,
-      });
-    }
-    return result;
   }
   return yield* dispatch({
     type: "run.interrupt",
