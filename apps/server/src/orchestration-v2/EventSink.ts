@@ -84,6 +84,12 @@ export interface EventSinkV2Shape {
   }) => Effect.Effect<ReadonlyArray<OrchestrationV2StoredEvent>, EventSinkV2Error>;
   readonly writeIfRunCurrent: (input: {
     readonly guardPendingUserInputCancellations?: boolean;
+    /**
+     * Guards approvals and every other request kind too. For a writer that
+     * cancels requests an earlier projection read showed pending; a
+     * provider's own approval cancellation stays authoritative.
+     */
+    readonly guardPendingRequestCancellations?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
     readonly runId: RunId;
@@ -263,14 +269,18 @@ const layerBase: Layer.Layer<
 
     // A user can answer after terminal normalization reads the pending request.
     // Recheck inside the write transaction so stale cleanup cannot erase answers.
-    const guardUserInputCancellations = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+    // `allKinds` extends this from questions to approvals and every other kind.
+    const guardRequestCancellations = (
+      events: ReadonlyArray<OrchestrationV2DomainEvent>,
+      allKinds: boolean,
+    ) =>
       Effect.gen(function* () {
         const staleRequests = new Set<RuntimeRequestId>();
         const staleNodes = new Set<NodeId>();
         for (const event of events) {
           if (
             event.type !== "runtime-request.updated" ||
-            event.payload.kind !== "user_input" ||
+            (!allKinds && event.payload.kind !== "user_input") ||
             event.payload.status !== "cancelled"
           )
             continue;
@@ -280,7 +290,7 @@ const layerBase: Layer.Layer<
           );
           if (
             current?.status !== "pending" ||
-            current.kind !== "user_input" ||
+            current.kind !== event.payload.kind ||
             current.providerTurnId !== event.payload.providerTurnId ||
             current.responseCapability.type === "message"
           ) {
@@ -296,7 +306,8 @@ const layerBase: Layer.Layer<
               return event.payload.status !== "cancelled" || !staleNodes.has(event.payload.id);
             case "turn-item.updated":
               return (
-                event.payload.type !== "user_input_request" ||
+                (event.payload.type !== "user_input_request" &&
+                  event.payload.type !== "approval_request") ||
                 event.payload.status !== "cancelled" ||
                 !staleRequests.has(event.payload.requestId)
               );
@@ -305,6 +316,16 @@ const layerBase: Layer.Layer<
           }
         });
       });
+    const guardCancellations = (input: {
+      readonly guardPendingUserInputCancellations?: boolean;
+      readonly guardPendingRequestCancellations?: boolean;
+      readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+    }) =>
+      input.guardPendingRequestCancellations === true
+        ? guardRequestCancellations(input.events, true)
+        : input.guardPendingUserInputCancellations === true
+          ? guardRequestCancellations(input.events, false)
+          : Effect.succeed(input.events);
 
     const normalizeEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) => {
       const runOrdinals = new Map(
@@ -370,11 +391,7 @@ const layerBase: Layer.Layer<
 
       return yield* commitThenPublish(
         Effect.gen(function* () {
-          const normalized = yield* normalizeEvents(
-            input.guardPendingUserInputCancellations === true
-              ? yield* guardUserInputCancellations(input.events)
-              : input.events,
-          );
+          const normalized = yield* normalizeEvents(yield* guardCancellations(input));
           const committed = yield* eventStore.append({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
@@ -428,11 +445,7 @@ const layerBase: Layer.Layer<
               };
             }
 
-            const normalized = yield* normalizeEvents(
-              input.guardPendingUserInputCancellations === true
-                ? yield* guardUserInputCancellations(input.events)
-                : input.events,
-            );
+            const normalized = yield* normalizeEvents(yield* guardCancellations(input));
             const storedEvents = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
@@ -493,11 +506,7 @@ const layerBase: Layer.Layer<
             };
           }
 
-          const normalized = yield* normalizeEvents(
-            input.guardPendingUserInputCancellations === true
-              ? yield* guardUserInputCancellations(input.events)
-              : input.events,
-          );
+          const normalized = yield* normalizeEvents(yield* guardCancellations(input));
           const storedEvents = yield* eventStore.append({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,

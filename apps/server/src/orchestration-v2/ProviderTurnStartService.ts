@@ -459,9 +459,9 @@ export const layer: Layer.Layer<
             runId,
             activeAttemptId: attempt.id,
             expectedStatus: "starting",
-            // A user answer that lands while the failure is written wins over
-            // cancelling the request it answered.
-            guardPendingUserInputCancellations: true,
+            // An answer or approval that lands while the failure is written wins
+            // over cancelling the request it resolved.
+            guardPendingRequestCancellations: true,
             events:
               status === "failed"
                 ? [...(yield* inheritedWorkSettlement({ run, now })), ...events]
