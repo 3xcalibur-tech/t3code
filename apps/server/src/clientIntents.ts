@@ -64,7 +64,9 @@ const make = Effect.gen(function* () {
         return yield* subscriptionLock.withPermit(
           Effect.gen(function* () {
             const targetClientId = Array.from(windows.values())
-              .filter((window) => window.environmentId === input.environmentId)
+              .filter(
+                (window) => window.environmentId === input.environmentId && window.focusedOrder > 0,
+              )
               .sort(
                 (left, right) =>
                   right.focusedOrder - left.focusedOrder ||

@@ -183,7 +183,12 @@ export const layer = Layer.effectDiscard(
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const clock = yield* Clock.Clock;
     const reportRequests = yield* Queue.sliding<void>(1);
-    const requestReport = () => Queue.offerUnsafe(reportRequests, undefined);
+    const focusReportRequests = yield* Queue.sliding<void>(1);
+    const requestReport = (event?: Event) =>
+      Queue.offerUnsafe(
+        event?.type === "focus" || event?.type === "blur" ? focusReportRequests : reportRequests,
+        undefined,
+      );
     let lastInteractionAtMs = clock.currentTimeMillisUnsafe();
     const recordInteraction = () => {
       const observedAtMs = clock.currentTimeMillisUnsafe();
@@ -244,8 +249,10 @@ export const layer = Layer.effectDiscard(
       Stream.runForEach(() => Effect.sync(requestReport)),
       Effect.forkScoped,
     );
-    yield* Stream.fromQueue(reportRequests).pipe(
-      Stream.debounce("250 millis"),
+    yield* Stream.merge(
+      Stream.fromQueue(focusReportRequests),
+      Stream.fromQueue(reportRequests).pipe(Stream.debounce("250 millis")),
+    ).pipe(
       Stream.runForEach(() => report),
       Effect.forkScoped,
     );

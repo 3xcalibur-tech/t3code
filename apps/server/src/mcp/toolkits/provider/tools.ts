@@ -6,7 +6,8 @@ import {
   UsageSummaryInput,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import * as Tool from "effect/ai/Tool";
+import * as Toolkit from "effect/ai/Toolkit";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as UsageLimitSources from "../../../usage/UsageLimitSources.ts";

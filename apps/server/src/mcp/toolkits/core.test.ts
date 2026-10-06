@@ -19,7 +19,10 @@ import { McpSchema, McpServer, Tool } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
 
 import * as ServerConfig from "../../config.ts";
-import { OrchestratorProjectionError } from "../../orchestration-v2/Orchestrator.ts";
+import {
+  OrchestratorProjectionError,
+  OrchestratorV2,
+} from "../../orchestration-v2/Orchestrator.ts";
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
@@ -304,6 +307,52 @@ const clientScope = (
   issuedAt: 0,
   capabilities: new Set(["orchestration", "worktree", "pull-requests"]),
 });
+
+it.effect("gates host pull request reads before accessing another project's thread", () =>
+  Effect.gen(function* () {
+    let targetReads = 0;
+    const server = yield* McpServer.McpServer;
+    for (const runtimeModeCeiling of ["approval-required", "auto", "full-access"] as const) {
+      const result = yield* server
+        .callTool({
+          name: "t3_pull_request_read",
+          arguments: {
+            threadId: "other-project-thread",
+            url: "https://github.com/private/repo/pull/1",
+          },
+        })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            clientScope(runtimeModeCeiling),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.provide(
+            Layer.mock(ThreadManagement.ThreadManagementService)({
+              getThreadShell: () =>
+                Effect.sync(() => {
+                  targetReads += 1;
+                  return null;
+                }),
+            }),
+          ),
+        );
+      expect(declaredFailure(result)).toMatchObject({
+        code: runtimeModeCeiling === "full-access" ? "thread_not_found" : "capability_denied",
+      });
+      expect(targetReads).toBe(runtimeModeCeiling === "full-access" ? 1 : 0);
+    }
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerPullRequestsToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(Layer.mock(OrchestratorV2)({})),
+        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+      ),
+    ),
+  ),
+);
 
 it.effect("a client caller targets any thread within its ceiling and cannot act as a thread", () =>
   Effect.gen(function* () {

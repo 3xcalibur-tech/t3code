@@ -350,12 +350,12 @@ const make = Effect.gen(function* () {
 
   /**
    * The host pull request a host-facing tool addresses. The thread only picks the project whose
-   * checkout and credentials the host CLI runs with, so writes are gated on full access rather
+   * checkout and credentials the host CLI runs with, so host calls are gated on full access rather
    * than on the thread.
    */
   const resolveHostRef = Effect.fn("PullRequestsToolkit.resolveHostRef")(function* (
     input: PullRequestTargetInput,
-    writable: boolean,
+    fullAccess: boolean,
   ) {
     yield* McpInvocationContext.requireMcpCapability("pull-requests").pipe(
       Effect.mapError(
@@ -366,9 +366,9 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (writable)
+    if (fullAccess)
       yield* readFullAccessCaller(
-        "Pull request writes require a live full-access/default thread or a full-access client.",
+        "Host pull request calls require a live full-access/default thread or a full-access client.",
       );
     const {
       projection: { thread },
@@ -460,7 +460,7 @@ const make = Effect.gen(function* () {
     unwatch_pull_request: (input) => setWatching(input, false),
     t3_pull_request_read: (input) =>
       Effect.gen(function* () {
-        const { target, ref, service } = yield* resolveHostRef(input, false);
+        const { target, ref, service } = yield* resolveHostRef(input, true);
         const budget = textBudget(input.maxCharacters ?? DEFAULT_PULL_REQUEST_CHARACTERS);
         const empty = { overview: null, checks: null, conversation: null, reviewThread: null };
         const login = (actor: { readonly login: string } | null | undefined) =>
@@ -486,8 +486,8 @@ const make = Effect.gen(function* () {
               state: detail.state,
               isDraft: detail.isDraft,
               author: login(detail.author),
-              headBranch: budget.take(detail.headBranch),
-              baseBranch: budget.take(detail.baseBranch),
+              headBranch: detail.headBranch,
+              baseBranch: detail.baseBranch,
               mergeability: detail.mergeability,
               baseComparison: detail.baseComparison ?? null,
               autoMergeEnabled: detail.autoMergeEnabled ?? null,
@@ -511,7 +511,7 @@ const make = Effect.gen(function* () {
             const activity = yield* service.activity(ref).pipe(Effect.mapError(hostFailure));
             const reviewThreadOf = (thread: PullRequestReviewThread) => ({
               id: thread.id,
-              path: budget.take(thread.path),
+              path: thread.path,
               line: thread.line,
               side: thread.side,
               isResolved: thread.isResolved,
@@ -530,7 +530,7 @@ const make = Effect.gen(function* () {
               .map((comment) => ({
                 ...threadComment(comment),
                 kind: comment.kind,
-                path: comment.path === null ? null : budget.take(comment.path),
+                path: comment.path,
                 reviewState: comment.reviewState,
               }))
               .toReversed();
