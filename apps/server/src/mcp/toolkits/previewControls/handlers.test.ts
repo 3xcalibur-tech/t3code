@@ -17,6 +17,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as Preview from "../../../preview/Manager.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewControlsHandlers from "./handlers.ts";
 import { PreviewControlsToolkit } from "./tools.ts";
@@ -64,6 +65,7 @@ it.effect.each([
         PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer)),
         Layer.succeed(Preview.PreviewManager, manager),
         Layer.succeed(McpInvocationContext.McpInvocationContext, scope),
+        McpToolAccessTestkit.liveThreadsLayer,
         Layer.mock(ServerSettings.ServerSettingsService)({
           getSettings: Effect.succeed(settings),
         }),
