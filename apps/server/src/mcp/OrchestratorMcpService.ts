@@ -1424,10 +1424,11 @@ const make = Effect.gen(function* () {
         yield* resolveRuntimeMode(limits.runtimeMode, shell.runtimeMode);
         yield* resolveInteractionMode(limits.interactionMode, shell.interactionMode);
         const projection = yield* threadManagement
-          .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [
-            "runtimeRequests",
-            "turnItems",
-          ])
+          .getProjectThreadRecords(
+            { projectId: shell.projectId, threadId },
+            ["runtimeRequests", "turnItems"],
+            { turnItemTypes: ["approval_request", "user_input_request"] },
+          )
           .pipe(Effect.mapError(threadManagementFailure));
         const request = projection.runtimeRequests.find(
           (request) =>

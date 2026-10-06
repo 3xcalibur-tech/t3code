@@ -45,6 +45,8 @@ export class ReviewService extends Context.Service<
      */
     readonly getScopedDiffPreview: (input: {
       readonly cwd: ReviewDiffPreviewInput["cwd"];
+      /** Resolved by the caller from the thread's registered project, never tool input. */
+      readonly workspaceRoot?: string | undefined;
       readonly baseRef?: ReviewDiffPreviewInput["baseRef"] | undefined;
       readonly source?: ReviewDiffPreviewSourceKind | undefined;
       readonly file?: NonNullable<ReviewDiffPreviewInput["file"]>["path"] | undefined;
@@ -94,13 +96,14 @@ export const make = Effect.gen(function* () {
   const assertWorkspaceBoundCwd = Effect.fn("ReviewService.assertWorkspaceBoundCwd")(function* (
     operation: "ReviewService.getDiffPreview" | "ReviewService.getDiffFileContents",
     cwd: string,
+    authorizedWorkspaceRoot = config.cwd,
   ) {
     const worktreesDirectories = yield* settings.getSettings.pipe(
       Effect.orElseSucceed(() => ({ worktreesDirectory: "", previousWorktreesDirectories: [] })),
     );
     const [candidate, workspaceRoot, worktreesRoots] = yield* Effect.all([
       canonicalizePath(cwd),
-      canonicalizePath(config.cwd),
+      canonicalizePath(authorizedWorkspaceRoot),
       // A managed root that cannot be resolved, or resolves to a filesystem
       // root through a symlink, is skipped rather than failing every review.
       Effect.forEach(
@@ -130,10 +133,11 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const getDiffPreview: ReviewService["Service"]["getDiffPreview"] = Effect.fn(
-    "ReviewService.getDiffPreview",
-  )(function* (input) {
-    yield* assertWorkspaceBoundCwd("ReviewService.getDiffPreview", input.cwd);
+  const readDiffPreview = Effect.fn("ReviewService.getDiffPreview")(function* (
+    input: ReviewDiffPreviewInput,
+    workspaceRoot?: string,
+  ) {
+    yield* assertWorkspaceBoundCwd("ReviewService.getDiffPreview", input.cwd, workspaceRoot);
 
     const handle = yield* vcsRegistry.detect({ cwd: input.cwd, requestedKind: "auto" });
     if (!handle) {
@@ -168,11 +172,14 @@ export const make = Effect.gen(function* () {
       baseRef: ReviewDiffPreviewInput["baseRef"],
       file?: ReviewDiffPreviewInput["file"],
     ) =>
-      getDiffPreview({
-        cwd: input.cwd,
-        ...(baseRef === undefined ? {} : { baseRef }),
-        ...(file === undefined ? {} : { file }),
-      });
+      readDiffPreview(
+        {
+          cwd: input.cwd,
+          ...(baseRef === undefined ? {} : { baseRef }),
+          ...(file === undefined ? {} : { file }),
+        },
+        input.workspaceRoot,
+      );
     let preview: ReviewDiffPreviewResult;
     if (input.file !== undefined && sourceKind !== undefined) {
       // A renamed file needs its old path, which only the full preview's stats know. The lookup
@@ -222,7 +229,7 @@ export const make = Effect.gen(function* () {
   });
 
   return ReviewService.of({
-    getDiffPreview,
+    getDiffPreview: (input) => readDiffPreview(input),
     getScopedDiffPreview,
     getDiffFileContents,
   });

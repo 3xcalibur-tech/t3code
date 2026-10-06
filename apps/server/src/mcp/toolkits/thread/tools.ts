@@ -32,6 +32,7 @@ import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
@@ -188,6 +189,10 @@ const PendingRequestReadTool = Tool.make("t3_pending_request_read", {
   .annotate(Tool.Destructive, false);
 const PendingRequestRespondTool = Tool.make("t3_pending_request_respond", {
   ...commandTool,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    OrchestratorMcpService.OrchestratorMcpService,
+  ],
   description:
     "Respond to a pending request using the existing runtime response command: answers for a user question, decision for an approval (one of the options from t3_pending_request_read, else cancel, decline, acceptForSession, or accept). Approving requires a full-access/default caller; declining or cancelling does not.",
   parameters: Schema.Struct({

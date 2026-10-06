@@ -819,4 +819,4 @@ export const layer = Layer.mergeAll(
   layerTerminalRegistration,
   layerProviderRegistration,
   layerClientRegistration,
-).pipe(Layer.provideMerge(layerMcpTransport));
+).pipe(Layer.provide(OrchestratorMcpService.layer), Layer.provideMerge(layerMcpTransport));
