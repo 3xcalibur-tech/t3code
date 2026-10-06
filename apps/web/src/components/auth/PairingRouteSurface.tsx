@@ -1,10 +1,13 @@
 import { Alert, AlertDescription } from "../ui/alert";
+import { useAtomValue } from "@effect/atom-react";
 import type { AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
+import { environmentCatalog } from "../../connection/catalog";
 import { connectPairing } from "../../connection/onboarding";
+import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import {
   peekPairingTokenFromUrl,
   stripPairingTokenFromUrl,
@@ -42,6 +45,8 @@ export function PairingRouteSurface({
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const autoSubmitAttemptedRef = useRef(false);
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
 
   const submitCredential = useCallback(
     async (nextCredential: string) => {
@@ -60,11 +65,16 @@ export function PairingRouteSurface({
         return;
       }
 
+      // While unpaired, the server rejected every socket and the retry delay
+      // kept growing. Connect now with the new session cookie.
+      if (primaryEnvironmentId !== null) {
+        void retryEnvironment(primaryEnvironmentId);
+      }
       startTransition(() => {
         onAuthenticated();
       });
     },
-    [onAuthenticated],
+    [onAuthenticated, primaryEnvironmentId, retryEnvironment],
   );
 
   const handleSubmit = useCallback(
