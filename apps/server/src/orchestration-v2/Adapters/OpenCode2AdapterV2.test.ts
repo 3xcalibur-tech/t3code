@@ -3877,6 +3877,7 @@ describe("OpenCode2 adapter", () => {
       const reply = (assistantMessageID: string, text: string) =>
         event("session.text.ended", { sessionID: SESSION, assistantMessageID, ordinal: 0, text });
       const offers: Array<ProviderContinuationRequest> = [];
+      const bothOffered = yield* Deferred.make<void>();
       const { runtime, thread } = yield* resumed([
         ...backgroundLaunch(CHILD),
         // The same turn starts a second background subagent.
@@ -3908,7 +3909,12 @@ describe("OpenCode2 adapter", () => {
         event("session.execution.succeeded", { sessionID: SESSION }),
       ]).pipe(
         Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
-          offer: (request) => Effect.sync(() => void offers.push(request)),
+          offer: (request) =>
+            Effect.suspend(() =>
+              offers.push(request) === 2
+                ? Deferred.succeed(bothOffered, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            ),
           take: Effect.never,
         }),
       );
@@ -3927,9 +3933,7 @@ describe("OpenCode2 adapter", () => {
         Effect.forkScoped,
       );
       yield* runtime.startTurn(withLineage(thread));
-      yield* Effect.gen(function* () {
-        while (offers.length < 2) yield* Effect.yieldNow;
-      }).pipe(Effect.timeout("2 seconds"), Effect.orDie);
+      yield* Deferred.await(bothOffered);
       // A's continuation was cancelled before it started; B's runs.
       yield* runtime.startTurn(continuationTurn(thread, offers[1]!, "wake-b"));
       yield* Deferred.await(ended);
