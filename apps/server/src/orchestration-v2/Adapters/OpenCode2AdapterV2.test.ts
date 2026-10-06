@@ -1486,6 +1486,54 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  it.effect("still checks the server when a failed prompt starts after a reconnect", () =>
+    Effect.gen(function* () {
+      const offered = yield* Deferred.make<void>();
+      const gate = makeProviderReplayGate(["drop"]);
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          reply("session.prompt", {
+            status: 502,
+            body: { _tag: "UnknownError", message: "bad gateway" },
+          }),
+          // The stream drops before the prompt's execution starts, and the
+          // reconnect finds the session active: the prompt's run is still to come.
+          event("session.usage.updated", { sessionID: SESSION }, "drop"),
+          { type: "runtime_exit", status: "success" } as const,
+          out("event.subscribe"),
+          out("session.active"),
+          replyData("session.active", { [SESSION]: { type: "running" } }),
+          out("permission.list", { sessionID: SESSION }),
+          replyData("permission.list", []),
+          out("session.form.list", { sessionID: SESSION }),
+          replyData("session.form.list", []),
+          // Its own start: that run is still going, so the next turn stops it and fails.
+          event("session.execution.started", { sessionID: SESSION }),
+          out("session.active"),
+          reply("session.active", { data: { [SESSION]: { type: "running" } } }),
+          out("session.interrupt", { sessionID: SESSION }),
+          reply("session.interrupt", { interrupted: true }),
+        ],
+        { replayGate: gate },
+      ).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      const ended = yield* terminals(runtime, 2);
+      yield* runtime.startTurn(turnInput(thread)).pipe(Effect.ignore);
+      gate.release("drop");
+      // The late start has been read.
+      yield* Deferred.await(offered);
+      yield* runtime.startTurn(secondTurn(thread));
+      const [first, second] = yield* Fiber.join(ended);
+      assert.equal(first?.status, "failed");
+      assert.equal(second?.failure?.message, OPENCODE_2_STILL_STOPPING);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it.effect("prompts again without a check after the server refused a prompt", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

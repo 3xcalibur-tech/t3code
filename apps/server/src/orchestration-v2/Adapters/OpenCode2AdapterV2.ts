@@ -2779,9 +2779,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const active = yield* client.session.active();
       // An execution that ended while the stream was down never said so.
       for (const sessionId of busy) if (!(sessionId in active)) busy.delete(sessionId);
-      // A run `unsettled` waits on is running now or over: any start from here
-      // is a new execution's, even if the run's own start was lost in the gap.
-      for (const state of threads.values()) if (state.unsettled) state.unsettledStarted = true;
+      // A run `unsettled` waits on is over once its session is idle: any start
+      // from here is a new execution's, even if the run's own start was lost in
+      // the gap. A session still active may not have started that run yet, so
+      // its next start may still be the run's own; its end clears the mark.
+      for (const state of threads.values()) {
+        if (state.unsettled && !(state.sessionId in active)) state.unsettledStarted = true;
+      }
       for (const [sessionId, state] of running) {
         const turn = state.active;
         if (turn === undefined) continue;
