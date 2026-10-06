@@ -238,6 +238,24 @@ function openTurnWork(
         result: null,
       },
     },
+    // The subagent's own provider turn is running. It belongs to no run
+    // attempt.
+    {
+      type: "provider_turn.updated",
+      driver,
+      threadId: childThreadId,
+      providerTurn: {
+        id: ProviderTurnId.make(`provider-turn:child:${input.attemptId}`),
+        providerThreadId: ProviderThreadId.make(`provider-thread:${childThreadId}`),
+        nodeId: subagentNodeId,
+        runAttemptId: null,
+        nativeTurnRef: null,
+        ordinal: 1,
+        status: "running",
+        startedAt: now,
+        completedAt: null,
+      },
+    },
     // The subagent is waiting on an approval in its own thread. Its rows carry
     // no run id; the child thread has no runs.
     {
@@ -934,6 +952,7 @@ it.live("settles the work a restarted run inherited when its replacement never o
         nativeChildStreaming,
         nativeChildRequests,
         nativeChildSubagents,
+        nativeChildProviderTurns,
         nativeGrandchildItems,
         delegatedItems,
       } = yield* Effect.gen(function* () {
@@ -1104,6 +1123,9 @@ it.live("settles the work a restarted run inherited when its replacement never o
           nativeChildSubagents: (yield* orchestrator.getThreadProjection(
             providerNativeChildThreadId(threadId),
           )).subagents.map((subagent) => subagent.status),
+          nativeChildProviderTurns: (yield* orchestrator.getThreadProjection(
+            providerNativeChildThreadId(threadId),
+          )).providerTurns.map((turn) => turn.status),
           nativeGrandchildItems: openItems(
             yield* orchestrator.getThreadProjection(
               providerNativeChildThreadId(providerNativeChildThreadId(threadId)),
@@ -1148,6 +1170,8 @@ it.live("settles the work a restarted run inherited when its replacement never o
       assert.deepEqual(nativeChildRequests, ["cancelled"]);
       // A subagent the provider-native subagent launched ends with it.
       assert.deepEqual(nativeChildSubagents, ["cancelled"]);
+      // So does the subagent's own provider turn, which no run attempt owns.
+      assert.deepEqual(nativeChildProviderTurns, ["cancelled"]);
       assert.deepEqual(nativeGrandchildItems, [["command_execution", "cancelled"]]);
       // The delegated task and its thread keep running.
       assert.deepEqual(

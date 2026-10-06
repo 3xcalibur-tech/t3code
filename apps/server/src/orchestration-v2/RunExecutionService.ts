@@ -162,8 +162,14 @@ export type OpenRunOwnedSubagentProjection = {
   /** Pending requests; each settles with the node it waits on. */
   readonly runtimeRequests?: ReadonlyArray<OrchestrationV2RuntimeRequest>;
   readonly streamingMessages?: ReadonlyArray<OrchestrationV2ConversationMessage>;
-  /** Open provider turns of the run's own attempts. */
-  readonly providerTurns?: ReadonlyArray<OrchestrationV2ProviderTurn>;
+  /**
+   * Open provider turns of the run's own attempts and of linked child threads,
+   * with the thread each one runs on (the turn row does not carry it).
+   */
+  readonly providerTurns?: ReadonlyArray<{
+    readonly threadId: ThreadId;
+    readonly providerTurn: OrchestrationV2ProviderTurn;
+  }>;
 };
 
 type RunOwnedSubagentTerminalStatus = Extract<
@@ -367,12 +373,12 @@ export function cascadeTerminalizeRunOwnedSubagents(input: {
         payload: { ...message, streaming: false, updatedAt: input.completedAt },
       });
     }
-    for (const providerTurn of input.open.providerTurns ?? []) {
+    for (const { threadId, providerTurn } of input.open.providerTurns ?? []) {
       if (isTerminalProviderTurnStatus(providerTurn.status)) continue;
       events.push({
         id: yield* input.allocateEventId(),
         type: "provider-turn.updated",
-        threadId: input.run.threadId,
+        threadId,
         runId: input.run.id,
         nodeId: providerTurn.nodeId,
         providerInstanceId: input.run.providerInstanceId,
@@ -457,8 +463,16 @@ export function openRunOwnedWorkFromProjection(input: {
     linkedChildThreadIds: input.linkedChildThreadIds,
     runtimeRequests: rows((thread) => thread.runtimeRequests),
     streamingMessages: rows((thread) => thread.messages).filter((message) => message.streaming),
-    providerTurns: rows((thread) => thread.providerTurns).filter(
-      (turn) => turn.runAttemptId !== null && runAttemptIds.has(turn.runAttemptId),
+    // A linked child's provider turns belong to no run attempt.
+    providerTurns: input.threads.flatMap((thread) =>
+      thread.providerTurns.flatMap((providerTurn) =>
+        (thread.thread.id === run.threadId
+          ? providerTurn.runAttemptId !== null && runAttemptIds.has(providerTurn.runAttemptId)
+          : input.linkedChildThreadIds.has(thread.thread.id)) &&
+        !isTerminalProviderTurnStatus(providerTurn.status)
+          ? [{ threadId: thread.thread.id, providerTurn }]
+          : [],
+      ),
     ),
   };
 }
