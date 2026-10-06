@@ -223,11 +223,12 @@ export const layer: Layer.Layer<
         if (Option.isNone(child) || !isProviderNativeSubagentThread(child.value.thread)) continue;
         linkedChildThreadIds.add(threadId);
         // A child thread has no runs, so the recovery read leaves out its
-        // streaming replies, provider turns and its pending requests' nodes
-        // and items; read them by thread instead.
+        // streaming replies, provider turns, subagents whose item already
+        // settled, and its pending requests' nodes and items; read them by
+        // thread instead.
         const records = yield* projectionStore.getThreadRecords(
           threadId,
-          ["messages", "nodes", "turnItems", "providerTurns"],
+          ["messages", "nodes", "turnItems", "providerTurns", "subagents"],
           {
             messageRoles: ["assistant"],
             turnItemTypes: ["approval_request", "user_input_request"],
@@ -244,6 +245,7 @@ export const layer: Layer.Layer<
         threads.push({
           ...child.value,
           providerTurns: records.providerTurns,
+          subagents: records.subagents,
           nodes: [
             ...child.value.nodes,
             ...records.nodes.filter(

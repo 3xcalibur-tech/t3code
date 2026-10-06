@@ -128,6 +128,9 @@ function openTurnWork(
   const childApprovalNodeId = NodeId.make(`node:child-approval:${input.attemptId}`);
   const childRequestId = RuntimeRequestId.make(`request:child-approval:${input.attemptId}`);
   const nestedRunningSubagentId = NodeId.make(`node:nested-running-subagent:${input.attemptId}`);
+  const nestedSettledItemSubagentId = NodeId.make(
+    `node:nested-settled-item-subagent:${input.attemptId}`,
+  );
   const requestId = RuntimeRequestId.make(`request:approval:${input.attemptId}`);
   return [
     {
@@ -419,6 +422,54 @@ function openTurnWork(
         childThreadId: null,
         prompt: "Read the docs",
         result: null,
+      },
+    },
+    // A third reported its item done, but its row is still running.
+    {
+      type: "subagent.updated",
+      driver,
+      subagent: {
+        id: nestedSettledItemSubagentId,
+        threadId: childThreadId,
+        runId: null,
+        parentNodeId: subagentNodeId,
+        origin: "provider_native",
+        createdBy: "agent",
+        driver,
+        providerInstanceId: input.modelSelection.instanceId,
+        providerThreadId: null,
+        childThreadId: null,
+        nativeTaskRef: null,
+        prompt: "Check the tests",
+        title: null,
+        model: null,
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    },
+    {
+      type: "turn_item.updated",
+      driver,
+      turnItem: {
+        ...base,
+        id: TurnItemId.make(`turn-item:nested-settled-item-subagent:${input.attemptId}`),
+        threadId: childThreadId,
+        runId: null,
+        nodeId: null,
+        ordinal: 5,
+        status: "completed",
+        completedAt: now,
+        type: "subagent",
+        subagentId: nestedSettledItemSubagentId,
+        origin: "provider_native",
+        driver,
+        providerInstanceId: input.modelSelection.instanceId,
+        childThreadId: null,
+        prompt: "Check the tests",
+        result: "done",
       },
     },
     {
@@ -1164,12 +1215,14 @@ it.live("settles the work a restarted run inherited when its replacement never o
         ["approval_request", "failed"],
         ["subagent", "completed"],
         ["subagent", "failed"],
+        ["subagent", "completed"],
         ["command_execution", "failed"],
       ]);
       assert.isFalse(nativeChildStreaming);
       assert.deepEqual(nativeChildRequests, ["cancelled"]);
-      // A subagent the provider-native subagent launched ends with it.
-      assert.deepEqual(nativeChildSubagents, ["failed"]);
+      // Subagents the provider-native subagent launched end with it, including
+      // one whose item already reported done.
+      assert.deepEqual(nativeChildSubagents, ["failed", "failed"]);
       // So does the subagent's own provider turn, which no run attempt owns.
       assert.deepEqual(nativeChildProviderTurns, ["failed"]);
       assert.deepEqual(nativeGrandchildItems, [["command_execution", "failed"]]);
