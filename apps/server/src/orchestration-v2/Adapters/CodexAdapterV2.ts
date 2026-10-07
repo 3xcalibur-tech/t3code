@@ -1320,6 +1320,15 @@ const decodeCodexChildModel = Schema.decodeUnknownEffect(
   }),
 );
 
+const decodeCodexChildThread = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    thread: Schema.Struct({
+      id: Schema.String,
+      model: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  }),
+);
+
 export const makeCodexAppServerSpawnCommand = Effect.fn(
   "CodexAdapterV2.makeCodexAppServerSpawnCommand",
 )(function* (input: {
@@ -2817,9 +2826,25 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
             if (task.model === null) {
               yield* client.raw
-                .request("thread/resume", { threadId: input.nativeThreadId, excludeTurns: true })
+                .request("thread/read", { threadId: input.nativeThreadId, includeTurns: false })
                 .pipe(
-                  Effect.flatMap(decodeCodexChildModel),
+                  Effect.flatMap(decodeCodexChildThread),
+                  Effect.map((response) =>
+                    response.thread.id === input.nativeThreadId && response.thread.model?.trim()
+                      ? { thread: response.thread, model: response.thread.model }
+                      : null,
+                  ),
+                  Effect.catch(() => Effect.succeed(null)),
+                  Effect.flatMap((response) =>
+                    response === null
+                      ? client.raw
+                          .request("thread/resume", {
+                            threadId: input.nativeThreadId,
+                            excludeTurns: true,
+                          })
+                          .pipe(Effect.flatMap(decodeCodexChildModel))
+                      : Effect.succeed(response),
+                  ),
                   Effect.timeout("5 seconds"),
                   Effect.flatMap((response) =>
                     response.thread.id === input.nativeThreadId &&
@@ -6149,8 +6174,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               yield* Ref.update(pendingRootTurns, (current) =>
                 new Map(current).set(threadId, turnInput),
               );
+              // Cleared on interrupt too, as startTurn does: an interrupted start
+              // must not adopt the native turn that a late turn/started reports.
               yield* client.request("thread/compact/start", { threadId }).pipe(
-                Effect.tapError(() =>
+                Effect.onError(() =>
                   Ref.update(pendingRootTurns, (current) => {
                     const next = new Map(current);
                     next.delete(threadId);
