@@ -61,6 +61,26 @@ const SEARCH_URL = "https://duckduckgo.com/?q=";
 /** A bare host that is always an address: localhost, an IPv4 literal, or a bracketed IPv6 one. */
 const ADDRESS_HOST_PATTERN = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:.]+\])$/i;
 const BARE_HOST_PORT_PATTERN = /^[^/?#:@]+:\d+(?:[/?#]|$)/;
+/**
+ * Registered schemes that are never a bare host, so `ftp:21` or `tel:5551234`
+ * is rejected rather than read as host and port.
+ */
+const KNOWN_NON_WEB_SCHEMES: ReadonlySet<string> = new Set([
+  "about:",
+  "blob:",
+  "chrome:",
+  "data:",
+  "file:",
+  "ftp:",
+  "javascript:",
+  "mailto:",
+  "sms:",
+  "ssh:",
+  "tel:",
+  "view-source:",
+  "ws:",
+  "wss:",
+]);
 
 /**
  * Turns what a user typed in an address bar into the URL to open: an address
@@ -78,7 +98,10 @@ export function resolveAddressBarInput(rawInput: string): string {
     // `devbox:8080` is a bare host and port. `normalizePreviewUrl` would read
     // `mailto:alice@example.com` as credentials on a bare host, so reject here.
     const protocol = previewUrlProtocol(trimmed);
-    if (protocol !== undefined && !BARE_HOST_PORT_PATTERN.test(trimmed)) {
+    if (
+      protocol !== undefined &&
+      (KNOWN_NON_WEB_SCHEMES.has(protocol) || !BARE_HOST_PORT_PATTERN.test(trimmed))
+    ) {
       if (protocol !== "http:" && protocol !== "https:") {
         throw new PreviewUrlNormalizationError({
           inputLength: rawInput.length,
