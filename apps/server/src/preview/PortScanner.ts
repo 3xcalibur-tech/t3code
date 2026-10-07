@@ -290,7 +290,7 @@ const procLocalAddress = (hex: string): boolean => {
 };
 
 /** Listening loopback ports in `/proc/net/tcp{,6}` content, with their socket inodes. */
-export const parseProcNetTcp = (
+const parseProcNetTcp = (
   raw: string,
 ): ReadonlyArray<{ readonly port: number; readonly inode: string }> => {
   const listeners: Array<{ port: number; inode: string }> = [];

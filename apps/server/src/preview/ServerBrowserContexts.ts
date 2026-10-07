@@ -35,7 +35,7 @@ const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
  * without `HeadlessChrome`, and client hints whose brands agree with it. Sites
  * block a user agent that disagrees with `Sec-CH-UA`, so both change together.
  */
-export const chromeIdentity = (
+const chromeIdentity = (
   headlessUserAgent: string,
   host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release: string },
 ) => {
