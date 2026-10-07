@@ -943,8 +943,6 @@ const make = Effect.gen(function* () {
     const navigation =
       download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
     if (navigation !== null) clearAbortedNavigation(tab);
-    // A tab whose own address was the file shows it in place; see settleAbortedNavigation.
-    const shownInTab = navigation !== null && tab.page.url() === "about:blank";
     let offered: { readonly id: string; readonly fileName: string } | undefined;
     try {
       if (await download.failure()) return;
@@ -968,6 +966,10 @@ const make = Effect.gen(function* () {
         await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
       }
       offered = { id, fileName: saved.fileName };
+      // A tab whose own address was the file shows it in place (see
+      // settleAbortedNavigation), unless it navigated on while the file saved.
+      const shownInTab =
+        navigation === tab.navigationGeneration && tab.page.url() === "about:blank";
       if (shownInTab) return;
       // Only the person driving the page gets the file offered; agents read it from status.
       const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);

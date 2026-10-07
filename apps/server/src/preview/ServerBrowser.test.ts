@@ -772,6 +772,54 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("a file a blank tab opened is offered to download if the tab moves on while it saves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      yield* Effect.yieldNow;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      const viewer = yield* browser.attachViewer(viewerInput(opened.tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const page = contexts[0]!.page;
+      const pdf = "https://example.com/paper.pdf";
+      const navigation = {
+        url: () => pdf,
+        method: () => "GET",
+        isNavigationRequest: () => true,
+        frame: () => page,
+        failure: () => ({ errorText: "net::ERR_ABORTED" }),
+      };
+      page.emit("request", navigation);
+      page.emit("requestfailed", navigation);
+      const saved = yield* Queue.unbounded<string>();
+      const written = Promise.withResolvers<void>();
+      page.emit("download", {
+        failure: async () => null,
+        saveAs: (path: string) => {
+          Queue.offerUnsafe(saved, path);
+          return written.promise;
+        },
+        suggestedFilename: () => "paper.pdf",
+        url: () => pdf,
+      });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(yield* Queue.take(saved), "%PDF");
+      // The person navigates elsewhere while the file is still being written.
+      page.emit("request", {
+        url: () => "https://example.com/next",
+        method: () => "GET",
+        isNavigationRequest: () => true,
+        frame: () => page,
+      });
+      written.resolve();
+      let offered = yield* Queue.take(viewer.output);
+      while (offered._tag !== "download") offered = yield* Queue.take(viewer.output);
+      expect(offered).toMatchObject({ _tag: "download", fileName: "paper.pdf" });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("a download from a superseded navigation leaves the newer navigation loading", () =>
   Effect.scoped(
     Effect.gen(function* () {
