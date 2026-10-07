@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import * as browserDefaults from "~/browser/browserDefaults";
 import { BrowserSettingsReadError, openUrlInPreview } from "~/browser/openFileInPreview";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { useRightPanelStore } from "~/rightPanelStore";
 import {
   applyPreviewServerSnapshot,
   readThreadPreviewState,
@@ -42,6 +43,7 @@ const snapshot: PreviewSessionSnapshot = {
 
 beforeEach(() => {
   resetPreviewStateForTests();
+  useRightPanelStore.setState({ byThreadKey: {}, threadPanelVisibilityByThreadKey: {} });
   __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
 });
 
@@ -191,6 +193,25 @@ describe("openUrlInPreview from a link", () => {
     });
 
     expect(readThreadPreviewState(threadRef).activeTabId).toBe("tab-other");
+  });
+
+  it("keeps the new tab when the user picks it while a background open is in flight", async () => {
+    applyPreviewServerSnapshot(threadRef, { ...snapshot, tabId: "tab-current" });
+    setActivePreviewTab(threadRef, "tab-current");
+
+    await openUrlInPreview({
+      openPreview: async () => {
+        // The server activates the new tab, then the user clicks that same tab.
+        applyPreviewServerSnapshot(threadRef, snapshot);
+        useRightPanelStore.getState().openBrowser(threadRef, snapshot.tabId);
+        return AsyncResult.success(snapshot);
+      },
+      threadRef,
+      url: "https://t3.chat/",
+      background: true,
+    });
+
+    expect(readThreadPreviewState(threadRef).activeTabId).toBe(snapshot.tabId);
   });
 
   it("activates the new tab for a foreground open", async () => {
