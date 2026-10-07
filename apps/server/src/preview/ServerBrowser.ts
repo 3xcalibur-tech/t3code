@@ -340,11 +340,14 @@ interface ServerDownload {
 }
 
 /** One agent session and the whole server; each tab holds a renderer process. */
-/** Operations an agent may run on any tab in its thread, even while a human drives it. */
+/**
+ * Operations an agent may run on any tab in its thread, even while a human
+ * drives it. Evaluate is not one: page script can change anything, so it needs
+ * the same control as clicking.
+ */
 const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new Set([
   "status",
   "snapshot",
-  "evaluate",
   "waitFor",
 ]);
 

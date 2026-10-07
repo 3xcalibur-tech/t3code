@@ -383,15 +383,25 @@ it.live("enforces provider ownership and explicit targets when a session has mul
         "http://localhost:5173/foreign",
         expect.anything(),
       );
-      // Another session may still read the tab.
-      expect(
-        yield* broker.invoke({
+      // Another session may still read the tab, but not run page script in it.
+      yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope: asSession("agent-b"),
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      const foreignEvaluate = yield* broker
+        .invoke<void>({
           scope: asSession("agent-b"),
           tabId,
           operation: "evaluate",
           input: { expression: "read()" },
-        }),
-      ).toBe("evaluated");
+        })
+        .pipe(Effect.flip);
+      expect(foreignEvaluate).toMatchObject({
+        _tag: "PreviewAutomationControlInterruptedError",
+        reason: "agentMismatch",
+      });
       yield* broker.invoke({
         scope,
         operation: "open",
@@ -1131,10 +1141,14 @@ it.live("agents read a human's tab with no arguments and act on it only while no
       expect(status.tabs).toEqual([
         expect.objectContaining({ tabId, owner: "human", ownedByCaller: false, visible: true }),
       ]);
-      // Reads work while the user drives.
-      expect(
-        yield* broker.invoke({ scope, operation: "evaluate", input: { expression: "read()" } }),
-      ).toBe("evaluated");
+      // Reads work while the user drives; page script does not, since it can change the page.
+      const evaluated = yield* broker
+        .invoke<void>({ scope, operation: "evaluate", input: { expression: "read()" } })
+        .pipe(Effect.flip);
+      expect(evaluated).toMatchObject({
+        _tag: "PreviewAutomationControlInterruptedError",
+        reason: "humanControl",
+      });
       yield* broker.invoke<PreviewAutomationSnapshot>({
         scope,
         tabId,
