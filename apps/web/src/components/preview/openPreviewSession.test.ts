@@ -17,6 +17,7 @@ import {
   applyPreviewServerSnapshot,
   readThreadPreviewState,
   resetPreviewStateForTests,
+  setActivePreviewTab,
 } from "~/previewStateStore";
 
 import { openPreviewSession } from "./openPreviewSession";
@@ -169,6 +170,27 @@ describe("openUrlInPreview from a link", () => {
     const state = readThreadPreviewState(threadRef);
     expect(state.activeTabId).toBe("tab-current");
     expect(Object.keys(state.sessions).toSorted()).toEqual(["tab-1", "tab-current"]);
+  });
+
+  it("keeps a tab the user picked while a background open was in flight", async () => {
+    applyPreviewServerSnapshot(threadRef, { ...snapshot, tabId: "tab-current" });
+    applyPreviewServerSnapshot(threadRef, { ...snapshot, tabId: "tab-other" });
+    setActivePreviewTab(threadRef, "tab-current");
+
+    await openUrlInPreview({
+      openPreview: async () => {
+        // The server activates the new tab, then the user selects another one
+        // before the open resolves.
+        applyPreviewServerSnapshot(threadRef, snapshot);
+        setActivePreviewTab(threadRef, "tab-other");
+        return AsyncResult.success(snapshot);
+      },
+      threadRef,
+      url: "https://t3.chat/",
+      background: true,
+    });
+
+    expect(readThreadPreviewState(threadRef).activeTabId).toBe("tab-other");
   });
 
   it("activates the new tab for a foreground open", async () => {

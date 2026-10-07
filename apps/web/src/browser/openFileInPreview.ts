@@ -88,8 +88,14 @@ export async function openUrlInPreview<E>(input: {
     rememberPreviewUrl(input.threadRef, input.url);
     if (input.background) {
       updatePreviewServerSnapshot(input.threadRef, snapshot);
-      // The server's "opened" event activates the new tab; hand focus back.
-      if (previousActiveTabId) setActivePreviewTab(input.threadRef, previousActiveTabId);
+      // The server's "opened" event activates the new tab; hand focus back,
+      // unless the user has picked another tab while the open was in flight.
+      if (
+        previousActiveTabId &&
+        readThreadPreviewState(input.threadRef).activeTabId === snapshot.tabId
+      ) {
+        setActivePreviewTab(input.threadRef, previousActiveTabId);
+      }
       return;
     }
     applyPreviewServerSnapshot(input.threadRef, snapshot);
