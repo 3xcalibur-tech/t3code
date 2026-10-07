@@ -139,7 +139,8 @@ export async function uploadPreviewStreamFiles(
   if (!response.ok) throw new Error((await response.text()) || "The upload was refused.");
 }
 
-const previewStreamDownloadUrl = (
+/** A file a server tab downloaded, served with the stream's own access. */
+export const previewStreamDownloadUrl = (
   target: Pick<PreviewStreamTarget, "access" | "threadId" | "tabId">,
   id: string,
 ): string =>

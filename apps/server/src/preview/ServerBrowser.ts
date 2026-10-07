@@ -313,6 +313,8 @@ interface ServerTab {
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
+  /** The last main-frame navigation that aborted, to tell a navigation's download from a page's. */
+  abortedNavigationUrl: string | null;
   /** The latest queued start, so a stop can find a recording still starting. */
   recordingStart: Promise<Recording> | null;
   /** Serializes captures and recording start/stop. */
@@ -760,6 +762,7 @@ const make = Effect.gen(function* () {
       recording: null,
       recordingStart: null,
       initialNavigation: null,
+      abortedNavigationUrl: null,
       captureLock: Promise.resolve(),
       capturing: 0,
     };
@@ -792,7 +795,12 @@ const make = Effect.gen(function* () {
         errorText,
         timestamp: new Date().toISOString(),
       });
-      if (!isMainNavigation(request) || errorText.includes("ERR_ABORTED")) return;
+      if (!isMainNavigation(request)) return;
+      // An aborted navigation is usually a download; its `download` event settles the status.
+      if (errorText.includes("ERR_ABORTED")) {
+        tab.abortedNavigationUrl = request.url();
+        return;
+      }
       tab.loading = false;
       const { code, description } = ServerBrowserPage.parseNetError(errorText);
       report(tab, {
@@ -859,9 +867,41 @@ const make = Effect.gen(function* () {
       NodeCrypto.createHash("sha256").update(tabKey(tab.threadId, tab.tabId)).digest("hex"),
     );
 
+  /**
+   * Settles the status of a navigation that became a download. A tab opened
+   * straight to the file has no page to show, so it reports the file with its
+   * download; a page that linked to it keeps showing itself.
+   */
+  const settleDownloadNavigation = (
+    tab: ServerTab,
+    url: string,
+    offered: { readonly id: string; readonly fileName: string } | undefined,
+  ) => {
+    // A newer aborted navigation settles the status itself.
+    if (tab.abortedNavigationUrl !== null) return;
+    tab.loading = false;
+    if (tab.page.url() !== "about:blank") {
+      void reportLoaded(tab);
+      return;
+    }
+    report(tab, {
+      _tag: "LoadFailed",
+      url: url.slice(0, 2048),
+      title: "",
+      code: -3,
+      description: "ERR_ABORTED",
+      ...(offered === undefined ? {} : { download: offered }),
+    });
+  };
+
   const saveDownload = async (tab: ServerTab, download: Download) => {
     const id = NodeCrypto.randomUUID();
     const path = NodePath.join(downloadDir(tab), id);
+    const navigation = download.url() === tab.abortedNavigationUrl;
+    if (navigation) tab.abortedNavigationUrl = null;
+    // A tab whose own address was the file shows it in place; see settleDownloadNavigation.
+    const shownInTab = navigation && tab.page.url() === "about:blank";
+    let offered: { readonly id: string; readonly fileName: string } | undefined;
     try {
       if (await download.failure()) return;
       await NodeFSP.mkdir(downloadDir(tab), { recursive: true });
@@ -883,6 +923,8 @@ const make = Effect.gen(function* () {
       for (const evicted of tab.downloads.splice(0, tab.downloads.length - DOWNLOAD_LIMIT)) {
         await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
       }
+      offered = { id, fileName: saved.fileName };
+      if (shownInTab) return;
       // Only the person driving the page gets the file offered; agents read it from status.
       const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
       controller?.push({
@@ -894,6 +936,8 @@ const make = Effect.gen(function* () {
     } catch (cause) {
       await NodeFSP.rm(path, { force: true }).catch(constVoid);
       runFork(Effect.logWarning("server preview download failed", { cause }));
+    } finally {
+      if (navigation && !tab.closing) settleDownloadNavigation(tab, download.url(), offered);
     }
   };
 
@@ -1203,6 +1247,12 @@ const make = Effect.gen(function* () {
     }
     await navigation.catch((cause: unknown) => {
       const message = cause instanceof Error ? cause.message : String(cause);
+      if (message.includes("Download is starting")) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `${url} is a file this browser cannot show, so it was downloaded instead. preview_status lists it under downloads.`,
+        );
+      }
       if (/ERR_[A-Z_]+/.test(message)) {
         throw new ServerBrowserPage.ServerBrowserOperationError(
           "PreviewAutomationExecutionError",
