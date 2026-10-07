@@ -36,6 +36,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
@@ -332,6 +333,9 @@ const serversEqual = (
   }
   return true;
 };
+
+const isCommandNotFound = (error: ProcessRunner.ProcessSpawnError): boolean =>
+  PlatformError.isPlatformError(error.cause) && error.cause.reason._tag === "NotFound";
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* PortDiscoveryMake() {
@@ -671,7 +675,9 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
         Effect.catchTags({
           // A missing lsof stays missing; later scans skip straight to the fallback.
           ProcessSpawnError: (error) =>
-            Ref.set(lsofMissingRef, true).pipe(Effect.andThen(recoverLsofProbeFailure(error))),
+            (isCommandNotFound(error) ? Ref.set(lsofMissingRef, true) : Effect.void).pipe(
+              Effect.andThen(recoverLsofProbeFailure(error)),
+            ),
           ProcessStdinError: recoverLsofProbeFailure,
           ProcessOutputLimitError: recoverLsofProbeFailure,
           ProcessReadError: recoverLsofProbeFailure,

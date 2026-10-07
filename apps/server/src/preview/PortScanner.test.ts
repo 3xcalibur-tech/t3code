@@ -759,6 +759,32 @@ effectIt.effect(
   },
 );
 
+effectIt.effect("keeps spawning lsof after a spawn failure that is not a missing command", () => {
+  let lsofSpawns = 0;
+  const layer = layerProbeFailure((input) => {
+    lsofSpawns += 1;
+    return Effect.fail(
+      new ProcessRunner.ProcessSpawnError({
+        command: input.command,
+        argumentCount: input.args.length,
+        cwd: input.cwd,
+        cause: PlatformError.systemError({
+          _tag: "Unknown",
+          module: "ChildProcess",
+          method: "spawn",
+          description: "EAGAIN",
+        }),
+      }),
+    );
+  });
+  return Effect.gen(function* () {
+    const scanner = yield* PortScanner.PortDiscovery;
+    yield* scanner.scan();
+    yield* scanner.scan();
+    expect(lsofSpawns).toBe(2);
+  }).pipe(Effect.provide(layer));
+});
+
 effectIt.effect("does not swallow process probe interruption", () =>
   Effect.gen(function* () {
     const layer = layerProbeFailure(() => Effect.interrupt);
