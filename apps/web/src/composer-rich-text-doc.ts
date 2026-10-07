@@ -1012,6 +1012,35 @@ function alignListItemWithSiblings(tr: Transaction, itemType: string): void {
     attrs.marker = index > 0 && /^\d+[.)]$/.test(marker) ? nextOrderedMarkerText(marker) : marker;
   }
   tr.setNodeMarkup($pos.before(-1), undefined, attrs);
+  if (typeof attrs.marker === "string" && /^\d+[.)]$/.test(attrs.marker)) {
+    renumberFollowingItems(tr, $pos.before(-2), index, attrs.marker);
+  }
+}
+
+/**
+ * Counts the items after `index` on from `marker`, so an item inserted in the
+ * middle of an ordered list pushes the rest down instead of repeating a number.
+ * Only marker attributes change, so positions stay valid while walking.
+ */
+function renumberFollowingItems(
+  tr: Transaction,
+  listPos: number,
+  index: number,
+  marker: string,
+): void {
+  const list = tr.doc.nodeAt(listPos);
+  if (!list) return;
+  let pos = listPos + 1;
+  let previous = marker;
+  list.forEach((child, _, childIndex) => {
+    if (childIndex > index) {
+      previous = nextOrderedMarkerText(previous);
+      if (child.attrs.marker !== previous) {
+        tr.setNodeMarkup(pos, undefined, { ...child.attrs, marker: previous });
+      }
+    }
+    pos += child.nodeSize;
+  });
 }
 
 /**

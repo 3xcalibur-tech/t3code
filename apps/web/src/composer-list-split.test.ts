@@ -133,6 +133,20 @@ describe("Shift+Enter twice on an item", () => {
   });
 });
 
+describe("Shift+Enter in the middle of an ordered list", () => {
+  it.each([
+    ["1. a\n2. x\n3. c\n4. d", "1. a\n2. x\n3. b\n4. c\n5. d"],
+    ["1) a\n2) x\n3) c", "1) a\n2) x\n3) b\n4) c"],
+    ["1. a\n   1. x\n   2. c\n2. d", "1. a\n   1. x\n   2. b\n   3. c\n2. d"],
+  ])("after x in %j writes %j", (value, expected) => {
+    const editor = makeEditor(value);
+    placeCaret(editor, "x", 1);
+    expect(splitOrLiftListItem(editor)).toBe(true);
+    editor.view.dispatch(editor.state.tr.insertText("b"));
+    expect(storedDraft(editor)).toBe(expected);
+  });
+});
+
 describe("Shift+Enter on an empty task under a bullet", () => {
   // There is no task list one level up to move it into, and the item cannot
   // hold a second line, so the draft stays what the editor shows.
