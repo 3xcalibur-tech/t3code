@@ -16,6 +16,9 @@ describe("resolveAddressBarInput", () => {
     expect(resolveAddressBarInput("cnn.com")).toBe("https://cnn.com/");
     expect(resolveAddressBarInput("devbox:8080")).toBe("https://devbox:8080/");
     expect(resolveAddressBarInput(" https://example.com/a b ")).toBe("https://example.com/a%20b");
+    expect(resolveAddressBarInput("example.com:8080")).toBe("https://example.com:8080/");
+    expect(resolveAddressBarInput("[::1]:3000")).toBe("http://[::1]:3000/");
+    expect(resolveAddressBarInput("192.168.1.5:3000")).toBe("https://192.168.1.5:3000/");
   });
 
   it("searches for text that is not an address", () => {
@@ -29,11 +32,23 @@ describe("resolveAddressBarInput", () => {
     expect(resolveAddressBarInput("what is https://example.com")).toBe(
       "https://duckduckgo.com/?q=what%20is%20https%3A%2F%2Fexample.com",
     );
+    expect(resolveAddressBarInput("what is 10:30")).toBe(
+      "https://duckduckgo.com/?q=what%20is%2010%3A30",
+    );
+    expect(resolveAddressBarInput("note: buy milk")).toBe(
+      "https://duckduckgo.com/?q=note%3A%20buy%20milk",
+    );
   });
 
   it("still rejects empty input and unsupported schemes", () => {
     expect(() => resolveAddressBarInput("  ")).toThrow(PreviewUrlNormalizationError);
     expect(() => resolveAddressBarInput("ftp://example.com")).toThrow(PreviewUrlNormalizationError);
+    expect(() => resolveAddressBarInput("mailto:alice@example.com")).toThrow(
+      PreviewUrlNormalizationError,
+    );
+    expect(() => resolveAddressBarInput("data:text/plain,hello")).toThrow(
+      PreviewUrlNormalizationError,
+    );
   });
 });
 

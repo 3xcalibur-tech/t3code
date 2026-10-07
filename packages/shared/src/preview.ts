@@ -60,19 +60,34 @@ function previewUrlProtocol(rawUrl: string): string | undefined {
 const SEARCH_URL = "https://duckduckgo.com/?q=";
 /** A bare host that is always an address: localhost, an IPv4 literal, or a bracketed IPv6 one. */
 const ADDRESS_HOST_PATTERN = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:.]+\])$/i;
+const BARE_HOST_PORT_PATTERN = /^[^/?#:@]+:\d+(?:[/?#]|$)/;
 
 /**
  * Turns what a user typed in an address bar into the URL to open: an address
  * as `normalizePreviewUrl` reads it, or else a web search for the text. Text
  * is an address when it has a scheme, or no spaces and a host that has a dot,
  * a port, or is localhost or an IP. Throws only for empty input or an
- * explicit unsupported scheme.
+ * explicit unsupported scheme (`ftp://`, `mailto:`, `data:`).
  */
 export function resolveAddressBarInput(rawInput: string): string {
   const trimmed = rawInput.trim();
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) || trimmed.length === 0)
     return normalizePreviewUrl(trimmed);
   if (!/\s/.test(trimmed)) {
+    // `mailto:x` or `data:...` is an explicit scheme; `example.com:8080` or
+    // `devbox:8080` is a bare host and port. `normalizePreviewUrl` would read
+    // `mailto:alice@example.com` as credentials on a bare host, so reject here.
+    const protocol = previewUrlProtocol(trimmed);
+    if (protocol !== undefined && !BARE_HOST_PORT_PATTERN.test(trimmed)) {
+      if (protocol !== "http:" && protocol !== "https:") {
+        throw new PreviewUrlNormalizationError({
+          inputLength: rawInput.length,
+          reason: "unsupported-protocol",
+          protocol,
+        });
+      }
+      return normalizePreviewUrl(trimmed);
+    }
     const authority = trimmed.split(/[/?#]/, 1)[0] ?? "";
     const host = authority.replace(/^[^@]*@/, "").replace(/:\d+$/, "");
     const hasPort = host.length < authority.replace(/^[^@]*@/, "").length;
