@@ -68,7 +68,7 @@ const NEVER_EXTERNAL_PROTOCOLS: ReadonlySet<string> = new Set([
  * The URL to offer the user when a preview page navigates to a custom scheme
  * such as `slack://` or `zoom://`, or `null` when it must stay denied.
  */
-export const externalProtocolPromptUrl = (rawUrl: string | undefined): string | null => {
+const externalProtocolPromptUrl = (rawUrl: string | undefined): string | null => {
   if (!rawUrl) return null;
   try {
     const url = new URL(rawUrl);
