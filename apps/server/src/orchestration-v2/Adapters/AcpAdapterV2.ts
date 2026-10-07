@@ -5754,7 +5754,7 @@ export function makeAcpAdapterV2(
                 transportRequestId: pendingTransportRequestId,
               } = admitted.value.pending;
               const parsedPermission = parsePermissionRequest(params);
-              const decision = yield* Deferred.await(pendingDecision).pipe(
+              const answered = yield* Deferred.await(pendingDecision).pipe(
                 Effect.ensuring(
                   runRuntimeCallbackAtGeneration(
                     handlerGeneration,
@@ -5768,6 +5768,16 @@ export function makeAcpAdapterV2(
                   ).pipe(Effect.asVoid),
                 ),
               );
+              // A card that never offered "this session" (Kiro's, whose
+              // allow_always saves a workspace rule) cannot be answered with
+              // it by a stale client or a hand-made respond call.
+              const offeredOptions = flavor.approvalOptions?.(params);
+              const decision =
+                answered === "acceptForSession" &&
+                offeredOptions !== undefined &&
+                !offeredOptions.some((option) => option.decision === "acceptForSession")
+                  ? "accept"
+                  : answered;
               if (
                 parsedPermission.kind !== "unknown" &&
                 (decision === "accept" || decision === "acceptForSession")

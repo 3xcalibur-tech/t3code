@@ -4,6 +4,7 @@ import {
   KiroSettings,
   MessageId,
   NodeId,
+  type ProviderApprovalDecision,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
@@ -240,7 +241,7 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
     ) => Effect.Effect<void, ProviderAdapterV2Error>;
     readonly respond: (
       requestId: RuntimeRequestId,
-      decision: "accept" | "decline",
+      decision: ProviderApprovalDecision,
     ) => Effect.Effect<void, ProviderAdapterV2Error>;
   }) => Effect.Effect<void, ProviderAdapterV2Error>;
 }) {
@@ -448,6 +449,67 @@ describe("KiroAdapterV2", () => {
             yield* startTurnOn(ordinal, model);
             assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
           }
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("answers a stale 'this session' approval with Kiro's allow_once", () =>
+    runKiroScript({
+      scenario: "stale-session-approval",
+      frames: [
+        ...openSessionFrames({
+          initialize: KIRO_V3_INITIALIZE,
+          configOptions: [modeOption, autopilotOption("on")],
+        }),
+        turnPrompt,
+        {
+          type: "emit_inbound",
+          label: "session/request_permission",
+          frame: {
+            kind: "request",
+            method: "session/request_permission",
+            // Kiro 2.27's options for a write (kiro_supervised_transcript.ndjson).
+            params: {
+              sessionId: SESSION_ID,
+              toolCall: { toolCallId: "call-1", title: "Write File", kind: "edit" },
+              options: [
+                { optionId: "accept", name: "Allow", kind: "allow_once" },
+                { optionId: "always-accept", name: "Always allow", kind: "allow_always" },
+                { optionId: "reject", name: "Deny", kind: "reject_once" },
+              ],
+            },
+          },
+        },
+        // The card offered no "this session" choice, so the answer is one-time
+        // rather than Kiro's workspace-wide `allow_always`.
+        {
+          type: "expect_outbound",
+          label: "session/request_permission.result",
+          frame: {
+            kind: "response",
+            method: "session/request_permission",
+            result: { outcome: { outcome: "selected", optionId: "accept" } },
+          },
+        },
+        answer("session/prompt", { stopReason: "end_turn" }),
+        ...closeSession,
+      ],
+      drive: ({ events, startTurn, respond }) =>
+        Effect.gen(function* () {
+          const pending = yield* Deferred.make<RuntimeRequestId>();
+          const turn = yield* collectTurn(
+            events.pipe(
+              Stream.tap((event) =>
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending"
+                  ? Deferred.succeed(pending, event.runtimeRequest.id)
+                  : Effect.void,
+              ),
+            ),
+          ).pipe(Effect.forkChild);
+          yield* startTurn;
+          yield* respond(yield* Deferred.await(pending), "acceptForSession");
+          assert.equal(terminalStatus(yield* Fiber.join(turn)), "completed");
         }),
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
