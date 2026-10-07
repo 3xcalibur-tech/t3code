@@ -76,6 +76,7 @@ export interface KiroAdapterV2Options {
     Crypto.Crypto | Scope.Scope
   >;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
+  readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
 }
 
 /**
@@ -182,6 +183,7 @@ export function makeKiroAdapterV2(options: KiroAdapterV2Options) {
     serverConfig: options.serverConfig,
     selfInvocation: options.selfInvocation,
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
+    ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
   });
 }
 

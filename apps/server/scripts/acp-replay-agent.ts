@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- A plain Node child; `afterMs` delays an inbound frame.
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 
@@ -7,8 +7,6 @@ interface ReplayEntry {
   readonly type: "emit_inbound" | "expect_outbound" | "runtime_exit";
   readonly label?: string;
   readonly frame?: unknown;
-  /** Delay before an `emit_inbound` frame; an outbound frame arriving meanwhile is a mismatch. */
-  readonly afterMs?: number;
   readonly status?: "success" | "error" | "cancelled";
   readonly error?: unknown;
 }
@@ -74,7 +72,6 @@ function resumedCursor(): number {
 }
 let cursor = resumedCursor();
 let stopped = false;
-let delayedCursor: number | undefined;
 let nextAgentRequestId = 1;
 const pendingClientRequestIds = new Map<string, string | number>();
 const pendingAgentRequestMethods = new Map<string, string>();
@@ -260,11 +257,6 @@ function flushInbound(): void {
       // Frames after a mid-transcript exit belong to the next process.
       if (cursor < transcript.entries.length) return;
       continue;
-    }
-    if (entry.afterMs !== undefined && entry.afterMs > 0 && delayedCursor !== cursor) {
-      delayedCursor = cursor;
-      setTimeout(flushInbound, entry.afterMs);
-      return;
     }
     const frame = entry.frame as LogicalFrame;
     if (

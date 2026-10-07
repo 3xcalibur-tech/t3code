@@ -534,6 +534,8 @@ export interface AcpAdapterV2Options {
      * by exactly that on this receipt.
      */
     readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
+    /** `cancelAfterPromptStarts`: Stop is holding `session/cancel` until the prompt starts. */
+    readonly onCancelHeld?: () => Effect.Effect<void>;
     readonly afterPromptSettledWithBackgroundWork?: () => Effect.Effect<void>;
     readonly afterNativeResponseTransportClosed?: () => Effect.Effect<void>;
     readonly afterHardTeardownTransportDrained?: () => Effect.Effect<void>;
@@ -6571,6 +6573,8 @@ export function makeAcpAdapterV2(
          */
         const promptStillRunsAfterHold = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
           if (flavor.cancelAfterPromptStarts !== true) return true;
+          if (yield* Deferred.isDone(context.promptStarted)) return true;
+          yield* options.testHooks?.onCancelHeld?.() ?? Effect.void;
           const started = yield* Effect.raceFirst(
             Deferred.await(context.promptStarted).pipe(Effect.as(true)),
             Deferred.await(context.completed).pipe(Effect.as(false)),
