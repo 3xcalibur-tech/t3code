@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   KiroSettings,
   MessageId,
+  type ModelSelection,
   NodeId,
   type ProviderApprovalDecision,
   ProjectId,
@@ -166,6 +167,72 @@ const modelOption = (currentValue: string) => ({
   options: [option("auto", "Auto"), option("claude-sonnet", "Claude Sonnet")],
 });
 
+/**
+ * Kiro's `model` option as 2.27.0 advertises it (fixtures/kiro_model_switch),
+ * trimmed to three choices. Each choice's `_meta.kiro` names its effort levels.
+ */
+const kiroModelChoice = (
+  value: string,
+  name: string,
+  effort?: { readonly levels: ReadonlyArray<string>; readonly defaultLevel: string },
+) => ({
+  value,
+  name,
+  _meta: {
+    kiro:
+      effort === undefined
+        ? { hasEffort: false, thinkingToggleable: false }
+        : {
+            hasEffort: true,
+            effortSchemaPath: "output_config",
+            effortLevels: effort.levels,
+            defaultEffortLevel: effort.defaultLevel,
+            thinkingToggleable: false,
+          },
+  },
+});
+const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const CLAUDE_4_6_EFFORT_LEVELS = ["low", "medium", "high", "max"];
+const kiroModelOption = (currentValue: string) => ({
+  type: "select",
+  id: "model",
+  name: "Model",
+  category: "model",
+  currentValue,
+  options: [
+    kiroModelChoice("auto", "Auto"),
+    kiroModelChoice("claude-opus-5.5", "Claude Opus 5.5", {
+      levels: CLAUDE_EFFORT_LEVELS,
+      defaultLevel: "medium",
+    }),
+    kiroModelChoice("claude-opus-4.6", "Claude Opus 4.6", {
+      levels: CLAUDE_4_6_EFFORT_LEVELS,
+      defaultLevel: "high",
+    }),
+    kiroModelChoice("claude-sonnet-4.5", "Claude Sonnet 4.5"),
+  ],
+});
+/**
+ * SYNTHETIC: no recording shows Kiro's effort option. Its shape follows the
+ * KiroCrew probe of kiro-cli 2.28.0 (kirodotdev/KiroCrew#17551): a
+ * `thought_level` select with id `effortLevel` that Kiro adds to the
+ * `session/set_config_option model=…` result once a model with effort runs,
+ * starting at that model's default level.
+ */
+const effortOption = (currentValue: string, levels: ReadonlyArray<string>) => ({
+  type: "select",
+  id: "effortLevel",
+  name: "Effort",
+  category: "thought_level",
+  currentValue,
+  options: levels.map((level) => option(level)),
+});
+const setConfig = (configId: string, value: string) =>
+  outbound("session/set_config_option", { sessionId: SESSION_ID, configId, value });
+const configResult = (configOptions: ReadonlyArray<unknown>) =>
+  answer("session/set_config_option", { configOptions });
+const reasoning = (value: string) => [{ id: "reasoningEffort", value }];
+
 /** Kiro's `session/new` result, recorded from 2.27.0 and trimmed to what T3 reads. */
 const sessionSetup = (configOptions: ReadonlyArray<unknown>) => ({
   _meta: { schemaVersion: "1.0.0", id: SESSION_ID, agentMode: "vibe", source: "local" },
@@ -224,6 +291,8 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
   readonly scenario: string;
   readonly frames: ReadonlyArray<Frame>;
   readonly model?: string;
+  /** Option selections (e.g. reasoningEffort) for the session and `startTurn`. */
+  readonly options?: ModelSelection["options"];
   readonly runtimeMode?: RuntimeMode;
   /** Holds the script's inbound frames at labels the test releases. */
   readonly replayGate?: ProviderReplayGate;
@@ -235,10 +304,11 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
   readonly drive: (session: {
     readonly events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
     readonly startTurn: Effect.Effect<void, ProviderAdapterV2Error>;
-    /** Starts turn `ordinal` (from 1) on `model`. */
+    /** Starts turn `ordinal` (from 1) on `model`, with `options` if given. */
     readonly startTurnOn: (
       ordinal: number,
       model: string,
+      options?: ModelSelection["options"],
     ) => Effect.Effect<void, ProviderAdapterV2Error>;
     readonly interrupt: (
       providerTurnId: ProviderTurnId,
@@ -300,7 +370,11 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
   // Held frames must not outlive a failed drive and wedge teardown.
   yield* Effect.addFinalizer(() => Effect.sync(() => input.replayGate?.releaseAll()));
   const threadId = ThreadId.make(`thread-kiro-${input.scenario}`);
-  const modelSelection = { instanceId, model: input.model ?? "default" };
+  const modelSelection = {
+    instanceId,
+    model: input.model ?? "default",
+    ...(input.options === undefined ? {} : { options: input.options }),
+  };
   const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
     runtimeMode: input.runtimeMode ?? "approval-required",
     interactionMode: "default",
@@ -315,9 +389,9 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
     });
     const providerThread = yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
     const now = yield* DateTime.now;
-    const startTurnOn = (ordinal: number, model: string) => {
+    const startTurnOn = (ordinal: number, model: string, options?: ModelSelection["options"]) => {
       const suffix = `${threadId}:${ordinal}`;
-      const turnSelection = { instanceId, model };
+      const turnSelection = { instanceId, model, ...(options === undefined ? {} : { options }) };
       return session.startTurn({
         appThread: {
           createdBy: "user",
@@ -362,7 +436,7 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
     };
     yield* input.drive({
       events: session.events,
-      startTurn: startTurnOn(1, modelSelection.model),
+      startTurn: startTurnOn(1, modelSelection.model, input.options),
       startTurnOn,
       interrupt: (providerTurnId) => session.interruptTurn({ providerThread, providerTurnId }),
       respond: (requestId, decision) => session.respondToRuntimeRequest({ requestId, decision }),
@@ -451,6 +525,143 @@ describe("KiroAdapterV2", () => {
             [3, "default"],
           ] as const) {
             yield* startTurnOn(ordinal, model);
+            assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
+          }
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("sets the thread's effort once the model write advertises it, and after a switch", () =>
+    runKiroScript({
+      scenario: "effort-after-model",
+      frames: [
+        outbound("initialize"),
+        answer("initialize", KIRO_V3_INITIALIZE),
+        outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
+        // On `auto` Kiro offers no effort option.
+        answer(
+          "session/new",
+          sessionSetup([modeOption, kiroModelOption("auto"), autopilotOption("on")]),
+        ),
+        // Turn 1: the model write's result is the first to advertise effort,
+        // at the model's default, so the chosen level goes out after it.
+        setConfig("model", "claude-opus-5.5"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          autopilotOption("on"),
+          effortOption("medium", CLAUDE_EFFORT_LEVELS),
+        ]),
+        setConfig("effortLevel", "high"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          autopilotOption("on"),
+          effortOption("high", CLAUDE_EFFORT_LEVELS),
+        ]),
+        setConfig("autopilot", "off"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          autopilotOption("off"),
+          effortOption("high", CLAUDE_EFFORT_LEVELS),
+        ]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        // Turn 2: same model and effort, so nothing is written.
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        // Turn 3: a model without effort drops the option; no effort write.
+        setConfig("model", "claude-sonnet-4.5"),
+        configResult([modeOption, kiroModelOption("claude-sonnet-4.5"), autopilotOption("off")]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        // Turn 4: back on an effort model, Kiro starts at its default again.
+        setConfig("model", "claude-opus-5.5"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          autopilotOption("off"),
+          effortOption("medium", CLAUDE_EFFORT_LEVELS),
+        ]),
+        setConfig("effortLevel", "high"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          autopilotOption("off"),
+          effortOption("high", CLAUDE_EFFORT_LEVELS),
+        ]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        ...closeSession,
+      ],
+      model: "claude-opus-5.5",
+      options: reasoning("high"),
+      drive: ({ events, startTurnOn }) =>
+        Effect.gen(function* () {
+          for (const [ordinal, model] of [
+            [1, "claude-opus-5.5"],
+            [2, "claude-opus-5.5"],
+            [3, "claude-sonnet-4.5"],
+            [4, "claude-opus-5.5"],
+          ] as const) {
+            yield* startTurnOn(ordinal, model, reasoning("high"));
+            assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
+          }
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("never sends an effort level the model does not offer", () =>
+    runKiroScript({
+      scenario: "effort-not-offered",
+      frames: [
+        outbound("initialize"),
+        answer("initialize", KIRO_V3_INITIALIZE),
+        outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
+        answer(
+          "session/new",
+          sessionSetup([modeOption, kiroModelOption("auto"), autopilotOption("on")]),
+        ),
+        // Turn 1 asks for xhigh, which Opus 4.6 does not offer: no effort
+        // write, and the turn runs at Kiro's default.
+        setConfig("model", "claude-opus-4.6"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-4.6"),
+          autopilotOption("on"),
+          effortOption("high", CLAUDE_4_6_EFFORT_LEVELS),
+        ]),
+        setConfig("autopilot", "off"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-4.6"),
+          autopilotOption("off"),
+          effortOption("high", CLAUDE_4_6_EFFORT_LEVELS),
+        ]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        // Turn 2 picks max, which it offers.
+        setConfig("effortLevel", "max"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-4.6"),
+          autopilotOption("off"),
+          effortOption("max", CLAUDE_4_6_EFFORT_LEVELS),
+        ]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        ...closeSession,
+      ],
+      model: "claude-opus-4.6",
+      options: reasoning("xhigh"),
+      drive: ({ events, startTurnOn }) =>
+        Effect.gen(function* () {
+          for (const [ordinal, effort] of [
+            [1, "xhigh"],
+            [2, "max"],
+          ] as const) {
+            yield* startTurnOn(ordinal, "claude-opus-4.6", reasoning(effort));
             assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
           }
         }),

@@ -150,6 +150,58 @@ describe("KiroProvider", () => {
     }),
   );
 
+  // `--list-models` names no effort levels, so the picker's come from Kiro's ids.
+  const KIRO_EFFORT_MODEL_LIST = JSON.stringify({
+    models: ["auto", "claude-opus-5.5", "claude-opus-4.6", "claude-sonnet-4.5"].map((id) => ({
+      model_name: id,
+      model_id: id,
+    })),
+    default_model: "auto",
+  });
+
+  it.effect("offers each model only the reasoning levels Kiro takes for it", () =>
+    Effect.gen(function* () {
+      const { snapshot } = yield* check({
+        "--version": { stdout: "kiro-cli 2.27.0\n", code: 0 },
+        "whoami --format json": { stdout: '{"accountType":"SocialGitHub"}\n', code: 0 },
+        "chat --list-models --format json": { stdout: KIRO_EFFORT_MODEL_LIST, code: 0 },
+      });
+      const reasoning = snapshot.models.map((model) => {
+        const descriptors = model.capabilities?.optionDescriptors ?? [];
+        const select = descriptors.find((descriptor) => descriptor.id === "reasoningEffort");
+        return select?.type === "select"
+          ? {
+              slug: model.slug,
+              label: select.label,
+              levels: select.options.map((choice) => choice.id),
+              defaults: select.options.filter((choice) => choice.isDefault).map((c) => c.id),
+              currentValue: select.currentValue,
+            }
+          : { slug: model.slug, descriptors: descriptors.length };
+      });
+      assert.deepEqual(reasoning, [
+        // Kiro default and models without effort get no Reasoning select.
+        { slug: "default", descriptors: 0 },
+        {
+          slug: "claude-opus-5.5",
+          label: "Reasoning",
+          levels: ["low", "medium", "high", "xhigh", "max"],
+          defaults: ["medium"],
+          currentValue: "medium",
+        },
+        // Opus 4.6 has no xhigh, and Kiro runs it at high by default.
+        {
+          slug: "claude-opus-4.6",
+          label: "Reasoning",
+          levels: ["low", "medium", "high", "max"],
+          defaults: ["high"],
+          currentValue: "high",
+        },
+        { slug: "claude-sonnet-4.5", descriptors: 0 },
+      ]);
+    }),
+  );
+
   it.effect("never lists models while signed out, where listing would start a browser login", () =>
     Effect.gen(function* () {
       const { snapshot, invoked } = yield* check({

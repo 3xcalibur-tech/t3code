@@ -38,6 +38,12 @@ export const KIRO_AUTOPILOT_CONFIG_ID = "autopilot";
 export const KIRO_MODEL_CONFIG_ID = "model";
 
 /**
+ * Kiro's reasoning effort session option (`configId: "effortLevel"` in the V3
+ * migration guide). Kiro advertises it only while a model with effort runs.
+ */
+export const KIRO_EFFORT_CONFIG_ID = "effortLevel";
+
+/**
  * Kiro offers two permission postures, Supervised and Autopilot, which T3's
  * Supervised and Full access select. Any other mode runs Supervised.
  */

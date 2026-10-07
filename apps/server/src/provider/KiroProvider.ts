@@ -21,6 +21,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   isCommandMissingCause,
   parseGenericCliVersion,
+  buildSelectOptionDescriptor,
   type ProviderProbeResult,
   providerModelsFromSettings,
   type ServerProviderDraft,
@@ -136,6 +137,61 @@ export function kiroAuthFromWhoami(
   };
 }
 
+const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const CLAUDE_4_6_EFFORT_LEVELS = ["low", "medium", "high", "max"];
+const GPT_5_6_EFFORT_LEVELS = ["none", ...CLAUDE_EFFORT_LEVELS];
+
+/**
+ * Reasoning levels per Kiro model id, and the one Kiro runs it at by default.
+ * `--list-models` names no levels, and a session advertises them (the `model`
+ * option's `_meta.kiro.effortLevels` and `defaultEffortLevel`) only once it
+ * runs, so the picker uses this copy of Kiro 2.27.0's choices
+ * (fixtures/kiro_model_switch), which match kiro.dev/docs/models/effort.
+ * Models not listed take no effort. The adapter sends only a level the live
+ * session offers, so a stale entry never reaches Kiro.
+ */
+const KIRO_MODEL_EFFORT: Readonly<
+  Record<string, { readonly levels: ReadonlyArray<string>; readonly defaultLevel: string }>
+> = {
+  "claude-opus-5.5": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "medium" },
+  "claude-opus-5": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "high" },
+  "claude-opus-4.8": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "high" },
+  "claude-opus-4.7": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "xhigh" },
+  "claude-opus-4.6": { levels: CLAUDE_4_6_EFFORT_LEVELS, defaultLevel: "high" },
+  "claude-sonnet-5.5": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "high" },
+  "claude-sonnet-5": { levels: CLAUDE_EFFORT_LEVELS, defaultLevel: "high" },
+  "claude-sonnet-4.6": { levels: CLAUDE_4_6_EFFORT_LEVELS, defaultLevel: "high" },
+  "gpt-5.6-sol": { levels: GPT_5_6_EFFORT_LEVELS, defaultLevel: "high" },
+  "gpt-5.6-terra": { levels: GPT_5_6_EFFORT_LEVELS, defaultLevel: "high" },
+  "gpt-5.6-luna": { levels: GPT_5_6_EFFORT_LEVELS, defaultLevel: "high" },
+};
+const KIRO_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  none: "None",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+};
+
+function kiroModelCapabilities(modelId: string): ModelCapabilities {
+  const effort = KIRO_MODEL_EFFORT[modelId];
+  if (effort === undefined) return EMPTY_CAPABILITIES;
+  return createModelCapabilities({
+    optionDescriptors: [
+      buildSelectOptionDescriptor({
+        id: "reasoningEffort",
+        label: "Reasoning",
+        options: effort.levels.map((level) => ({
+          value: level,
+          label: KIRO_EFFORT_LABELS[level] ?? level,
+          isDefault: level === effort.defaultLevel,
+        })),
+      }),
+    ],
+  });
+}
+
 const KiroModelList = Schema.fromJsonString(
   Schema.Struct({
     models: Schema.Array(
@@ -172,13 +228,15 @@ function kiroModelsFromList(
           aliases: [model.model_id],
           isCustom: false,
           isDefault: true,
+          // A new session on Kiro's default gets no model write, so Kiro never
+          // advertises its effort option and a level could not be applied.
           capabilities: EMPTY_CAPABILITIES,
         }
       : {
           slug: model.model_id,
           name: model.model_name ?? model.model_id,
           isCustom: false,
-          capabilities: EMPTY_CAPABILITIES,
+          capabilities: kiroModelCapabilities(model.model_id),
         },
   );
 }

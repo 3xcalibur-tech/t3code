@@ -21,6 +21,10 @@ The model picker lists the models your Kiro account can use once Kiro is signed 
 default** lets Kiro choose (its `auto` model). A model your account cannot use stops the turn with
 an error instead of running on another model.
 
+Models with adjustable reasoning effort, such as recent Claude Opus and Sonnet models and GPT-5.6,
+show a **Reasoning** setting with only the levels Kiro offers for that model. **Kiro default** and
+models without effort control run at Kiro's own setting.
+
 ## Permission Modes
 
 Kiro asks before tool calls such as writes and commands, and T3 Code answers by the permission mode:

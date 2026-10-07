@@ -2,9 +2,11 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import {
   KiroSettings,
+  type ModelSelection,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
 } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -20,6 +22,7 @@ import { makeAcpNativeLoggerFactory } from "../../provider/acp/AcpNativeLogging.
 import type * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import {
   KIRO_AUTOPILOT_CONFIG_ID,
+  KIRO_EFFORT_CONFIG_ID,
   KIRO_MODEL_CONFIG_ID,
   kiroApprovalOptions,
   kiroAutopilotValue,
@@ -103,38 +106,86 @@ export interface KiroAdapterV2Options {
  * `InvalidModelError`), so an unknown id never runs silently on another model.
  * Once the option is known, T3 refuses an unlisted model before prompting.
  */
+const applyKiroModel = (
+  runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+  modelSelection: ModelSelection,
+  defaultModel: Effect.Effect<string>,
+) =>
+  Effect.gen(function* () {
+    const modelOption = (yield* runtime.getConfigOptions).find(
+      (option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model",
+    );
+    const current = modelOption?.type === "select" ? modelOption.currentValue : undefined;
+    const selected = modelSelection.model.trim();
+    const isDefault = selected.length === 0 || selected === KIRO_DEFAULT_MODEL;
+    // Before Kiro advertises `model` the session is new, so it already runs
+    // Kiro's default.
+    if (isDefault && modelOption?.type !== "select") {
+      return current;
+    }
+    const requested = isDefault ? yield* defaultModel : selected;
+    if (requested === current) {
+      return current;
+    }
+    if (modelOption?.type === "select" && !selectValues(modelOption).includes(requested)) {
+      return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+        `Kiro model '${requested}' is unavailable for this account. Select an available model.`,
+      );
+    }
+    yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested);
+    return requested;
+  });
+
+/**
+ * Sets the thread's reasoning effort (the snapshot's `reasoningEffort`
+ * select) on Kiro's `effortLevel` option. Kiro advertises that option only
+ * while a model with effort runs, and adds it to the result of the `model`
+ * write, which the runtime adopts (kiro-cli 2.28 per kirodotdev/KiroCrew#17551;
+ * the matching `config_option_update` waits for the next turn), so this runs
+ * after the model write. A model change starts Kiro at that model's default,
+ * so the level is written again then; the runtime skips a write that matches
+ * the current level. A level the model does not offer is not sent: Kiro would
+ * accept it and leave the level unchanged. A rejected write leaves Kiro's
+ * level in place rather than failing the turn.
+ */
+const applyKiroEffort = (
+  runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
+  modelSelection: ModelSelection,
+) =>
+  Effect.gen(function* () {
+    const requested = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+    if (requested === undefined) return;
+    const effortOption = (yield* runtime.getConfigOptions).find(
+      (option) => option.id === KIRO_EFFORT_CONFIG_ID,
+    );
+    if (effortOption?.type !== "select" || !selectValues(effortOption).includes(requested)) {
+      return;
+    }
+    yield* runtime.setConfigOption(KIRO_EFFORT_CONFIG_ID, requested).pipe(
+      Effect.catchTags({
+        AcpRequestError: (error) =>
+          Effect.logWarning("Kiro rejected the reasoning effort", {
+            value: requested,
+            detail: error.message,
+          }),
+      }),
+    );
+  });
+
 const applyKiroModelSelection =
   (defaultModel: Effect.Effect<string>): NonNullable<AcpAdapterV2Flavor["applyModelSelection"]> =>
   ({ runtime, modelSelection }) =>
-    Effect.gen(function* () {
-      const modelOption = (yield* runtime.getConfigOptions).find(
-        (option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model",
-      );
-      const current = modelOption?.type === "select" ? modelOption.currentValue : undefined;
-      const selected = modelSelection.model.trim();
-      const isDefault = selected.length === 0 || selected === KIRO_DEFAULT_MODEL;
-      // Before Kiro advertises `model` the session is new, so it already runs
-      // Kiro's default.
-      if (isDefault && modelOption?.type !== "select") {
-        return current;
-      }
-      const requested = isDefault ? yield* defaultModel : selected;
-      if (requested === current) {
-        return current;
-      }
-      if (modelOption?.type === "select") {
-        const offered = modelOption.options.flatMap((entry) =>
-          "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
-        );
-        if (!offered.includes(requested)) {
-          return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-            `Kiro model '${requested}' is unavailable for this account. Select an available model.`,
-          );
-        }
-      }
-      yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested);
-      return requested;
-    });
+    applyKiroModel(runtime, modelSelection, defaultModel).pipe(
+      Effect.tap(() => applyKiroEffort(runtime, modelSelection)),
+    );
+
+function selectValues(
+  option: Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }>,
+): ReadonlyArray<string> {
+  return option.options.flatMap((entry) =>
+    "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+  );
+}
 
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
