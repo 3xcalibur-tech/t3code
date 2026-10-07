@@ -1,5 +1,5 @@
-import type { Session } from "electron";
-import { session } from "electron";
+import type { Session, WebContents } from "electron";
+import { BrowserWindow, session } from "electron";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -200,6 +200,17 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
       ),
   );
 
+/**
+ * The window showing a preview guest. A `<webview>` guest has no window of its
+ * own, so look it up through the page that embeds it.
+ */
+const previewHostWindow = (guest: WebContents | null): BrowserWindow | undefined => {
+  if (guest === null || guest.isDestroyed()) return undefined;
+  const host = guest.hostWebContents ?? guest;
+  if (host.isDestroyed()) return undefined;
+  return BrowserWindow.fromWebContents(host) ?? undefined;
+};
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
@@ -213,6 +224,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
    * untrusted pages, and a silent grant would let any of them launch apps.
    */
   const confirmOpenExternal = (
+    requester: WebContents | null,
     rawUrl: string | undefined,
     callback: (granted: boolean) => void,
   ): void => {
@@ -231,14 +243,17 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       url.length > MAX_PROMPT_URL_LENGTH ? `${url.slice(0, MAX_PROMPT_URL_LENGTH)}…` : url;
     runFork(
       electronDialog
-        .showMessageBox({
-          type: "question",
-          buttons: ["Open", "Cancel"],
-          defaultId: 0,
-          cancelId: 1,
-          message: `Open this ${new URL(url).protocol.slice(0, -1)} link?`,
-          detail: `A page in the browser wants to open another application:\n\n${shownUrl}`,
-        })
+        .showMessageBox(
+          {
+            type: "question",
+            buttons: ["Open", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+            message: `Open this ${new URL(url).protocol.slice(0, -1)} link?`,
+            detail: `A page in the browser wants to open another application:\n\n${shownUrl}`,
+          },
+          previewHostWindow(requester),
+        )
         .pipe(
           Effect.map(({ response }) => response === 0),
           Effect.orElseSucceed(() => false),
@@ -289,9 +304,10 @@ export const make = Effect.gen(function* BrowserSessionMake() {
           // (#5002). Re-setting the unchanged native string is harmless, so it
           // is the rewritten string itself that trips the check.
           browserSession.setPermissionRequestHandler(
-            (_webContents, permission, callback, details) => {
+            (webContents, permission, callback, details) => {
               if (permission === "openExternal") {
                 confirmOpenExternal(
+                  webContents,
                   "externalURL" in details ? details.externalURL : undefined,
                   callback,
                 );
