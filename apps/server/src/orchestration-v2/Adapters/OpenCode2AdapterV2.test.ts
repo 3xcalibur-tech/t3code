@@ -1712,6 +1712,112 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  it.effect("lets a prompt join a background reply after a lost stream took a Stop's end", () =>
+    Effect.gen(function* () {
+      const offered = yield* Deferred.make<void>();
+      const gate = makeProviderReplayGate(["drop"]);
+      const { runtime, thread } = yield* resumed(
+        [
+          ...backgroundLaunch(CHILD),
+          // Restarting the turn stops only the parent, and the server never answers.
+          out("session.interrupt", { sessionID: SESSION }),
+          reply("session.interrupt", "<hang>"),
+          // The restarted turn finds the parent still stopping and fails.
+          out("session.active"),
+          replyData("session.active", { [SESSION]: { type: "running" } }),
+          out("session.interrupt", { sessionID: SESSION }),
+          reply("session.interrupt", { interrupted: true }),
+          // The stream drops before the parent's end; the reconnect finds it idle.
+          event("session.usage.updated", { sessionID: SESSION }, "drop"),
+          { type: "runtime_exit", status: "success" } as const,
+          out("event.subscribe"),
+          out("session.active"),
+          replyData("session.active", { [CHILD]: { type: "running" } }),
+          out("permission.list", { sessionID: CHILD }),
+          replyData("permission.list", []),
+          out("session.form.list", { sessionID: CHILD }),
+          replyData("session.form.list", []),
+          // The subagent ends and OpenCode answers its report on its own.
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          event("session.inbox.enqueued", {
+            inboxID: "msg_report",
+            sessionID: SESSION,
+            item: {
+              type: "synthetic",
+              payload: {
+                text: `<subagent sessionID="${CHILD}" state="completed" description="Sleep">\nCHILD_OK\n</subagent>`,
+                description: "Sleep",
+                metadata: {
+                  source: "subagent",
+                  childID: CHILD,
+                  agent: "General",
+                  state: "completed",
+                },
+              },
+              delivery: "steer",
+            },
+          }),
+          event("session.execution.started", { sessionID: SESSION }),
+          // A prompt sent while that reply runs joins it, with no check first.
+          out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+          promptAccepted,
+          event("session.text.ended", {
+            sessionID: SESSION,
+            assistantMessageID: "msg_followup",
+            ordinal: 0,
+            text: "CHILD_OK",
+          }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ],
+        { replayGate: gate },
+      ).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      // The single reader of the runtime's events.
+      const attached = yield* Deferred.make<void>();
+      const ended = yield* runtime.events.pipe(
+        Stream.tap((event) =>
+          event.type === "subagent.updated" && event.subagent.childThreadId !== null
+            ? Deferred.succeed(attached, undefined)
+            : Effect.void,
+        ),
+        Stream.filter(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "turn.terminal" }> =>
+            event.type === "turn.terminal",
+        ),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(withLineage(thread));
+      yield* Deferred.await(attached);
+      const interrupt = yield* runtime
+        .interruptTurn({ providerThread: thread, providerTurnId: yield* providerTurnId })
+        .pipe(Effect.forkScoped);
+      yield* TestClock.adjust("11 seconds");
+      yield* Fiber.join(interrupt);
+      yield* runtime.startTurn({ ...secondTurn(thread), appThread: withLineage(thread).appThread });
+      gate.release("drop");
+      // The reply has started.
+      yield* Deferred.await(offered);
+      yield* runtime.startTurn({
+        ...withLineage(thread),
+        runId: RunId.make("run:opencode2-adapter:3"),
+        runOrdinal: 3,
+        providerTurnOrdinal: 3,
+        attemptId: RunAttemptId.make("attempt:opencode2-adapter:3"),
+      });
+      // The reply's start cleared the Stop's mark, so its end finishes the joined turn.
+      assert.deepEqual(
+        [...(yield* Fiber.join(ended))].map((terminal) => terminal.status),
+        ["interrupted", "failed", "completed"],
+      );
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   /**
    * A prompt fails without a clear rejection, OpenCode never took it, and a
    * background subagent's report then wakes the parent into a reply. With
