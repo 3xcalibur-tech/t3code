@@ -43,6 +43,9 @@ import {
 } from "./AcpAdapterV2.ts";
 
 export const KIRO_PROVIDER = ProviderDriverKind.make("kiro");
+/** T3's slug for "Kiro default", and Kiro's documented default model id. */
+const KIRO_DEFAULT_MODEL = "default";
+const KIRO_FALLBACK_DEFAULT_MODEL = "auto";
 const DEFAULT_KIRO_SETTINGS = Schema.decodeSync(KiroSettings)({});
 
 const KiroProviderCapabilitiesV2 = {
@@ -68,6 +71,11 @@ export interface KiroAdapterV2Options {
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
   readonly serverConfig: ServerConfig.ServerConfig["Service"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
+  /**
+   * Kiro's id for "Kiro default" (the provider snapshot's `--list-models`
+   * default). Absent, it is `auto`.
+   */
+  readonly defaultModel?: Effect.Effect<string>;
   /** Replaces the `kiro-cli` launch (replay tests). Kiro's session setup still applies. */
   readonly makeRuntime?: (
     input: AcpAdapterV2RuntimeInput,
@@ -82,7 +90,10 @@ export interface KiroAdapterV2Options {
 
 /**
  * Kiro V3 selects models through its `model` session config option, and
- * `session/set_model` does not exist. "default" keeps the session's model.
+ * `session/set_model` does not exist. "default" selects Kiro's own default
+ * model (`auto` unless the account's model list names another), so choosing
+ * it after a named model switches back. No write goes out when the session
+ * already runs the model, or for "default" on a new session.
  *
  * Kiro 2.27 leaves `model` out of the `session/new` result and advertises it
  * in a `config_option_update` a few milliseconds later, so a fresh session can
@@ -92,32 +103,38 @@ export interface KiroAdapterV2Options {
  * `InvalidModelError`), so an unknown id never runs silently on another model.
  * Once the option is known, T3 refuses an unlisted model before prompting.
  */
-const applyKiroModelSelection: NonNullable<AcpAdapterV2Flavor["applyModelSelection"]> = ({
-  runtime,
-  modelSelection,
-}) =>
-  Effect.gen(function* () {
-    const modelOption = (yield* runtime.getConfigOptions).find(
-      (option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model",
-    );
-    const current = modelOption?.type === "select" ? modelOption.currentValue : undefined;
-    const requested = modelSelection.model.trim();
-    if (requested.length === 0 || requested === "default" || requested === current) {
-      return current;
-    }
-    if (modelOption?.type === "select") {
-      const offered = modelOption.options.flatMap((entry) =>
-        "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+const applyKiroModelSelection =
+  (defaultModel: Effect.Effect<string>): NonNullable<AcpAdapterV2Flavor["applyModelSelection"]> =>
+  ({ runtime, modelSelection }) =>
+    Effect.gen(function* () {
+      const modelOption = (yield* runtime.getConfigOptions).find(
+        (option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model",
       );
-      if (!offered.includes(requested)) {
-        return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-          `Kiro model '${requested}' is unavailable for this account. Select an available model.`,
-        );
+      const current = modelOption?.type === "select" ? modelOption.currentValue : undefined;
+      const selected = modelSelection.model.trim();
+      const isDefault = selected.length === 0 || selected === KIRO_DEFAULT_MODEL;
+      // Before Kiro advertises `model` the session is new, so it already runs
+      // Kiro's default.
+      if (isDefault && modelOption?.type !== "select") {
+        return current;
       }
-    }
-    yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested);
-    return requested;
-  });
+      const requested = isDefault ? yield* defaultModel : selected;
+      if (requested === current) {
+        return current;
+      }
+      if (modelOption?.type === "select") {
+        const offered = modelOption.options.flatMap((entry) =>
+          "value" in entry ? [entry.value] : entry.options.map((choice) => choice.value),
+        );
+        if (!offered.includes(requested)) {
+          return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+            `Kiro model '${requested}' is unavailable for this account. Select an available model.`,
+          );
+        }
+      }
+      yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested);
+      return requested;
+    });
 
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
@@ -168,7 +185,9 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
     promptFailure: kiroPromptFailure,
     // See applyKiroModelSelection: `model` arrives after session/new.
     modelOptionArrivesLate: true,
-    applyModelSelection: applyKiroModelSelection,
+    applyModelSelection: applyKiroModelSelection(
+      options.defaultModel ?? Effect.succeed(KIRO_FALLBACK_DEFAULT_MODEL),
+    ),
     // Kiro's own review step: with Autopilot off (Supervised) Kiro asks the
     // user to accept a turn's changes before it ends; on (Full access) it does
     // not. Its per-tool prompts come either way and T3's runtime policy
@@ -210,7 +229,13 @@ export type KiroAdapterV2DriverEnv =
   | ProviderEventLoggers.ProviderEventLoggers
   | ServerConfig.ServerConfig;
 
-export const KiroAdapterV2Driver: ProviderAdapterDriver<KiroSettings, KiroAdapterV2DriverEnv> = {
+/**
+ * `defaultModel` reads Kiro's id for "Kiro default" from the provider
+ * snapshot; without one (the bare V2 adapter registry) it is `auto`.
+ */
+export const makeKiroAdapterV2Driver = (
+  defaultModel?: Effect.Effect<string>,
+): ProviderAdapterDriver<KiroSettings, KiroAdapterV2DriverEnv> => ({
   driverKind: KIRO_PROVIDER,
   configSchema: KiroSettings,
   defaultConfig: (): KiroSettings => DEFAULT_KIRO_SETTINGS,
@@ -229,6 +254,7 @@ export const KiroAdapterV2Driver: ProviderAdapterDriver<KiroSettings, KiroAdapte
         idAllocator: yield* IdAllocator.IdAllocatorV2,
         serverConfig: yield* ServerConfig.ServerConfig,
         selfInvocation: yield* resolveSelfInvocation(),
+        ...(defaultModel === undefined ? {} : { defaultModel }),
         nativeLogging: (threadId) =>
           makeNativeLogger({
             nativeEventLogger: providerEventLoggers.native,
@@ -250,4 +276,6 @@ export const KiroAdapterV2Driver: ProviderAdapterDriver<KiroSettings, KiroAdapte
         ),
       ),
   ),
-};
+});
+
+export const KiroAdapterV2Driver = makeKiroAdapterV2Driver();

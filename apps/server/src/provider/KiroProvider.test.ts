@@ -7,7 +7,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { checkKiroProviderStatus } from "./KiroProvider.ts";
+import { checkKiroProviderStatus, kiroDefaultModelId } from "./KiroProvider.ts";
 
 const encoder = new TextEncoder();
 const settings = Schema.decodeSync(KiroSettings)({ enabled: true });
@@ -121,6 +121,32 @@ describe("KiroProvider", () => {
           ["claude-haiku-4.5", false],
         ],
       );
+    }),
+  );
+
+  it.effect("keeps the id Kiro's model list names as its default for Kiro default", () =>
+    Effect.gen(function* () {
+      const signedIn = {
+        "--version": { stdout: "kiro-cli 2.27.0\n", code: 0 },
+        "whoami --format json": { stdout: '{"accountType":"SocialGitHub"}\n', code: 0 },
+      };
+      const listed = yield* check({
+        ...signedIn,
+        "chat --list-models --format json": {
+          stdout: KIRO_MODEL_LIST.replace(
+            '"default_model":"auto"',
+            '"default_model":"claude-sonnet-4.5"',
+          ),
+          code: 0,
+        },
+      });
+      assert.equal(kiroDefaultModelId(listed.snapshot.models), "claude-sonnet-4.5");
+      // An unparsable list keeps the built-in entry, which falls back to `auto`.
+      const unlisted = yield* check({
+        ...signedIn,
+        "chat --list-models --format json": { stdout: "not json\n", code: 0 },
+      });
+      assert.equal(kiroDefaultModelId(unlisted.snapshot.models), "auto");
     }),
   );
 

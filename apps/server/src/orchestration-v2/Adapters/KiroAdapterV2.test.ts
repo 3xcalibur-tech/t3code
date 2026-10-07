@@ -230,6 +230,11 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
   readonly drive: (session: {
     readonly events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
     readonly startTurn: Effect.Effect<void, ProviderAdapterV2Error>;
+    /** Starts turn `ordinal` (from 1) on `model`. */
+    readonly startTurnOn: (
+      ordinal: number,
+      model: string,
+    ) => Effect.Effect<void, ProviderAdapterV2Error>;
     readonly interrupt: (
       providerTurnId: ProviderTurnId,
     ) => Effect.Effect<void, ProviderAdapterV2Error>;
@@ -305,10 +310,10 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
     });
     const providerThread = yield* session.ensureThread({ threadId, modelSelection, runtimePolicy });
     const now = yield* DateTime.now;
-    const suffix = `${threadId}:1`;
-    yield* input.drive({
-      events: session.events,
-      startTurn: session.startTurn({
+    const startTurnOn = (ordinal: number, model: string) => {
+      const suffix = `${threadId}:${ordinal}`;
+      const turnSelection = { instanceId, model };
+      return session.startTurn({
         appThread: {
           createdBy: "user",
           creationSource: "web",
@@ -316,7 +321,7 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
           projectId: ProjectId.make(`project:${threadId}`),
           title: "Kiro adapter test",
           providerInstanceId: instanceId,
-          modelSelection,
+          modelSelection: turnSelection,
           runtimeMode: runtimePolicy.runtimeMode,
           interactionMode: "default",
           branch: null,
@@ -334,8 +339,8 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
         },
         threadId,
         runId: RunId.make(`run:${suffix}`),
-        runOrdinal: 1,
-        providerTurnOrdinal: 1,
+        runOrdinal: ordinal,
+        providerTurnOrdinal: ordinal,
         attemptId: RunAttemptId.make(`attempt:${suffix}`),
         rootNodeId: NodeId.make(`node:${suffix}`),
         providerThread,
@@ -346,9 +351,14 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
           text: "Say hello",
           attachments: [],
         },
-        modelSelection,
+        modelSelection: turnSelection,
         runtimePolicy,
-      }),
+      });
+    };
+    yield* input.drive({
+      events: session.events,
+      startTurn: startTurnOn(1, modelSelection.model),
+      startTurnOn,
       interrupt: (providerTurnId) => session.interruptTurn({ providerThread, providerTurnId }),
       respond: (requestId, decision) => session.respondToRuntimeRequest({ requestId, decision }),
     });
@@ -390,6 +400,54 @@ describe("KiroAdapterV2", () => {
         Effect.gen(function* () {
           yield* startTurn;
           assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("switches back to Kiro's default model after a named one", () =>
+    runKiroScript({
+      scenario: "default-after-named",
+      frames: [
+        ...openSessionFrames({
+          initialize: KIRO_V3_INITIALIZE,
+          configOptions: [modeOption, modelOption("auto"), autopilotOption("on")],
+        }),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        outbound("session/set_config_option", {
+          sessionId: SESSION_ID,
+          configId: "model",
+          value: "claude-sonnet",
+        }),
+        answer("session/set_config_option", {
+          configOptions: [modeOption, modelOption("claude-sonnet"), autopilotOption("off")],
+        }),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        // "Kiro default" is Kiro's `auto`, so the session leaves the named model.
+        outbound("session/set_config_option", {
+          sessionId: SESSION_ID,
+          configId: "model",
+          value: "auto",
+        }),
+        answer("session/set_config_option", {
+          configOptions: [modeOption, modelOption("auto"), autopilotOption("off")],
+        }),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        ...closeSession,
+      ],
+      drive: ({ events, startTurnOn }) =>
+        Effect.gen(function* () {
+          // The session already runs `auto`, so the first default turn sends no write.
+          for (const [ordinal, model] of [
+            [1, "default"],
+            [2, "claude-sonnet"],
+            [3, "default"],
+          ] as const) {
+            yield* startTurnOn(ordinal, model);
+            assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
+          }
         }),
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );

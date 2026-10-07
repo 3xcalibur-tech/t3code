@@ -6,13 +6,17 @@ import { ChildProcessSpawner } from "effect/process";
 
 import type * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import {
-  KiroAdapterV2Driver,
   type KiroAdapterV2DriverEnv,
+  makeKiroAdapterV2Driver,
 } from "../../orchestration-v2/Adapters/KiroAdapterV2.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { buildInitialKiroProviderSnapshot, checkKiroProviderStatus } from "../KiroProvider.ts";
+import {
+  buildInitialKiroProviderSnapshot,
+  checkKiroProviderStatus,
+  kiroDefaultModelId,
+} from "../KiroProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -87,24 +91,6 @@ export const KiroDriver: ProviderDriver<KiroSettings, KiroDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies KiroSettings;
-      const orchestrationAdapter = yield* KiroAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Kiro orchestration adapter.",
-              cause,
-            }),
-        ),
-      );
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<KiroSettings>>({
         resolveMaintenance: () => Effect.succeed(MAINTENANCE),
@@ -129,6 +115,23 @@ export const KiroDriver: ProviderDriver<KiroSettings, KiroDriverEnv> = {
             }),
         ),
       );
+
+      // "Kiro default" selects the default the snapshot read from Kiro's model list.
+      const orchestrationAdapter = yield* makeKiroAdapterV2Driver(
+        snapshot.getSnapshot.pipe(Effect.map((current) => kiroDefaultModelId(current.models))),
+      )
+        .create({ instanceId, displayName, accentColor, environment, enabled, config })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: "Failed to build Kiro orchestration adapter.",
+                cause,
+              }),
+          ),
+        );
 
       return {
         instanceId,

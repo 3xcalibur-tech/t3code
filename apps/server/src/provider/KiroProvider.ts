@@ -34,8 +34,15 @@ const KIRO_PRESENTATION = {
   supportedRuntimeModes: KIRO_SUPPORTED_RUNTIME_MODES,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({ optionDescriptors: [] });
+const KIRO_DEFAULT_MODEL_SLUG = "default";
+const KIRO_FALLBACK_DEFAULT_MODEL = "auto";
 const KIRO_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
-  { slug: "default", name: "Kiro default", isCustom: false, capabilities: EMPTY_CAPABILITIES },
+  {
+    slug: KIRO_DEFAULT_MODEL_SLUG,
+    name: "Kiro default",
+    isCustom: false,
+    capabilities: EMPTY_CAPABILITIES,
+  },
 ];
 const KIRO_API_KEY_ENV = "KIRO_API_KEY";
 
@@ -145,9 +152,10 @@ const decodeKiroModelList = Schema.decodeUnknownOption(KiroModelList);
 /**
  * Reads `kiro-cli chat --list-models --format json`, the models the signed-in
  * account may use (Kiro 2.27 lists 20, `auto` first and marked default). The
- * `auto` entry becomes "Kiro default", which leaves the session's model alone.
- * Sessions only advertise a model choice after they start, so this is where
- * the picker learns the list. Anything unparsable keeps the built-in list.
+ * default entry becomes "Kiro default" and keeps Kiro's own id as its alias,
+ * which the adapter selects for it. Sessions only advertise a model choice
+ * after they start, so this is where the picker learns the list. Anything
+ * unparsable keeps the built-in list.
  */
 function kiroModelsFromList(
   output: { readonly code: number; readonly stdout: string } | undefined,
@@ -155,12 +163,13 @@ function kiroModelsFromList(
   if (output === undefined || output.code !== 0) return undefined;
   const list = Option.getOrUndefined(decodeKiroModelList(output.stdout.trim()));
   if (list === undefined || list.models.length === 0) return undefined;
-  const defaultId = list.default_model ?? "auto";
+  const defaultId = list.default_model ?? KIRO_FALLBACK_DEFAULT_MODEL;
   return list.models.map((model) =>
     model.model_id === defaultId
       ? {
-          slug: "default",
+          slug: KIRO_DEFAULT_MODEL_SLUG,
           name: "Kiro default",
+          aliases: [model.model_id],
           isCustom: false,
           isDefault: true,
           capabilities: EMPTY_CAPABILITIES,
@@ -171,6 +180,17 @@ function kiroModelsFromList(
           isCustom: false,
           capabilities: EMPTY_CAPABILITIES,
         },
+  );
+}
+
+/**
+ * Kiro's own id for "Kiro default": the alias the model list gave it, else
+ * `auto`, Kiro's documented default.
+ */
+export function kiroDefaultModelId(models: ReadonlyArray<ServerProviderModel>): string {
+  return (
+    models.find((model) => model.slug === KIRO_DEFAULT_MODEL_SLUG)?.aliases?.[0] ??
+    KIRO_FALLBACK_DEFAULT_MODEL
   );
 }
 
