@@ -245,4 +245,11 @@ describe("server browser element refs", () => {
     ]);
     expect(await page.evaluate("window.seen")).toEqual(["click", "hover", "drop"]);
   });
+
+  it("stops an evaluation at its deadline so the page answers the next one", async () => {
+    await expect(
+      ServerBrowserPage.evaluate(cdp, { expression: "for (;;) {}" }, 200),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(await ServerBrowserPage.evaluate(cdp, { expression: "1 + 1" }, 2_000)).toBe(2);
+  });
 });

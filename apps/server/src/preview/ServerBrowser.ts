@@ -1693,7 +1693,11 @@ const make = Effect.gen(function* () {
           ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput),
         );
       case "evaluate":
-        return ServerBrowserPage.evaluate(tab.cdp, input as PreviewAutomationEvaluateInput);
+        return ServerBrowserPage.evaluate(
+          tab.cdp,
+          input as PreviewAutomationEvaluateInput,
+          request.timeoutMs,
+        );
       case "waitFor":
         return ServerBrowserPage.waitFor(tab.page, input as PreviewAutomationWaitForInput);
       case "recordingStart": {
