@@ -5,7 +5,34 @@ import {
   newPreviewTabId,
   normalizePreviewUrl,
   PreviewUrlNormalizationError,
+  resolveAddressBarInput,
 } from "./preview.ts";
+
+describe("resolveAddressBarInput", () => {
+  it("opens what users type as addresses", () => {
+    expect(resolveAddressBarInput("localhost:5173")).toBe("http://localhost:5173/");
+    expect(resolveAddressBarInput("127.0.0.1:3000/path")).toBe("http://127.0.0.1:3000/path");
+    expect(resolveAddressBarInput("my-box.tailnet.ts.net")).toBe("https://my-box.tailnet.ts.net/");
+    expect(resolveAddressBarInput("cnn.com")).toBe("https://cnn.com/");
+    expect(resolveAddressBarInput("devbox:8080")).toBe("https://devbox:8080/");
+    expect(resolveAddressBarInput(" https://example.com/a b ")).toBe("https://example.com/a%20b");
+  });
+
+  it("searches for text that is not an address", () => {
+    expect(resolveAddressBarInput("weather")).toBe("https://duckduckgo.com/?q=weather");
+    expect(resolveAddressBarInput("how to center a div")).toBe(
+      "https://duckduckgo.com/?q=how%20to%20center%20a%20div",
+    );
+    expect(resolveAddressBarInput("what is cnn.com")).toBe(
+      "https://duckduckgo.com/?q=what%20is%20cnn.com",
+    );
+  });
+
+  it("still rejects empty input and unsupported schemes", () => {
+    expect(() => resolveAddressBarInput("  ")).toThrow(PreviewUrlNormalizationError);
+    expect(() => resolveAddressBarInput("ftp://example.com")).toThrow(PreviewUrlNormalizationError);
+  });
+});
 
 describe("newPreviewTabId", () => {
   it("returns a unique tab id every call", () => {
