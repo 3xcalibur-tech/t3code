@@ -572,12 +572,52 @@ const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
   remarkNormalizeLinksAndTagInlineCode,
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
 
+/** GitHub's heading anchor slug, so `[Setup](#setup)` table-of-contents links find their heading. */
+function githubHeadingSlug(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+    .replace(/ /g, "-");
+}
+
+/**
+ * Gives headings without an authored id GitHub's slug id, deduplicated per document. Like the
+ * sanitizer's ids, they carry the `user-content-` prefix so they cannot clobber app element ids;
+ * fragment lookup strips it.
+ */
+function rehypeHeadingIds() {
+  return (tree: MarkdownImageHastNode) => {
+    const seen = new Map<string, number>();
+    const visit = (node: MarkdownImageHastNode) => {
+      if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
+        const slug = githubHeadingSlug(hastPlainTextDeep(node));
+        if (node.properties?.id === undefined && slug) {
+          const count = seen.get(slug) ?? 0;
+          seen.set(slug, count + 1);
+          const id = `${SANITIZED_FRAGMENT_PREFIX}${count === 0 ? slug : `${slug}-${count}`}`;
+          node.properties = { ...node.properties, id };
+        }
+        return;
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+
+// Heading ids are added after sanitizing, which would prefix them a second time.
 const CHAT_MARKDOWN_REHYPE_PLUGINS = [
   rehypePreserveBareAnchorPlaceholders,
   rehypeRaw,
   rehypePreserveImageSourceMeta,
   [rehypeSanitize, CHAT_MARKDOWN_SANITIZE_SCHEMA],
+  rehypeHeadingIds,
 ] satisfies NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
+
+const CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS = [rehypeHeadingIds] satisfies NonNullable<
+  ReactMarkdownOptions["rehypePlugins"]
+>;
 
 /** GitHub's own five alert kinds, in its colors: the glyph names the urgency, the title says it. */
 const GITHUB_ALERT_PRESENTATIONS: Record<
@@ -2065,14 +2105,10 @@ function handleMarkdownFragmentClick(event: ReactMouseEvent<HTMLAnchorElement>, 
     return;
   }
 
-  const target = findMarkdownFragmentTarget(event.currentTarget, href);
-  if (!target) return;
-
+  // Never let the browser follow the fragment or write it to the URL: desktop keeps
+  // its route in the hash, so replacing the hash navigates away from the thread.
   event.preventDefault();
-  const nextUrl = new URL(window.location.href);
-  nextUrl.hash = href.slice(1);
-  window.history.pushState(window.history.state, "", nextUrl);
-  target.scrollIntoView({ block: "nearest" });
+  findMarkdownFragmentTarget(event.currentTarget, href)?.scrollIntoView({ block: "start" });
 }
 
 function MarkdownExternalLinkContent({
@@ -3622,7 +3658,9 @@ function ChatMarkdown({
       <ChatMarkdownRendererContext value={componentState}>
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
-          rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
+          rehypePlugins={
+            parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+          }
           skipHtml={false}
           components={CHAT_MARKDOWN_COMPONENTS}
           urlTransform={markdownUrlTransform}
