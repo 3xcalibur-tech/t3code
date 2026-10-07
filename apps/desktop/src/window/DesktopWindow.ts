@@ -1039,7 +1039,9 @@ export const make = Effect.gen(function* () {
     }),
     runMainContentsCommand: Effect.fn("desktop.window.runMainContentsCommand")(function* (command) {
       yield* Effect.annotateCurrentSpan({ command });
-      const window = yield* focusedMainWindow;
+      // The registered main window, never the focused one: with an OAuth popup
+      // focused, Reload would otherwise reload the popup mid sign-in.
+      const window = yield* electronWindow.main;
       if (Option.isNone(window) || window.value.isDestroyed()) return;
       const webContents = window.value.webContents;
       if (command === "reload") webContents.reload();
