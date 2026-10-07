@@ -70,13 +70,12 @@ export const chromeIdentity = (
  * Presents a headless page as plain Chrome. Applies to the page, its frames,
  * and its workers; a popup gets its own call once it becomes a tab.
  */
-export const presentAsChrome = async (cdp: CDPSession) => {
+export const presentAsChrome = async (
+  cdp: CDPSession,
+  host: { readonly platform: NodeJS.Platform; readonly arch: string },
+) => {
   const { userAgent } = await cdp.send("Browser.getVersion");
-  const identity = chromeIdentity(userAgent, {
-    platform: process.platform,
-    arch: process.arch,
-    release: NodeOS.release(),
-  });
+  const identity = chromeIdentity(userAgent, { ...host, release: NodeOS.release() });
   if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
 };
 

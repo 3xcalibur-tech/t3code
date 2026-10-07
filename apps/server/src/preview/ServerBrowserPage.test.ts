@@ -248,7 +248,7 @@ describe("server browser element refs", () => {
   });
 
   it("presents a headless page as Chrome, with client hints that agree", async () => {
-    await presentAsChrome(cdp);
+    await presentAsChrome(cdp, { platform: "linux", arch: "x64" });
     // userAgentData exists only in secure contexts; https comes from a route.
     let secChUa: string | undefined;
     await page.route("https://example.test/", (route) => {

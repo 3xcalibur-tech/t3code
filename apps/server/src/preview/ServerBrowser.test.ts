@@ -746,17 +746,21 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
         frame: () => page,
         failure: () => ({ errorText: "net::ERR_ABORTED" }),
       });
+      // Stands in for Chromium, which writes the file itself.
+      const saved = yield* Queue.unbounded<string>();
+      const written = Promise.withResolvers<void>();
       page.emit("download", {
         failure: async () => null,
-        saveAs: (path: string) =>
-          Effect.runPromise(
-            Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFileString(path, "%PDF")).pipe(
-              Effect.provide(NodeServices.layer),
-            ),
-          ),
+        saveAs: (path: string) => {
+          Queue.offerUnsafe(saved, path);
+          return written.promise;
+        },
         suggestedFilename: () => "paper.pdf",
         url: () => pdf,
       });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(yield* Queue.take(saved), "%PDF");
+      written.resolve();
       let status = yield* PubSub.take(events);
       while (status.type !== "failed") status = yield* PubSub.take(events);
       expect(status).toMatchObject({ url: pdf, download: { fileName: "paper.pdf" } });
