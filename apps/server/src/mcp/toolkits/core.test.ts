@@ -26,6 +26,7 @@ import {
   OrchestratorProjectionError,
 } from "../../orchestration-v2/Orchestrator.ts";
 
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
@@ -692,6 +693,55 @@ it.effect("a caller cannot interrupt a thread that runs above its own modes", ()
         Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
         Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
         Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+      ),
+    ),
+  ),
+);
+
+it.effect("only the caller that prepared a pending upload can discard it", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (
+      name: string,
+      args: Record<string, unknown>,
+      invocation: McpInvocationContext.McpInvocationScope,
+    ) =>
+      server
+        .callTool({ name, arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const prepared = yield* call(
+      "t3_attachment_prepare_upload",
+      { upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 } },
+      scope,
+    );
+    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
+    const otherThread = {
+      ...scope,
+      requestNamespace: "other-session",
+      thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") },
+    };
+
+    const refused = yield* call("t3_attachment_discard", { attachmentId }, otherThread);
+    expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
+
+    // A new provider session of the same thread still owns the upload.
+    const discarded = yield* call(
+      "t3_attachment_discard",
+      { attachmentId },
+      { ...scope, requestNamespace: "mcp-core-session-2" },
+    );
+    expect(discarded.isError).toBe(false);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerAttachmentToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-attachment-" })),
+        Layer.provide(NodeServices.layer),
       ),
     ),
   ),

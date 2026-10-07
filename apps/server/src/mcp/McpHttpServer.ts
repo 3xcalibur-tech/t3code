@@ -818,7 +818,7 @@ const layerEnvironmentRegistration = toolkitRegistration(
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
 
-const layerAttachmentRegistration = toolkitRegistration(
+export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
   AttachmentHandlers.layer,
 );
@@ -854,7 +854,7 @@ export const layer = Layer.mergeAll(
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,
-  layerAttachmentRegistration,
+  layerAttachmentToolkit,
   layerProjectRegistration,
   layerEnvironmentRegistration,
   layerPreviewControlsRegistration,
