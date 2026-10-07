@@ -12,6 +12,7 @@ import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as ServerConfig from "../../config.ts";
@@ -121,6 +122,19 @@ const applyKiroModelSelection: NonNullable<AcpAdapterV2Flavor["applyModelSelecti
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
 /**
+ * Kiro's own marker that it has started a prompt: a `session_info_update`
+ * whose `_meta.kiro.kind` is `turn_start` (recorded on 2.27). The
+ * `user_message_id_assigned` echo comes earlier, while Kiro still drops a
+ * cancel, and the previous prompt's `context_usage` can arrive after the next
+ * `session/prompt` went out, so neither counts.
+ */
+function isKiroTurnStart(update: EffectAcpSchema.SessionUpdate): boolean {
+  if (update.sessionUpdate !== "session_info_update") return false;
+  const kiro = update._meta?.kiro;
+  return typeof kiro === "object" && kiro !== null && "kind" in kiro && kiro.kind === "turn_start";
+}
+
+/**
  * Kiro's prompt errors carry a message meant for the user (live 2.27: -32000
  * "The model 'x' is not available. Please select a different model and try
  * again. (Request ID: …)"). Show it instead of the generic failure text;
@@ -165,7 +179,7 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
     ],
     // Kiro 2.27 drops a `session/cancel` sent before it starts the prompt
     // (live: 0-0.5 s after `session/prompt`) and runs the turn to completion.
-    cancelAfterPromptStarts: true,
+    cancelAfterPromptStarts: isKiroTurnStart,
     permissionDisposition: kiroPermissionDisposition,
     approvalOptions: kiroApprovalOptions,
     // Kiro V3 advertises `promptCapabilities.image`; the shared adapter reads it.

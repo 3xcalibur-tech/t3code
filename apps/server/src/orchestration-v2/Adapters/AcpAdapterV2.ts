@@ -404,12 +404,13 @@ export interface AcpAdapterV2Flavor {
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
   /**
-   * Hold `session/cancel` until the agent sends its first prompt-scoped
-   * `session/update`, or skip it when the prompt settles first. Kiro 2.27
-   * drops a cancel that arrives before it has started the prompt and runs the
-   * turn to completion.
+   * Hold `session/cancel` until an update for the session matches this
+   * predicate (the agent's own "prompt started" marker), or skip the cancel
+   * when the prompt settles first. Only updates after `session/prompt` went
+   * out count. Kiro 2.27 drops a cancel that arrives before it has started the
+   * prompt and runs the turn to completion.
    */
-  readonly cancelAfterPromptStarts?: boolean;
+  readonly cancelAfterPromptStarts?: (update: EffectAcpSchema.SessionUpdate) => boolean;
   /**
    * Kill and respawn the ACP child process before the next `session/prompt` after a
    * user interrupt. Grok can keep `task_already_running` state until the process exits.
@@ -1239,7 +1240,7 @@ interface ActiveAcpTurn {
   readonly promptWireSettled: Deferred.Deferred<void, never>;
   /** Completed once `session/prompt` is the runtime's active prompt. */
   readonly promptDispatched: Deferred.Deferred<void, never>;
-  /** Completed by the first prompt-scoped `session/update` after dispatch. */
+  /** Completed by the flavor's `cancelAfterPromptStarts` marker after dispatch. */
   readonly promptStarted: Deferred.Deferred<void, never>;
   backgroundFinalizeGeneration: number;
 }
@@ -5444,20 +5445,18 @@ export function makeAcpAdapterV2(
           }
         });
 
-        // Session-scoped updates (late setup echoes) do not show that the
-        // agent has started the prompt.
+        // Only the flavor's own start marker counts: agents also send late
+        // updates for the previous prompt (Kiro's context usage) and echoes
+        // that arrive before they would honor a cancel.
         const markPromptStarted = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
+          const promptStarts = flavor.cancelAfterPromptStarts;
+          if (promptStarts === undefined) return;
           const context = yield* Ref.get(activeTurn);
           if (context === null || context.nativeThreadId !== notification.sessionId) return;
           if (!(yield* Deferred.isDone(context.promptDispatched))) return;
-          switch (notification.update.sessionUpdate) {
-            case "available_commands_update":
-            case "config_option_update":
-            case "current_mode_update":
-              return;
-          }
+          if (!promptStarts(notification.update)) return;
           yield* Deferred.succeed(context.promptStarted, undefined);
         });
         const projectAcpRuntimeSessionUpdateEffect = (
@@ -6572,7 +6571,7 @@ export function makeAcpAdapterV2(
          * cancel. A hold that outlives the interrupt timeout cancels anyway.
          */
         const promptStillRunsAfterHold = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
-          if (flavor.cancelAfterPromptStarts !== true) return true;
+          if (flavor.cancelAfterPromptStarts === undefined) return true;
           if (yield* Deferred.isDone(context.promptStarted)) return true;
           yield* options.testHooks?.onCancelHeld?.() ?? Effect.void;
           const started = yield* Effect.raceFirst(

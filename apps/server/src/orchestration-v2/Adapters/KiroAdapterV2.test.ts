@@ -417,12 +417,18 @@ describe("KiroAdapterV2", () => {
 describe("KiroAdapterV2 early Stop", () => {
   // Kiro CLI 2.27.1 drops a `session/cancel` that arrives 0-0.5 s after
   // `session/prompt` and runs the turn to completion (reported by TinBane).
-  // T3 holds Stop's cancel until Kiro's first update for the prompt.
+  // T3 holds Stop's cancel until Kiro's `turn_start` marker for the prompt.
   // Replay gates hold Kiro's frames until Stop is holding; a gate's label
   // being reached means every frame before it was handled.
   const kiroInfo = (label: string, kiro: Record<string, unknown>): Frame => ({
     ...update({ sessionUpdate: "session_info_update", _meta: { kiro } }),
     label,
+  });
+  // Shapes recorded from Kiro 2.27 (fixtures/queued_turn/kiro_transcript.ndjson).
+  const turnStart = kiroInfo("turn-start", {
+    turnStart: true,
+    kind: "turn_start",
+    messageId: "message-2-turn-start",
   });
   const cancel: Frame = {
     type: "expect_outbound",
@@ -496,12 +502,37 @@ describe("KiroAdapterV2 early Stop", () => {
       });
     }).pipe(Effect.provide(testLayer), Effect.scoped);
 
-  it.effect("holds Stop until Kiro starts the prompt, then cancels it", () =>
+  it.effect("holds Stop past Kiro's message-id echo until its turn_start", () =>
     stopBeforeKiroStarts({
-      gates: ["message-id"],
+      gates: ["message-id", "turn-start"],
       expectCancel: true,
       frames: [
         kiroInfo("message-id", { userMessageId: "message-2", kind: "user_message_id_assigned" }),
+        kiroInfo("focus", {
+          focus: { status: "in_progress" },
+          kind: "focus_update",
+          status: "in_progress",
+        }),
+        turnStart,
+        cancel,
+        answer("session/prompt", { stopReason: "cancelled" }),
+      ],
+    }),
+  );
+
+  it.effect("does not take the previous prompt's late context usage as the start", () =>
+    stopBeforeKiroStarts({
+      // Kiro reports the finished prompt's context usage after answering it,
+      // so it can arrive once the next `session/prompt` went out.
+      gates: ["previous-context-usage", "turn-start"],
+      expectCancel: true,
+      frames: [
+        kiroInfo("previous-context-usage", {
+          contextUsage: { usagePercentage: 8.8 },
+          kind: "context_usage",
+          usagePercentage: 8.8,
+        }),
+        turnStart,
         cancel,
         answer("session/prompt", { stopReason: "cancelled" }),
       ],
