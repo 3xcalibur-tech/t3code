@@ -36,10 +36,11 @@ import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { type SelfInvocation, selfInvocationArgs } from "@t3tools/shared/nodeRuntime";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import type * as Duration from "effect/Duration";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -128,6 +129,8 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
  * wake. Longer floors (4–20s) only prolonged Working. No per-model carveouts.
  */
 const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
+/** One Stop's whole budget: holding the cancel plus waiting for the agent to acknowledge it. */
+const ACP_INTERRUPT_TIMEOUT = Duration.seconds(10);
 
 export interface AcpAdapterV2RuntimeInput {
   readonly cwd: string;
@@ -6578,16 +6581,19 @@ export function makeAcpAdapterV2(
         /**
          * `cancelAfterPromptStarts`: waits until the agent has started the
          * prompt. False when the prompt settled first, so there is nothing to
-         * cancel. A hold that outlives the interrupt timeout cancels anyway.
+         * cancel. A hold that outlives `timeout` cancels anyway.
          */
-        const promptStillRunsAfterHold = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+        const promptStillRunsAfterHold = Effect.fnUntraced(function* (
+          context: ActiveAcpTurn,
+          timeout: Duration.Duration,
+        ) {
           if (flavor.cancelAfterPromptStarts === undefined) return true;
           if (yield* Deferred.isDone(context.promptStarted)) return true;
           yield* options.testHooks?.onCancelHeld?.() ?? Effect.void;
           const started = yield* Effect.raceFirst(
             Deferred.await(context.promptStarted).pipe(Effect.as(true)),
             Deferred.await(context.completed).pipe(Effect.as(false)),
-          ).pipe(Effect.timeoutOption("10 seconds"));
+          ).pipe(Effect.timeoutOption(timeout));
           return Option.getOrElse(started, () => true);
         });
         const quarantineStoppedRun = Effect.fnUntraced(function* () {
@@ -7724,6 +7730,13 @@ export function makeAcpAdapterV2(
                         // work remains, so session/cancel has nothing to acknowledge.
                         yield* finalizeTurn(context, "interrupted");
                       }
+                      // Holding the cancel and waiting for its acknowledgement
+                      // share one deadline, so a held Stop still fails in 10 s.
+                      const deadline =
+                        (yield* Clock.currentTimeMillis) + Duration.toMillis(ACP_INTERRUPT_TIMEOUT);
+                      const remaining = Effect.map(Clock.currentTimeMillis, (now) =>
+                        Duration.millis(Math.max(0, deadline - now)),
+                      );
                       if (hardRestart) {
                         if (runtime.terminateProcessGroup === undefined) {
                           return yield* poisonTeardown(
@@ -7751,7 +7764,10 @@ export function makeAcpAdapterV2(
                         // acknowledge and would only threaten still-running
                         // background subagents. Skip it and leave the runtime
                         // untouched for the replacement turn.
-                        if (!settledSoftInterrupt && (yield* promptStillRunsAfterHold(context))) {
+                        if (
+                          !settledSoftInterrupt &&
+                          (yield* promptStillRunsAfterHold(context, yield* remaining))
+                        ) {
                           yield* runtime.cancel;
                         }
                         if (restartRuntime && flavor.restartRuntimeAfterInterrupt === true) {
@@ -7759,7 +7775,7 @@ export function makeAcpAdapterV2(
                         }
                       }
                       const stopped = yield* Deferred.await(context.completed).pipe(
-                        Effect.timeoutOption("10 seconds"),
+                        Effect.timeoutOption(yield* remaining),
                       );
                       if (Option.isNone(stopped)) {
                         if (!context.finalized) {

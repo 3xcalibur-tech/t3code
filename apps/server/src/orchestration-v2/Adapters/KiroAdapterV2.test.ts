@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -657,6 +658,55 @@ describe("KiroAdapterV2 early Stop", () => {
         answer("session/prompt", { stopReason: "cancelled" }),
       ],
     }),
+  );
+
+  it.effect("fails a Stop Kiro never acknowledges within one 10 s budget", () =>
+    Effect.gen(function* () {
+      const cancelHeld = yield* Deferred.make<void>();
+      const cancelSent = yield* Deferred.make<void>();
+      yield* runKiroScript({
+        scenario: "early-stop-timeout",
+        testHooks: {
+          onCancelHeld: () => Deferred.succeed(cancelHeld, undefined).pipe(Effect.asVoid),
+        },
+        onCancel: Deferred.succeed(cancelSent, undefined).pipe(Effect.asVoid),
+        // Kiro never starts the prompt and never answers it.
+        frames: [
+          ...openSessionFrames({
+            initialize: KIRO_V3_INITIALIZE,
+            configOptions: [modeOption, autopilotOption("on")],
+          }),
+          turnPrompt,
+          cancel,
+          ...closeSession,
+        ],
+        drive: ({ events, startTurn, interrupt }) =>
+          Effect.gen(function* () {
+            const running = yield* Deferred.make<ProviderTurnId>();
+            yield* events.pipe(
+              Stream.tap((event) => {
+                const providerTurnId = runningProviderTurnId(event);
+                return providerTurnId === undefined
+                  ? Effect.void
+                  : Deferred.succeed(running, providerTurnId);
+              }),
+              Stream.runDrain,
+              Effect.forkChild,
+            );
+            yield* startTurn;
+            const stop = yield* interrupt(yield* Deferred.await(running)).pipe(
+              Effect.exit,
+              Effect.forkChild,
+            );
+            yield* Deferred.await(cancelHeld);
+            // The hold uses up the whole budget, so the cancel goes out late
+            // and Stop fails right after it instead of waiting another 10 s.
+            yield* TestClock.adjust("10 seconds");
+            yield* Deferred.await(cancelSent);
+            assert.isTrue(Exit.isFailure(yield* Fiber.join(stop)));
+          }),
+      });
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
   it.effect("sends no cancel when Kiro finishes the prompt before starting it", () =>
