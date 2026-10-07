@@ -778,22 +778,53 @@ describe("KiroAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.effect("refuses a model the session does not offer instead of running on another", () =>
-    Effect.gen(function* () {
-      const exit = yield* runKiroScript({
-        scenario: "unknown-model",
-        model: "not-a-kiro-model",
-        frames: [
-          ...openSessionFrames({
-            initialize: KIRO_V3_INITIALIZE,
-            configOptions: [modeOption, modelOption("auto"), autopilotOption("on")],
-          }),
-          ...closeSession,
-        ],
-        drive: () => Effect.die("the session must not open"),
-      }).pipe(Effect.exit);
-      assert.isTrue(Exit.isFailure(exit));
-      assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "not-a-kiro-model");
+  it.effect("sends a model Kiro does not list, and fails with Kiro's own message", () =>
+    runKiroScript({
+      scenario: "unlisted-model",
+      model: "claude-opus-9",
+      frames: [
+        outbound("initialize"),
+        answer("initialize", KIRO_V3_INITIALIZE),
+        outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
+        // Kiro has already listed its models, without the thread's custom one.
+        answer(
+          "session/new",
+          sessionSetup([modeOption, modelOption("auto"), autopilotOption("on")]),
+        ),
+        // Shapes from kiro-cli 2.27.0, probed live with this id: Kiro takes
+        // the write and fails the prompt.
+        setConfig("model", "claude-opus-9"),
+        configResult([modeOption, modelOption("claude-opus-9"), autopilotOption("on")]),
+        setConfig("autopilot", "off"),
+        configResult([modeOption, modelOption("claude-opus-9"), autopilotOption("off")]),
+        turnPrompt,
+        {
+          type: "emit_inbound",
+          label: "session/prompt.error",
+          frame: {
+            kind: "response",
+            method: "session/prompt",
+            error: {
+              code: -32000,
+              message:
+                "The model 'claude-opus-9' is not available. Please select a different model and try again.",
+              data: { errorType: "InvalidModelError", retryErrorType: "CLIENT_ERROR" },
+            },
+          },
+        },
+        ...closeSession,
+      ],
+      drive: ({ events, startTurn }) =>
+        Effect.gen(function* () {
+          yield* startTurn;
+          const terminal = (yield* collectTurn(events)).find(
+            (event) => event.type === "turn.terminal",
+          );
+          if (terminal?.type !== "turn.terminal" || terminal.status !== "failed") {
+            return yield* Effect.die("the unavailable model must fail its turn");
+          }
+          assert.include(terminal.failure.message, "'claude-opus-9' is not available");
+        }),
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 });

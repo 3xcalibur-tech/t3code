@@ -110,7 +110,8 @@ const findKiroModelOption = (configOptions: ReadonlyArray<EffectAcpSchema.Sessio
  * Kiro accepts any value at set time but fails the next `session/prompt` on
  * one its account cannot use (-32000 "The model '…' is not available",
  * `InvalidModelError`), so an unknown id never runs silently on another model.
- * Once the option is known, T3 refuses an unlisted model before prompting.
+ * A model Kiro does not list is still written, so a custom model from the
+ * provider settings reaches Kiro, which decides.
  */
 const applyKiroModel = (
   runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
@@ -131,12 +132,9 @@ const applyKiroModel = (
     if (requested === current) {
       return current;
     }
-    if (modelOption?.type === "select" && !selectValues(modelOption).includes(requested)) {
-      return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-        `Kiro model '${requested}' is unavailable for this account. Select an available model.`,
-      );
-    }
-    yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested);
+    yield* runtime.setConfigOption(modelOption?.id ?? KIRO_MODEL_CONFIG_ID, requested, {
+      allowUnlistedValue: true,
+    });
     return requested;
   });
 

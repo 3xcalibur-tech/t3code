@@ -1305,9 +1305,16 @@ export class AcpSessionRuntime extends Context.Service<
       modelId: string,
       meta?: EffectAcpSchema.SetSessionModelRequest["_meta"],
     ) => Effect.Effect<EffectAcpSchema.SetSessionModelResponse, EffectAcpErrors.AcpError>;
+    /**
+     * Writes a session configuration option. A select value the option does
+     * not list is refused unless `allowUnlistedValue` is set, for agents that
+     * take any value and judge it later (Kiro accepts any model id and fails
+     * the prompt on one the account cannot use).
+     */
     readonly setConfigOption: (
       configId: string,
       value: string | boolean,
+      options?: { readonly allowUnlistedValue?: boolean },
     ) => Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError>;
     /**
      * Selects the base model through the negotiated model configuration option.
@@ -1925,6 +1932,7 @@ export const make = (
     const validateConfigOptionValue = (
       configId: string,
       value: string | boolean,
+      allowUnlistedValue: boolean,
     ): Effect.Effect<void, EffectAcpErrors.AcpError> =>
       Effect.gen(function* () {
         const configOption = findSessionConfigOption(
@@ -1960,7 +1968,7 @@ export const make = (
           });
         }
         const allowedValues = collectSessionConfigOptionValues(configOption);
-        if (allowedValues.includes(value)) {
+        if (allowUnlistedValue || allowedValues.includes(value)) {
           return;
         }
         return yield* new EffectAcpErrors.AcpRequestError({
@@ -2136,8 +2144,9 @@ export const make = (
     const setConfigOption = (
       configId: string,
       value: string | boolean,
+      options?: { readonly allowUnlistedValue?: boolean },
     ): Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError> =>
-      validateConfigOptionValue(configId, value).pipe(
+      validateConfigOptionValue(configId, value, options?.allowUnlistedValue === true).pipe(
         Effect.flatMap(() => getStartedState),
         Effect.flatMap((started) =>
           SubscriptionRef.get(configOptionsRef).pipe(
