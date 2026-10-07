@@ -70,7 +70,8 @@ const ADDRESS_HOST_PATTERN = /^(?:localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:.]+
  */
 export function resolveAddressBarInput(rawInput: string): string {
   const trimmed = rawInput.trim();
-  if (trimmed.includes("://") || trimmed.length === 0) return normalizePreviewUrl(trimmed);
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) || trimmed.length === 0)
+    return normalizePreviewUrl(trimmed);
   if (!/\s/.test(trimmed)) {
     const authority = trimmed.split(/[/?#]/, 1)[0] ?? "";
     const host = authority.replace(/^[^@]*@/, "").replace(/:\d+$/, "");

@@ -26,6 +26,9 @@ describe("resolveAddressBarInput", () => {
     expect(resolveAddressBarInput("what is cnn.com")).toBe(
       "https://duckduckgo.com/?q=what%20is%20cnn.com",
     );
+    expect(resolveAddressBarInput("what is https://example.com")).toBe(
+      "https://duckduckgo.com/?q=what%20is%20https%3A%2F%2Fexample.com",
+    );
   });
 
   it("still rejects empty input and unsupported schemes", () => {
