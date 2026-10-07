@@ -368,9 +368,10 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       const fds = yield* fileSystem
         .readDirectory(`/proc/${pidText}/fd`)
         .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-      budget -= fds.length;
+      const walked = fds.slice(0, budget);
+      budget -= walked.length;
       const links = yield* Effect.forEach(
-        fds,
+        walked,
         (fd) =>
           fileSystem.readLink(`/proc/${pidText}/fd/${fd}`).pipe(Effect.orElseSucceed(() => "")),
         { concurrency: 16 },
