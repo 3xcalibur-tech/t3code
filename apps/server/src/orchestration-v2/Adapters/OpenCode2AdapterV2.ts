@@ -3538,8 +3538,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             (held) => held.messageId === turnInput.message.messageId,
           );
           if (index < 0) return yield* finishTurn(state, { status: "completed" });
-          // Trade-off: a continuation the user reordered ahead of an earlier one
-          // drops that one's reply too, so cancelled ones never pin the session.
+          // Queued continuations can't be reordered (they carry a notification),
+          // so an earlier wake here lost its continuation to a cancel or a failed
+          // dispatch. Dropping it keeps that wake from pinning the session.
           discardWakes(state, state.wakes.splice(0, index));
           yield* Effect.forkIn(stopStrays(state), sessionScope);
           const wake = state.wakes.shift()!;
