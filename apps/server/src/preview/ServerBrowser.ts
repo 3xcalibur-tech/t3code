@@ -817,9 +817,11 @@ const make = Effect.gen(function* () {
         timestamp: new Date().toISOString(),
       });
       if (!isMainNavigation(request)) return;
-      // A navigation a newer one replaced leaves the status to the newer one.
-      const generation = navigationGenerations.get(request);
-      if (generation !== undefined && generation !== tab.navigationGeneration) return;
+      // A navigation a newer one replaced leaves the status to the newer one. A
+      // popup's first request can predate the listener, so it is untracked and
+      // superseded by any tracked one.
+      const generation = navigationGenerations.get(request) ?? 0;
+      if (generation !== tab.navigationGeneration) return;
       // An aborted navigation is usually a download; its `download` event settles the status.
       if (errorText.includes("ERR_ABORTED")) {
         const url = request.url();

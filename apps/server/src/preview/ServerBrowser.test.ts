@@ -816,6 +816,34 @@ it.live("a download from a superseded navigation leaves the newer navigation loa
   ).pipe(Effect.provide(layer)),
 );
 
+it.live(
+  "a late failure from a request that predates tracking leaves a newer navigation loading",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { broker, tabId } = yield* ready;
+        const page = contexts[0]!.page;
+        const navigation = (url: string) => ({
+          url: () => url,
+          method: () => "GET",
+          isNavigationRequest: () => true,
+          frame: () => page,
+          failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }),
+        });
+        page.emit("request", navigation("https://example.com/next"));
+        // A popup's first request can start before the tab listens for requests.
+        page.emit("requestfailed", navigation("https://example.com/first"));
+        const status = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          tabId,
+          operation: "status",
+          input: {},
+        });
+        expect(status.loading).toBe(true);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.live("an aborted navigation that no download explains stops loading", () =>
   Effect.scoped(
     Effect.gen(function* () {
