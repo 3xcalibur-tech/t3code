@@ -9,17 +9,15 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
-  type RunId,
   ThreadId,
   type OrchestrationV2DomainEvent,
-  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Subagent,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Latch from "effect/Latch";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -43,9 +41,6 @@ const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
 const taskA = NodeId.make("task:a");
 const taskB = NodeId.make("task:b");
-const yieldToRuntime = Effect.yieldNow.pipe(
-  Effect.andThen(Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)))),
-);
 const capabilities = {
   ...CodexProviderCapabilitiesV2,
   turns: { ...CodexProviderCapabilitiesV2.turns, supportsActiveSteering: true },
@@ -218,41 +213,44 @@ it.effect.each([
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const sink = yield* EventSink.EventSinkV2;
         const threadId = ThreadId.make(`thread:${name}`);
-        const watch = (predicate: (event: OrchestrationV2DomainEvent) => boolean) =>
-          orchestrator.streamDomainEvents.pipe(
-            Stream.filter(predicate),
-            Stream.take(1),
-            Stream.runDrain,
-            Effect.forkScoped,
+        // The first matching event on the thread, already stored or still to
+        // come. The live-clock bound only turns a missing event into a failed
+        // assertion; a passing run never waits on it.
+        const awaitEvent = <Type extends OrchestrationV2DomainEvent["type"]>(
+          types: ReadonlyArray<Type>,
+          predicate: (
+            event: Extract<OrchestrationV2DomainEvent, { readonly type: Type }>,
+          ) => boolean,
+        ) =>
+          sink.stream({ threadId }).pipe(
+            Stream.map((stored) => stored.event),
+            Stream.filter(
+              (event): event is Extract<OrchestrationV2DomainEvent, { readonly type: Type }> =>
+                (types as ReadonlyArray<string>).includes(event.type) &&
+                predicate(event as Extract<OrchestrationV2DomainEvent, { readonly type: Type }>),
+            ),
+            Stream.runHead,
+            Effect.timeoutOption("10 seconds"),
+            TestClock.withLive,
+            Effect.map(Option.flatten),
           );
-        // Ends the run's provider turn and waits for the run to settle.
-        const settle = (runId: RunId, runOrdinal: number) =>
+        // startTurn's running turn is ingested on the adapter event fiber.
+        const runningTurn = (turn: ProviderAdapterV2TurnInput) =>
           Effect.gen(function* () {
-            const waiting = yield* watch(
+            const running = yield* awaitEvent(
+              ["provider-turn.updated"],
               (event) =>
-                event.type === "run.updated" &&
-                event.payload.id === runId &&
-                event.payload.status === "waiting",
+                event.payload.runAttemptId === turn.attemptId && event.payload.status === "running",
             );
-            const completed = yield* watch(
-              (event) =>
-                event.type === "run.updated" &&
-                event.payload.id === runId &&
-                event.payload.status === "completed",
-            );
-            // startTurn's running turn is ingested on the adapter event fiber.
-            let turn: OrchestrationV2ProviderTurn | undefined;
-            for (let attempt = 0; attempt < 200 && turn === undefined; attempt++) {
-              const projection = yield* orchestrator.getThreadProjection(threadId);
-              const run = projection.runs.find((candidate) => candidate.id === runId);
-              turn = projection.providerTurns.find(
-                (candidate) =>
-                  candidate.runAttemptId === run?.activeAttemptId && candidate.status === "running",
-              );
-              if (turn === undefined) yield* yieldToRuntime;
+            if (Option.isNone(running)) {
+              return assert.fail(`run ${turn.runId} has no running provider turn`);
             }
-            assert.isDefined(turn, `run ${runId} has no running provider turn`);
-            if (turn === undefined) return;
+            return running.value.payload;
+          });
+        // Ends the run's provider turn and waits for the run to settle.
+        const settle = (input: ProviderAdapterV2TurnInput) =>
+          Effect.gen(function* () {
+            const turn = yield* runningTurn(input);
             yield* Queue.offer(events, {
               type: "provider_turn.updated",
               driver,
@@ -263,38 +261,54 @@ it.effect.each([
               driver,
               providerThreadId: turn.providerThreadId,
               providerTurnId: turn.id,
-              runOrdinal,
+              runOrdinal: input.runOrdinal,
               status: "completed",
               failure: null,
               threadDisposition: "reusable",
             });
-            yield* Fiber.join(waiting);
+            const runReached = (status: "waiting" | "completed") =>
+              awaitEvent(
+                ["run.updated"],
+                (event) => event.payload.id === input.runId && event.payload.status === status,
+              ).pipe(
+                Effect.map((event) =>
+                  assert.isTrue(Option.isSome(event), `run ${input.runId} never ${status}`),
+                ),
+              );
+            yield* runReached("waiting");
             yield* worker.drain();
-            yield* Fiber.join(completed);
+            yield* runReached("completed");
           });
-        // The continuation worker runs on its own fiber, so drain the effect
-        // worker and yield to it until a wake starts. When none does, the
-        // assertions show the delivery reservation left behind.
+        // Waits for the run after the first `startedCount` turns to start, as
+        // the continuation worker or queue promotion does it, then runs its turn
+        // start. Queue promotion can already have started it while `settle`
+        // drained. When none starts, the assertions show the delivery
+        // reservation left behind.
         const nextWake = (
           startedCount: number,
           expected: { readonly taskIds: ReadonlyArray<NodeId> },
         ) =>
           Effect.gen(function* () {
-            for (let attempt = 0; attempt < 200 && started.length === startedCount; attempt++) {
-              yield* worker.drain();
-              if (started.length === startedCount) yield* yieldToRuntime;
-            }
-            if (started.length === startedCount) {
+            const startedRunIds = new Set(started.slice(0, startedCount).map((turn) => turn.runId));
+            // A wake is created starting; a promoted queued run is updated to it.
+            const starting = yield* awaitEvent(
+              ["run.created", "run.updated"],
+              (event) =>
+                event.payload.status === "starting" && !startedRunIds.has(event.payload.id),
+            );
+            if (Option.isNone(starting)) {
               const projection = yield* orchestrator.getThreadProjection(threadId);
               assert.deepEqual(
                 projection.runs[0]?.delegatedCompletion?.delivery?.taskIds,
                 expected.taskIds,
                 "no wake started for the reserved delivery",
               );
-              assert.fail("no wake started for the reserved delivery");
+              return assert.fail("no wake started for the reserved delivery");
             }
-            const wake = started[startedCount]!;
+            yield* worker.drain();
             assert.equal(started.length, startedCount + 1);
+            const wake = started[startedCount]!;
+            assert.equal(wake.runId, starting.value.payload.id);
             for (const taskId of [taskA, taskB]) {
               if (expected.taskIds.includes(taskId)) {
                 assert.include(wake.message.text, String(taskId));
@@ -319,9 +333,6 @@ it.effect.each([
           createdBy: "user",
           creationSource: "web",
         });
-        const running = yield* watch(
-          (event) => event.type === "provider-turn.updated" && event.payload.status === "running",
-        );
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           commandId: CommandId.make("first"),
@@ -334,8 +345,8 @@ it.effect.each([
           creationSource: "web",
         });
         yield* worker.drain();
-        yield* Fiber.join(running);
         const parent = started[0]!;
+        yield* runningTurn(parent);
 
         const steerMessageId = MessageId.make("message:delegated-steer");
         const projection = yield* orchestrator.getThreadProjection(threadId);
@@ -453,11 +464,18 @@ it.effect.each([
           steerMessageId,
         );
 
-        yield* settle(parent.runId, parent.runOrdinal);
+        yield* settle(parent);
         if (rollback) {
           // The settlement offered A's wake; the worker holds it at the gate.
-          const offer = yield* Queue.take(continuationOffers);
-          assert.equal(offer.delegatedCompletion?.messageId, steerMessageId);
+          const offer = yield* Queue.take(continuationOffers).pipe(
+            Effect.timeoutOption("10 seconds"),
+            TestClock.withLive,
+          );
+          assert.isTrue(Option.isSome(offer), "settlement offered no wake");
+          assert.equal(
+            Option.getOrUndefined(offer)?.delegatedCompletion?.messageId,
+            steerMessageId,
+          );
           const settled = yield* orchestrator.getThreadProjection(threadId);
           const threadStart = settled.checkpoints.find(
             (checkpoint) => checkpoint.ordinalWithinScope === 0 && checkpoint.status === "ready",
@@ -495,17 +513,17 @@ it.effect.each([
         if (!resultRead) {
           const wakeA = yield* nextWake(1, { taskIds: [taskA] });
           assert.equal(wakeA.message.messageId, steerMessageId);
-          yield* settle(wakeA.runId, wakeA.runOrdinal);
+          yield* settle(wakeA);
         }
         if (queuedMessage) {
           const queued = yield* nextWake(1, { taskIds: [] });
           assert.equal(queued.message.messageId, queuedMessageId);
-          yield* settle(queued.runId, queued.runOrdinal);
+          yield* settle(queued);
         }
         const wakeB = yield* nextWake(resultRead ? (queuedMessage ? 2 : 1) : 2, {
           taskIds: [taskB],
         });
-        yield* settle(wakeB.runId, wakeB.runOrdinal);
+        yield* settle(wakeB);
 
         const final = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(final.runs[0]?.delegatedCompletion?.delivery, null);
