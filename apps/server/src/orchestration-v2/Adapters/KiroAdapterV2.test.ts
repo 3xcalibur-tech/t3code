@@ -213,11 +213,10 @@ const kiroModelOption = (currentValue: string) => ({
   ],
 });
 /**
- * SYNTHETIC: no recording shows Kiro's effort option. Its shape follows the
- * KiroCrew probe of kiro-cli 2.28.0 (kirodotdev/KiroCrew#17551): a
- * `thought_level` select with id `effortLevel` that Kiro adds to the
- * `session/set_config_option model=…` result once a model with effort runs,
- * starting at that model's default level.
+ * Kiro's effort option as kiro-cli 2.27.0 advertised it to a direct ACP probe
+ * on Claude Opus 5.5: a `thought_level` select with id `effortLevel`, present
+ * only while a model with effort runs and starting at that model's default
+ * level. No replay fixture records it yet.
  */
 const effortOption = (currentValue: string, levels: ReadonlyArray<string>) => ({
   type: "select",
@@ -608,6 +607,56 @@ describe("KiroAdapterV2", () => {
             yield* startTurnOn(ordinal, model, reasoning("high"));
             assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
           }
+        }),
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.effect("waits for Kiro to advertise the model before setting its effort", () =>
+    runKiroScript({
+      scenario: "effort-after-advert",
+      frames: [
+        outbound("initialize"),
+        answer("initialize", KIRO_V3_INITIALIZE),
+        outbound("session/new", { cwd: "<workspace>", mcpServers: "<any>" }),
+        // Kiro 2.27.0 leaves `model` out of `session/new`.
+        answer("session/new", sessionSetup([modeOption, autopilotOption("on")])),
+        // Written before Kiro advertised anything: the result carries neither
+        // the model nor its effort, and an effort write now would be ignored.
+        setConfig("model", "claude-opus-5.5"),
+        configResult([modeOption, autopilotOption("on")]),
+        update({
+          sessionUpdate: "config_option_update",
+          configOptions: [
+            modeOption,
+            kiroModelOption("claude-opus-5.5"),
+            effortOption("medium", CLAUDE_EFFORT_LEVELS),
+            autopilotOption("on"),
+          ],
+        }),
+        setConfig("effortLevel", "high"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          effortOption("high", CLAUDE_EFFORT_LEVELS),
+          autopilotOption("on"),
+        ]),
+        setConfig("autopilot", "off"),
+        configResult([
+          modeOption,
+          kiroModelOption("claude-opus-5.5"),
+          effortOption("high", CLAUDE_EFFORT_LEVELS),
+          autopilotOption("off"),
+        ]),
+        turnPrompt,
+        answer("session/prompt", { stopReason: "end_turn" }),
+        ...closeSession,
+      ],
+      model: "claude-opus-5.5",
+      options: reasoning("high"),
+      drive: ({ events, startTurnOn }) =>
+        Effect.gen(function* () {
+          yield* startTurnOn(1, "claude-opus-5.5", reasoning("high"));
+          assert.equal(terminalStatus(yield* collectTurn(events)), "completed");
         }),
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );

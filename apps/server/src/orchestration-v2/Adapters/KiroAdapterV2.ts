@@ -10,9 +10,11 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpErrors from "effect-acp/errors";
@@ -91,6 +93,10 @@ export interface KiroAdapterV2Options {
   readonly testHooks?: Parameters<typeof makeAcpAdapterV2>[0]["testHooks"];
 }
 
+/** Kiro's `model` option once it advertises one. */
+const findKiroModelOption = (configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>) =>
+  configOptions.find((option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model");
+
 /**
  * Kiro V3 selects models through its `model` session config option, and
  * `session/set_model` does not exist. "default" selects Kiro's own default
@@ -112,9 +118,7 @@ const applyKiroModel = (
   defaultModel: Effect.Effect<string>,
 ) =>
   Effect.gen(function* () {
-    const modelOption = (yield* runtime.getConfigOptions).find(
-      (option) => option.id === KIRO_MODEL_CONFIG_ID || option.category === "model",
-    );
+    const modelOption = findKiroModelOption(yield* runtime.getConfigOptions);
     const current = modelOption?.type === "select" ? modelOption.currentValue : undefined;
     const selected = modelSelection.model.trim();
     const isDefault = selected.length === 0 || selected === KIRO_DEFAULT_MODEL;
@@ -137,27 +141,54 @@ const applyKiroModel = (
   });
 
 /**
+ * Bound on waiting for Kiro to advertise the model T3 just wrote. Kiro 2.27.0
+ * sent it 40-90 ms after the write's result.
+ */
+const KIRO_MODEL_ADVERT_BOUND = "2 seconds";
+
+/**
  * Sets the thread's reasoning effort (the snapshot's `reasoningEffort`
  * select) on Kiro's `effortLevel` option. Kiro advertises that option only
- * while a model with effort runs, and adds it to the result of the `model`
- * write, which the runtime adopts (kiro-cli 2.28 per kirodotdev/KiroCrew#17551;
- * the matching `config_option_update` waits for the next turn), so this runs
- * after the model write. A model change starts Kiro at that model's default,
- * so the level is written again then; the runtime skips a write that matches
- * the current level. A level the model does not offer is not sent: Kiro would
- * accept it and leave the level unchanged. A rejected write leaves Kiro's
- * level in place rather than failing the turn.
+ * while a model with effort runs, starting at that model's default, and
+ * ignores a write sent before it does. The `model` write's result can carry
+ * it (kiro-cli 2.28 per kirodotdev/KiroCrew#17551), but on 2.27.0 a write
+ * sent right after `session/new` usually gets a result without `model` or
+ * `effortLevel`, and both follow in a `config_option_update`. So the level is
+ * written once Kiro advertises the written model; that advert is the one that
+ * says whether the model has effort. A model change starts Kiro at the new
+ * model's default, so the level is written again then; the runtime skips a
+ * write that matches the current level. A level the model does not offer is
+ * not sent: Kiro would accept it and leave the level unchanged. A rejected
+ * write, or no advert within the bound, leaves Kiro's level in place rather
+ * than failing the turn.
  */
 const applyKiroEffort = (
   runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   modelSelection: ModelSelection,
+  appliedModel: string | undefined,
 ) =>
   Effect.gen(function* () {
     const requested = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
     if (requested === undefined) return;
-    const effortOption = (yield* runtime.getConfigOptions).find(
-      (option) => option.id === KIRO_EFFORT_CONFIG_ID,
+    const advertised = yield* runtime.configOptionChanges.pipe(
+      Stream.filter((configOptions) => {
+        const modelOption = findKiroModelOption(configOptions);
+        return (
+          appliedModel === undefined ||
+          (modelOption?.type === "select" && modelOption.currentValue === appliedModel)
+        );
+      }),
+      Stream.runHead,
+      Effect.timeoutOption(KIRO_MODEL_ADVERT_BOUND),
+      Effect.map(Option.flatten),
     );
+    if (Option.isNone(advertised)) {
+      return yield* Effect.logWarning("Kiro did not advertise the model's reasoning effort", {
+        model: appliedModel,
+        value: requested,
+      });
+    }
+    const effortOption = advertised.value.find((option) => option.id === KIRO_EFFORT_CONFIG_ID);
     if (effortOption?.type !== "select" || !selectValues(effortOption).includes(requested)) {
       return;
     }
@@ -176,7 +207,7 @@ const applyKiroModelSelection =
   (defaultModel: Effect.Effect<string>): NonNullable<AcpAdapterV2Flavor["applyModelSelection"]> =>
   ({ runtime, modelSelection }) =>
     applyKiroModel(runtime, modelSelection, defaultModel).pipe(
-      Effect.tap(() => applyKiroEffort(runtime, modelSelection)),
+      Effect.tap((appliedModel) => applyKiroEffort(runtime, modelSelection, appliedModel)),
     );
 
 function selectValues(
