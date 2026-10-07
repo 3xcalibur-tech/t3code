@@ -317,8 +317,17 @@ interface ServerTab {
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
-  /** The last main-frame navigation that aborted, to tell a navigation's download from a page's. */
-  abortedNavigationUrl: string | null;
+  /** Counts main-frame navigation requests, so late events can tell they were superseded. */
+  navigationGeneration: number;
+  /**
+   * The latest main-frame navigation, when it aborted, to tell a navigation's
+   * download from a page's. The timer settles it if no download follows.
+   */
+  abortedNavigation: {
+    readonly url: string;
+    readonly generation: number;
+    readonly timer: ReturnType<typeof setTimeout>;
+  } | null;
   /** The latest queued start, so a stop can find a recording still starting. */
   recordingStart: Promise<Recording> | null;
   /** Serializes captures and recording start/stop. */
@@ -344,6 +353,8 @@ const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
 const IDLE_SWEEP_INTERVAL = "1 minute";
 
 const DOWNLOAD_LIMIT = 20;
+/** How long an aborted navigation waits for the download that usually explains it. */
+const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
 const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
@@ -655,6 +666,7 @@ const make = Effect.gen(function* () {
     if (tabs.get(key) !== tab) return;
     tabs.delete(key);
     tab.closing = true;
+    clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
     const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
@@ -767,7 +779,8 @@ const make = Effect.gen(function* () {
       recording: null,
       recordingStart: null,
       initialNavigation: null,
-      abortedNavigationUrl: null,
+      navigationGeneration: 0,
+      abortedNavigation: null,
       captureLock: Promise.resolve(),
       capturing: 0,
     };
@@ -777,8 +790,11 @@ const make = Effect.gen(function* () {
     await applyRendering(tab, snapshot);
     const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
       request.isNavigationRequest() && request.frame() === page.mainFrame();
+    const navigationGenerations = new WeakMap<object, number>();
     page.on("request", (request) => {
       if (!isMainNavigation(request)) return;
+      navigationGenerations.set(request, ++tab.navigationGeneration);
+      clearAbortedNavigation(tab);
       tab.loading = true;
       report(tab, { _tag: "Loading", url: request.url().slice(0, 2048), title: "" });
     });
@@ -801,9 +817,23 @@ const make = Effect.gen(function* () {
         timestamp: new Date().toISOString(),
       });
       if (!isMainNavigation(request)) return;
+      // A navigation a newer one replaced leaves the status to the newer one.
+      const generation = navigationGenerations.get(request);
+      if (generation !== undefined && generation !== tab.navigationGeneration) return;
       // An aborted navigation is usually a download; its `download` event settles the status.
       if (errorText.includes("ERR_ABORTED")) {
-        tab.abortedNavigationUrl = request.url();
+        const url = request.url();
+        const navigationGeneration = tab.navigationGeneration;
+        clearAbortedNavigation(tab);
+        tab.abortedNavigation = {
+          url,
+          generation: navigationGeneration,
+          timer: setTimeout(() => {
+            if (tab.abortedNavigation?.generation !== navigationGeneration) return;
+            tab.abortedNavigation = null;
+            if (!tab.closing) settleAbortedNavigation(tab, navigationGeneration, url, undefined);
+          }, ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS),
+        };
         return;
       }
       tab.loading = false;
@@ -872,18 +902,24 @@ const make = Effect.gen(function* () {
       NodeCrypto.createHash("sha256").update(tabKey(tab.threadId, tab.tabId)).digest("hex"),
     );
 
+  const clearAbortedNavigation = (tab: ServerTab) => {
+    if (tab.abortedNavigation !== null) clearTimeout(tab.abortedNavigation.timer);
+    tab.abortedNavigation = null;
+  };
+
   /**
-   * Settles the status of a navigation that became a download. A tab opened
-   * straight to the file has no page to show, so it reports the file with its
-   * download; a page that linked to it keeps showing itself.
+   * Settles the status of a navigation that aborted, usually into a download.
+   * A tab opened straight to the file has no page to show, so it reports the
+   * file with its download; a page that linked to it keeps showing itself.
    */
-  const settleDownloadNavigation = (
+  const settleAbortedNavigation = (
     tab: ServerTab,
+    generation: number,
     url: string,
     offered: { readonly id: string; readonly fileName: string } | undefined,
   ) => {
-    // A newer aborted navigation settles the status itself.
-    if (tab.abortedNavigationUrl !== null) return;
+    // A newer navigation owns the status.
+    if (tab.navigationGeneration !== generation) return;
     tab.loading = false;
     if (tab.page.url() !== "about:blank") {
       void reportLoaded(tab);
@@ -902,10 +938,11 @@ const make = Effect.gen(function* () {
   const saveDownload = async (tab: ServerTab, download: Download) => {
     const id = NodeCrypto.randomUUID();
     const path = NodePath.join(downloadDir(tab), id);
-    const navigation = download.url() === tab.abortedNavigationUrl;
-    if (navigation) tab.abortedNavigationUrl = null;
-    // A tab whose own address was the file shows it in place; see settleDownloadNavigation.
-    const shownInTab = navigation && tab.page.url() === "about:blank";
+    const navigation =
+      download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
+    if (navigation !== null) clearAbortedNavigation(tab);
+    // A tab whose own address was the file shows it in place; see settleAbortedNavigation.
+    const shownInTab = navigation !== null && tab.page.url() === "about:blank";
     let offered: { readonly id: string; readonly fileName: string } | undefined;
     try {
       if (await download.failure()) return;
@@ -942,7 +979,9 @@ const make = Effect.gen(function* () {
       await NodeFSP.rm(path, { force: true }).catch(constVoid);
       runFork(Effect.logWarning("server preview download failed", { cause }));
     } finally {
-      if (navigation && !tab.closing) settleDownloadNavigation(tab, download.url(), offered);
+      if (navigation !== null && !tab.closing) {
+        settleAbortedNavigation(tab, navigation, download.url(), offered);
+      }
     }
   };
 
