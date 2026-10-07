@@ -297,6 +297,7 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
     applyModelSelection: applyKiroModelSelection(
       options.defaultModel ?? Effect.succeed(KIRO_FALLBACK_DEFAULT_MODEL),
     ),
+    ownedModelOptionIds: ["reasoningEffort"],
     // Kiro's own review step: with Autopilot off (Supervised) Kiro asks the
     // user to accept a turn's changes before it ends; on (Full access) it does
     // not. Its per-tool prompts come either way and T3's runtime policy

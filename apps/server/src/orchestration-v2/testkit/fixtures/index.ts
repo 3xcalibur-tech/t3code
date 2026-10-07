@@ -37,6 +37,8 @@ import { assertClaudeMcpToolPresentationOutput } from "./claude_mcp_tool_present
 import { claudeResultIsErrorInput } from "./claude_result_is_error/input.ts";
 import { assertClaudeResultIsErrorOutput } from "./claude_result_is_error/output.ts";
 import { grokAutoBlockedCommandInput } from "./grok_auto_blocked_command/input.ts";
+import { KIRO_EFFORT_LEVEL, KIRO_EFFORT_MODEL, kiroEffortInput } from "./kiro_effort/input.ts";
+import { assertKiroEffortOutput } from "./kiro_effort/output.ts";
 import { kiroModelSwitchInput } from "./kiro_model_switch/input.ts";
 import { assertKiroModelSwitchOutput } from "./kiro_model_switch/output.ts";
 import {
@@ -521,6 +523,22 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         transcriptFile: new URL("./kiro_model_switch/kiro_transcript.ndjson", import.meta.url),
         modelSelection: KIRO_MODEL_SELECTION,
         assertOutput: assertKiroModelSwitchOutput,
+      },
+    ],
+  },
+  {
+    name: "kiro_effort",
+    buildInput: kiroEffortInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("kiro"),
+        transcriptFile: new URL("./kiro_effort/kiro_transcript.ndjson", import.meta.url),
+        modelSelection: {
+          ...KIRO_MODEL_SELECTION,
+          model: KIRO_EFFORT_MODEL,
+          options: [{ id: "reasoningEffort", value: KIRO_EFFORT_LEVEL }],
+        },
+        assertOutput: assertKiroEffortOutput,
       },
     ],
   },
