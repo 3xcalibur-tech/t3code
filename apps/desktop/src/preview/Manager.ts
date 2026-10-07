@@ -1265,7 +1265,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const url = wc.getURL();
     const title = wc.getTitle();
     if (url === "" || url === "about:blank") return { kind: "Idle" };
-    if (wc.isLoading()) return { kind: "Loading", url, title };
+    // Main frame only. `isLoading()` covers the whole frame tree, so a
+    // cross-origin iframe that loads after the page can leave it true with no
+    // later event to clear it, and the tab's loading bar never finishes.
+    if (wc.isLoadingMainFrame()) return { kind: "Loading", url, title };
     return { kind: "Success", url, title };
   };
 

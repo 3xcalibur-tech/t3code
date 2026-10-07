@@ -375,7 +375,7 @@ const makeTestPreviewWebContents = (
     getType: () => "webview",
     getURL: () => "https://example.com",
     getTitle: () => "Example",
-    isLoading: () => false,
+    isLoadingMainFrame: () => false,
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
     setAudioMuted: vi.fn(),
@@ -480,7 +480,7 @@ const makeFaviconWebContents = (options?: {
     getType: () => "webview",
     getURL: () => currentUrl,
     getTitle: () => "Preview",
-    isLoading: () => loading,
+    isLoadingMainFrame: () => loading,
     isDevToolsOpened: () => false,
     getZoomFactor: () => 1,
     setZoomFactor: vi.fn(),
@@ -939,7 +939,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "about:blank",
           getTitle: () => "",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -1032,7 +1032,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "http://localhost:3200/",
           getTitle: () => "Preview",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isDevToolsOpened: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -1535,7 +1535,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => {
             if (!zoomReadable) throw new Error("zoom unavailable");
             return effectiveZoom;
@@ -1605,7 +1605,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: replacementSetZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1646,7 +1646,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1693,7 +1693,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor,
           setAudioMuted: vi.fn(),
@@ -1749,7 +1749,7 @@ describe("PreviewManager", () => {
               getType: () => "webview",
               getURL: () => "https://example.com",
               getTitle: () => "Example",
-              isLoading: () => false,
+              isLoadingMainFrame: () => false,
               getZoomFactor: () => 1,
               setZoomFactor: vi.fn(),
               setAudioMuted: vi.fn(),
@@ -1844,7 +1844,7 @@ describe("PreviewManager", () => {
       getType: () => "webview",
       getURL: () => "http://localhost:5173/README.md",
       getTitle: () => "README.md",
-      isLoading: () => true,
+      isLoadingMainFrame: () => true,
       getZoomFactor: () => 1,
       setZoomFactor: vi.fn(),
       setAudioMuted: vi.fn(),
@@ -1969,7 +1969,7 @@ describe("PreviewManager", () => {
         getType: () => "webview",
         getURL: () => "https://example.com",
         getTitle: () => "Example",
-        isLoading: () => false,
+        isLoadingMainFrame: () => false,
         getZoomFactor: () => 1,
         setZoomFactor: vi.fn(),
         setAudioMuted,
@@ -2312,7 +2312,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => url,
           getTitle: () => "localhost:5733",
-          isLoading: () => loading,
+          isLoadingMainFrame: () => loading,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -2393,6 +2393,28 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("ignores a late cross-origin iframe load once the page has loaded", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        // The frame tree is still loading the iframe; the main frame is done.
+        Object.assign(preview.webContents, { isLoading: () => true });
+        fromId.mockReturnValue(preview.webContents);
+        const states: PreviewManager.PreviewTabState[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => void states.push(state)),
+        );
+        yield* manager.createTab("tab_iframe");
+        yield* manager.registerWebview("tab_iframe", 42);
+
+        preview.listeners.get("did-start-loading")?.();
+        preview.listeners.get("did-stop-loading")?.();
+        yield* settle(() => states.length > 2);
+        expect(states.at(-1)?.navStatus.kind).toBe("Success");
+      }),
+    ),
+  );
+
   effectIt.effect("captures a PNG screenshot into browser artifacts", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -2405,7 +2427,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com:8443/path?query=value",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -2973,7 +2995,7 @@ describe("PreviewManager", () => {
             getType: () => "webview",
             getURL: () => `https://example.com/${id}`,
             getTitle: () => `Example ${id}`,
-            isLoading: () => false,
+            isLoadingMainFrame: () => false,
             getZoomFactor: () => 1,
             setZoomFactor: vi.fn(),
             setAudioMuted: vi.fn(),
@@ -3435,7 +3457,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
@@ -3934,7 +3956,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4080,7 +4102,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4159,7 +4181,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           isFocused: () => true,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
@@ -4244,7 +4266,7 @@ describe("PreviewManager", () => {
           getType: () => "webview",
           getURL: () => "https://example.com",
           getTitle: () => "Example",
-          isLoading: () => false,
+          isLoadingMainFrame: () => false,
           getZoomFactor: () => 1,
           setZoomFactor: vi.fn(),
           setAudioMuted: vi.fn(),
