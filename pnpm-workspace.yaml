@@ -18,6 +18,7 @@ allowBuilds:
   msgpackr-extract: true
   msw: false
   node-pty: true
+  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.2.tgz": true
   sharp: true
   utf-8-validate: false
   workerd: false
@@ -279,11 +280,8 @@ patchedDependencies:
   dbus-next@0.10.2: patches/dbus-next@0.10.2.patch
   effect@4.0.1: patches/effect@4.0.1.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
-  # Link http(s) URLs with a port or a single-label host. md4c otherwise requires a dotted host and stops at ':'.
-  react-native-nitro-markdown@0.5.8: patches/react-native-nitro-markdown@0.5.8.patch
   react-native-gesture-handler@3.2.1: patches/react-native-gesture-handler@3.2.1.patch
   react-native-keyboard-controller@1.22.6: patches/react-native-keyboard-controller@1.22.6.patch
-  react-native-nitro-modules@0.35.9: patches/react-native-nitro-modules@0.35.9.patch
 
 peerDependencyRules:
   allowAny:
