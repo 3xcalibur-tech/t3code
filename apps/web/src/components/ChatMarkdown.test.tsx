@@ -1035,6 +1035,30 @@ describe("ChatMarkdown Windows file links", () => {
   });
 });
 
+describe("ChatMarkdown heading ids", () => {
+  it("never gives two headings the same id, even when a suffix matches another heading", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        parseRawHtml
+        text={
+          '## Setup\n\n## Setup\n\n## Setup-1\n\n<h2 id="install-1">Pinned</h2>\n\n## Install\n\n## Install'
+        }
+      />,
+    );
+    const ids = [...html.matchAll(/<h2 id="([^"]+)"/g)].map((match) => match[1]);
+    expect(ids).toEqual([
+      "user-content-setup",
+      "user-content-setup-1",
+      "user-content-setup-1-1",
+      "user-content-install-1",
+      "user-content-install",
+      "user-content-install-2",
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("ChatMarkdown in-page links", () => {
   it.each([true, false])(
     "scrolls a table-of-contents link to its heading without touching the URL (parseRawHtml=%s)",

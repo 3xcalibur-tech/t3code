@@ -588,14 +588,28 @@ function githubHeadingSlug(text: string): string {
  */
 function rehypeHeadingIds() {
   return (tree: MarkdownImageHastNode) => {
-    const seen = new Map<string, number>();
+    // Every id already in the document, authored or assigned, so a suffix never
+    // lands on one that exists: `Setup`, `Setup`, `Setup-1` get three distinct ids.
+    const taken = new Set<string>();
+    const collect = (node: MarkdownImageHastNode) => {
+      const id = node.properties?.id;
+      if (typeof id === "string") taken.add(id);
+      node.children?.forEach(collect);
+    };
+    collect(tree);
+    const nextSuffix = new Map<string, number>();
     const visit = (node: MarkdownImageHastNode) => {
       if (node.type === "element" && node.tagName && /^h[1-6]$/.test(node.tagName)) {
         const slug = githubHeadingSlug(hastPlainTextDeep(node));
         if (node.properties?.id === undefined && slug) {
-          const count = seen.get(slug) ?? 0;
-          seen.set(slug, count + 1);
-          const id = `${SANITIZED_FRAGMENT_PREFIX}${count === 0 ? slug : `${slug}-${count}`}`;
+          let count = nextSuffix.get(slug) ?? 0;
+          let id = `${SANITIZED_FRAGMENT_PREFIX}${slug}`;
+          while (taken.has(id)) {
+            count += 1;
+            id = `${SANITIZED_FRAGMENT_PREFIX}${slug}-${count}`;
+          }
+          nextSuffix.set(slug, count);
+          taken.add(id);
           node.properties = { ...node.properties, id };
         }
         return;
