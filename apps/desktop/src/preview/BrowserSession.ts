@@ -9,6 +9,8 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
+
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 /**
  * Incognito partitions deliberately omit the `persist:` prefix, which is what
@@ -42,6 +44,41 @@ const ALLOWED_PREVIEW_PERMISSIONS: ReadonlySet<string> = new Set([
   // fingerprint (and font file bytes via FontData.blob()). The app's own font
   // picker runs in the main window session, which is unaffected by this list.
 ]);
+
+/**
+ * Schemes a preview page may never hand to the OS, even with the user's
+ * consent: they read local files, run script, or are web pages that belong in
+ * the preview itself.
+ */
+const NEVER_EXTERNAL_PROTOCOLS: ReadonlySet<string> = new Set([
+  "about:",
+  "blob:",
+  "chrome:",
+  "data:",
+  "devtools:",
+  "file:",
+  "filesystem:",
+  "http:",
+  "https:",
+  "javascript:",
+  "view-source:",
+]);
+
+/**
+ * The URL to offer the user when a preview page navigates to a custom scheme
+ * such as `slack://` or `zoom://`, or `null` when it must stay denied.
+ */
+export const externalProtocolPromptUrl = (rawUrl: string | undefined): string | null => {
+  if (!rawUrl) return null;
+  try {
+    const url = new URL(rawUrl);
+    return NEVER_EXTERNAL_PROTOCOLS.has(url.protocol) ? null : url.href;
+  } catch {
+    return null;
+  }
+};
+
+const MAX_PROMPT_URL_LENGTH = 300;
 
 export class BrowserSessionPartitionDerivationError extends Schema.TaggedError<BrowserSessionPartitionDerivationError>()(
   "BrowserSessionPartitionDerivationError",
@@ -166,6 +203,50 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
+  const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  // One prompt at a time, so a page cannot stack dialogs by looping a deep link.
+  let externalPromptOpen = false;
+  /**
+   * Electron grants an external-protocol navigation through the `openExternal`
+   * permission and then launches the OS handler itself. Ask first: previews run
+   * untrusted pages, and a silent grant would let any of them launch apps.
+   */
+  const confirmOpenExternal = (
+    rawUrl: string | undefined,
+    callback: (granted: boolean) => void,
+  ): void => {
+    const url = externalProtocolPromptUrl(rawUrl);
+    if (url === null || externalPromptOpen) {
+      callback(false);
+      return;
+    }
+    externalPromptOpen = true;
+    const settle = (granted: boolean) =>
+      Effect.sync(() => {
+        externalPromptOpen = false;
+        callback(granted);
+      });
+    const shownUrl =
+      url.length > MAX_PROMPT_URL_LENGTH ? `${url.slice(0, MAX_PROMPT_URL_LENGTH)}…` : url;
+    runFork(
+      electronDialog
+        .showMessageBox({
+          type: "question",
+          buttons: ["Open", "Cancel"],
+          defaultId: 0,
+          cancelId: 1,
+          message: `Open this ${new URL(url).protocol.slice(0, -1)} link?`,
+          detail: `A page in the browser wants to open another application:\n\n${shownUrl}`,
+        })
+        .pipe(
+          Effect.map(({ response }) => response === 0),
+          Effect.orElseSucceed(() => false),
+          Effect.flatMap(settle),
+          Effect.onInterrupt(() => settle(false)),
+        ),
+    );
+  };
   const sessionsRef = yield* SynchronizedRef.make<ReadonlyMap<string, Session>>(new Map());
 
   const getPartition = Effect.fn("BrowserSession.getPartition")(function* (
@@ -207,9 +288,18 @@ export const make = Effect.gen(function* BrowserSessionMake() {
           // the challenge every few seconds, so logins behind it never complete
           // (#5002). Re-setting the unchanged native string is harmless, so it
           // is the rewritten string itself that trips the check.
-          browserSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-            callback(ALLOWED_PREVIEW_PERMISSIONS.has(permission));
-          });
+          browserSession.setPermissionRequestHandler(
+            (_webContents, permission, callback, details) => {
+              if (permission === "openExternal") {
+                confirmOpenExternal(
+                  "externalURL" in details ? details.externalURL : undefined,
+                  callback,
+                );
+                return;
+              }
+              callback(ALLOWED_PREVIEW_PERMISSIONS.has(permission));
+            },
+          );
           browserSession.setPermissionCheckHandler((_webContents, permission) =>
             ALLOWED_PREVIEW_PERMISSIONS.has(permission),
           );

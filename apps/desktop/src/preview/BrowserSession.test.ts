@@ -27,9 +27,22 @@ vi.mock("electron", () => ({
   },
 }));
 
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 
-const layer = BrowserSession.layer.pipe(Layer.provide(NodeServices.layer));
+const { showMessageBox } = vi.hoisted(() => ({
+  showMessageBox: vi.fn<(options: Electron.MessageBoxOptions) => number>(() => 1),
+}));
+const layerDialog = Layer.succeed(ElectronDialog.ElectronDialog, {
+  pickFolder: () => Effect.die("unused"),
+  pickFiles: () => Effect.die("unused"),
+  showMessageBox: (options) =>
+    Effect.sync(() => ({ response: showMessageBox(options), checkboxChecked: false })),
+  showErrorBox: () => Effect.void,
+});
+const layer = BrowserSession.layer.pipe(
+  Layer.provide(Layer.merge(NodeServices.layer, layerDialog)),
+);
 
 describe("BrowserSession", () => {
   beforeEach(() => {
@@ -190,6 +203,38 @@ describe("BrowserSession", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("opens custom-scheme links externally only after the user confirms", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+      const requestHandler =
+        sessions.get(partition)?.setPermissionRequestHandler.mock.calls[0]?.[0];
+      assert.isFunction(requestHandler);
+
+      const request = (externalURL: string) =>
+        Effect.callback<boolean>((resume) => {
+          requestHandler(
+            null,
+            "openExternal",
+            (granted: boolean) => resume(Effect.succeed(granted)),
+            { externalURL },
+          );
+        });
+
+      showMessageBox.mockReset();
+      showMessageBox.mockReturnValueOnce(0).mockReturnValueOnce(1);
+      assert.isTrue(yield* request("slack://open?team=T1"));
+      assert.isFalse(yield* request("zoommtg://zoom.us/join"));
+      assert.strictEqual(showMessageBox.mock.calls.length, 2);
+
+      for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"]) {
+        assert.isFalse(yield* request(url), `${url} must never open externally`);
+      }
+      assert.strictEqual(showMessageBox.mock.calls.length, 2);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("preserves partition scope and the platform failure chain", () => {
     const nativeCause = new Error("native digest failed");
     const platformCause = PlatformError.systemError({
@@ -219,7 +264,11 @@ describe("BrowserSession", () => {
         "Failed to derive a desktop preview browser partition for scope environment-a.",
       );
       assert.notInclude(error.message, nativeCause.message);
-    }).pipe(Effect.provide(BrowserSession.layer.pipe(Layer.provide(layerFailingCrypto))));
+    }).pipe(
+      Effect.provide(
+        BrowserSession.layer.pipe(Layer.provide(Layer.merge(layerFailingCrypto, layerDialog))),
+      ),
+    );
   });
 
   it.effect("preserves session scope, partition, and the Electron failure", () =>
