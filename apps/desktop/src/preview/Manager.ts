@@ -485,12 +485,19 @@ const POPUP_WINDOW_OPTIONS = {
  *
  * `target="_blank"` links arrive as a tab disposition and keep loading in the
  * preview tab, which is what people expect from a link inside a preview.
+ *
+ * `"deny"` is for a blank window (`""` or `about:blank`). It cannot get a real
+ * window (see `POPUP_PROTOCOLS`), and loading it into the preview tab would
+ * replace the opener with an empty page. Denying makes `window.open()` return
+ * `null`, which SDKs such as MSAL treat as a blocked popup and fall back from.
  */
 export const previewWindowOpenAction = (details: {
   readonly url: string;
   readonly disposition: Electron.HandlerDetails["disposition"];
-}): "popup" | "navigate" =>
-  details.disposition === "new-window" && isPopupUrl(details.url) ? "popup" : "navigate";
+}): "popup" | "navigate" | "deny" => {
+  if (details.url === "" || details.url === "about:blank") return "deny";
+  return details.disposition === "new-window" && isPopupUrl(details.url) ? "popup" : "navigate";
+};
 
 export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   input.type === "keyDown" &&
@@ -1607,9 +1614,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         wc.ipc.on(MOUSE_NAVIGATE_CHANNEL, mouseNavigate);
         wc.setWindowOpenHandler((details) => {
-          if (previewWindowOpenAction(details) === "popup") {
+          const action = previewWindowOpenAction(details);
+          if (action === "popup") {
             return { action: "allow", overrideBrowserWindowOptions: POPUP_WINDOW_OPTIONS };
           }
+          if (action === "deny") return { action: "deny" };
           runFork(
             attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
               wc.loadURL(details.url),
