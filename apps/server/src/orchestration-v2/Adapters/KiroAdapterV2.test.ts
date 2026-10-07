@@ -32,6 +32,7 @@ import { ChildProcessSpawner } from "effect/process";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import * as ServerConfig from "../../config.ts";
+import type * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import {
   type ProviderAdapterV2Error,
@@ -227,8 +228,10 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
   /** Holds the script's inbound frames at labels the test releases. */
   readonly replayGate?: ProviderReplayGate;
   readonly testHooks?: Parameters<typeof makeKiroAdapterV2>[0]["testHooks"];
-  /** Runs as T3 sends `session/cancel`. */
-  readonly onCancel?: Effect.Effect<void>;
+  /** Wraps the runtime's `session/cancel` send. */
+  readonly wrapCancel?: (
+    send: AcpSessionRuntime.AcpSessionRuntime["Service"]["cancel"],
+  ) => AcpSessionRuntime.AcpSessionRuntime["Service"]["cancel"];
   readonly drive: (session: {
     readonly events: Stream.Stream<ProviderAdapterV2Event, ProviderAdapterV2Error>;
     readonly startTurn: Effect.Effect<void, ProviderAdapterV2Error>;
@@ -287,9 +290,9 @@ const runKiroScript = Effect.fn("runKiroScript")(function* (input: {
         ...(input.replayGate === undefined ? {} : { replayGate: input.replayGate }),
       })(runtimeInput).pipe(
         Effect.map((runtime) =>
-          input.onCancel === undefined
+          input.wrapCancel === undefined
             ? runtime
-            : { ...runtime, cancel: Effect.andThen(input.onCancel, runtime.cancel) },
+            : { ...runtime, cancel: input.wrapCancel(runtime.cancel) },
         ),
       ),
     ...(input.testHooks === undefined ? {} : { testHooks: input.testHooks }),
@@ -536,16 +539,22 @@ describe("KiroAdapterV2", () => {
 });
 
 describe("KiroAdapterV2 early Stop", () => {
-  // Kiro CLI 2.27.1 drops a `session/cancel` that arrives 0-0.5 s after
-  // `session/prompt` and runs the turn to completion (reported by TinBane).
-  // T3 holds Stop's cancel until Kiro's `turn_start` marker for the prompt.
-  // Replay gates hold Kiro's frames until Stop is holding; a gate's label
-  // being reached means every frame before it was handled.
+  // Kiro CLI 2.27.1 dropped a `session/cancel` sent 0-0.5 s after
+  // `session/prompt` and ran the turn to completion (reported by TinBane), so
+  // T3 holds Stop's cancel until Kiro shows it started the prompt, or for at
+  // most 2 s. Replay gates hold Kiro's frames until Stop is holding; a gate's
+  // label being reached means every frame before it was handled. The test
+  // clock moves only where a test adjusts it, so the 2 s bound releases a
+  // cancel nowhere else.
   const kiroInfo = (label: string, kiro: Record<string, unknown>): Frame => ({
     ...update({ sessionUpdate: "session_info_update", _meta: { kiro } }),
     label,
   });
   // Shapes recorded from Kiro 2.27 (fixtures/queued_turn/kiro_transcript.ndjson).
+  const messageIdEcho = kiroInfo("message-id", {
+    userMessageId: "message-2",
+    kind: "user_message_id_assigned",
+  });
   const turnStart = kiroInfo("turn-start", {
     turnStart: true,
     kind: "turn_start",
@@ -556,34 +565,46 @@ describe("KiroAdapterV2 early Stop", () => {
     label: "session/cancel",
     frame: { kind: "notification", method: "session/cancel", params: { sessionId: SESSION_ID } },
   };
+  const cancelled = answer("session/prompt", { stopReason: "cancelled" });
   const runningProviderTurnId = (event: ProviderAdapterV2Event) =>
     event.type === "provider_turn.updated" && event.providerTurn.status === "running"
       ? event.providerTurn.id
       : undefined;
 
   /**
-   * Presses Stop as soon as the turn runs, then lets Kiro's frames through one
-   * gate at a time once Stop holds its cancel. No cancel may go out before the
-   * last gate's frame.
+   * Runs a Kiro turn and presses Stop as soon as it runs. Once Stop holds its
+   * cancel, `drive` gets the replay gate, a receipt for the cancel T3 sends,
+   * and Stop's exit.
    */
-  const stopBeforeKiroStarts = (input: {
+  const earlyStop = (input: {
     readonly frames: ReadonlyArray<Frame>;
     readonly gates: ReadonlyArray<string>;
-    readonly expectCancel: boolean;
+    readonly drive: (stop: {
+      readonly replayGate: ProviderReplayGate;
+      readonly cancelSent: Deferred.Deferred<void>;
+      /** Completed once the cancel was written, right before Stop's acknowledgement wait. */
+      readonly cancelWritten: Deferred.Deferred<void>;
+      readonly stopFiber: Fiber.Fiber<Exit.Exit<void, ProviderAdapterV2Error>>;
+    }) => Effect.Effect<void>;
   }) =>
     Effect.gen(function* () {
       const replayGate = makeProviderReplayGate(input.gates);
       const cancelHeld = yield* Deferred.make<void>();
-      let cancelSent = false;
+      const cancelSent = yield* Deferred.make<void>();
+      const cancelWritten = yield* Deferred.make<void>();
       yield* runKiroScript({
         scenario: "early-stop",
         replayGate,
         testHooks: {
           onCancelHeld: () => Deferred.succeed(cancelHeld, undefined).pipe(Effect.asVoid),
         },
-        onCancel: Effect.sync(() => {
-          cancelSent = true;
-        }),
+        // `cancelSent` marks the decision to cancel, `cancelWritten` the write.
+        wrapCancel: (send) =>
+          Deferred.succeed(cancelSent, undefined).pipe(
+            Effect.andThen(send),
+            Effect.andThen(Deferred.succeed(cancelWritten, undefined)),
+            Effect.asVoid,
+          ),
         frames: [
           ...openSessionFrames({
             initialize: KIRO_V3_INITIALIZE,
@@ -607,28 +628,53 @@ describe("KiroAdapterV2 early Stop", () => {
               ),
             ).pipe(Effect.forkChild);
             yield* startTurn;
-            const stop = yield* interrupt(yield* Deferred.await(running)).pipe(Effect.forkChild);
+            const stop = yield* interrupt(yield* Deferred.await(running)).pipe(
+              Effect.exit,
+              Effect.forkChild,
+            );
             yield* Deferred.await(cancelHeld);
-            for (const [index, label] of input.gates.entries()) {
-              replayGate.release(label);
-              const next = input.gates[index + 1];
-              if (next === undefined) continue;
-              yield* Effect.promise(() => replayGate.waitForReached(next));
-              assert.isFalse(cancelSent, `Stop must still hold its cancel after ${label}`);
-            }
-            yield* Fiber.join(stop);
-            assert.equal(cancelSent, input.expectCancel);
+            yield* input.drive({ replayGate, cancelSent, cancelWritten, stopFiber: stop });
+            // Stop decides the run's outcome.
             assert.equal(terminalStatus(yield* Fiber.join(turn)), "interrupted");
           }),
       });
     }).pipe(Effect.provide(testLayer), Effect.scoped);
 
+  /**
+   * Lets Kiro's frames through one gate at a time. No cancel may go out
+   * before the last gate's frame, and Stop must succeed.
+   */
+  const releaseInOrder = (input: {
+    readonly frames: ReadonlyArray<Frame>;
+    readonly gates: ReadonlyArray<string>;
+    readonly expectCancel: boolean;
+  }) =>
+    earlyStop({
+      frames: input.frames,
+      gates: input.gates,
+      drive: ({ replayGate, cancelSent, stopFiber }) =>
+        Effect.gen(function* () {
+          for (const [index, label] of input.gates.entries()) {
+            replayGate.release(label);
+            const next = input.gates[index + 1];
+            if (next === undefined) continue;
+            yield* Effect.promise(() => replayGate.waitForReached(next));
+            assert.isFalse(
+              yield* Deferred.isDone(cancelSent),
+              `Stop must still hold its cancel after ${label}`,
+            );
+          }
+          assert.isTrue(Exit.isSuccess(yield* Fiber.join(stopFiber)));
+          assert.equal(yield* Deferred.isDone(cancelSent), input.expectCancel);
+        }),
+    });
+
   it.effect("holds Stop past Kiro's message-id echo until its turn_start", () =>
-    stopBeforeKiroStarts({
+    releaseInOrder({
       gates: ["message-id", "turn-start"],
       expectCancel: true,
       frames: [
-        kiroInfo("message-id", { userMessageId: "message-2", kind: "user_message_id_assigned" }),
+        messageIdEcho,
         kiroInfo("focus", {
           focus: { status: "in_progress" },
           kind: "focus_update",
@@ -636,13 +682,13 @@ describe("KiroAdapterV2 early Stop", () => {
         }),
         turnStart,
         cancel,
-        answer("session/prompt", { stopReason: "cancelled" }),
+        cancelled,
       ],
     }),
   );
 
   it.effect("does not take the previous prompt's late context usage as the start", () =>
-    stopBeforeKiroStarts({
+    releaseInOrder({
       // Kiro reports the finished prompt's context usage after answering it,
       // so it can arrive once the next `session/prompt` went out.
       gates: ["previous-context-usage", "turn-start"],
@@ -655,62 +701,78 @@ describe("KiroAdapterV2 early Stop", () => {
         }),
         turnStart,
         cancel,
-        answer("session/prompt", { stopReason: "cancelled" }),
+        cancelled,
       ],
     }),
   );
 
-  it.effect("fails a Stop Kiro never acknowledges within one 10 s budget", () =>
-    Effect.gen(function* () {
-      const cancelHeld = yield* Deferred.make<void>();
-      const cancelSent = yield* Deferred.make<void>();
-      yield* runKiroScript({
-        scenario: "early-stop-timeout",
-        testHooks: {
-          onCancelHeld: () => Deferred.succeed(cancelHeld, undefined).pipe(Effect.asVoid),
+  it.effect("cancels on Kiro's first reply text when it sends no turn_start", () =>
+    releaseInOrder({
+      gates: ["message-id", "reply"],
+      expectCancel: true,
+      frames: [
+        messageIdEcho,
+        {
+          ...update({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "On it" },
+          }),
+          label: "reply",
         },
-        onCancel: Deferred.succeed(cancelSent, undefined).pipe(Effect.asVoid),
-        // Kiro never starts the prompt and never answers it.
-        frames: [
-          ...openSessionFrames({
-            initialize: KIRO_V3_INITIALIZE,
-            configOptions: [modeOption, autopilotOption("on")],
-          }),
-          turnPrompt,
-          cancel,
-          ...closeSession,
-        ],
-        drive: ({ events, startTurn, interrupt }) =>
-          Effect.gen(function* () {
-            const running = yield* Deferred.make<ProviderTurnId>();
-            yield* events.pipe(
-              Stream.tap((event) => {
-                const providerTurnId = runningProviderTurnId(event);
-                return providerTurnId === undefined
-                  ? Effect.void
-                  : Deferred.succeed(running, providerTurnId);
-              }),
-              Stream.runDrain,
-              Effect.forkChild,
-            );
-            yield* startTurn;
-            const stop = yield* interrupt(yield* Deferred.await(running)).pipe(
-              Effect.exit,
-              Effect.forkChild,
-            );
-            yield* Deferred.await(cancelHeld);
-            // The hold uses up the whole budget, so the cancel goes out late
-            // and Stop fails right after it instead of waiting another 10 s.
-            yield* TestClock.adjust("10 seconds");
-            yield* Deferred.await(cancelSent);
-            assert.isTrue(Exit.isFailure(yield* Fiber.join(stop)));
-          }),
-      });
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+        cancel,
+        cancelled,
+      ],
+    }),
+  );
+
+  it.effect("cancels 2 s after the prompt when Kiro shows nothing but the echo", () =>
+    earlyStop({
+      gates: ["message-id", "focus"],
+      frames: [
+        messageIdEcho,
+        kiroInfo("focus", {
+          focus: { status: "in_progress" },
+          kind: "focus_update",
+          status: "in_progress",
+        }),
+        cancel,
+        cancelled,
+      ],
+      drive: ({ replayGate, cancelSent, stopFiber }) =>
+        Effect.gen(function* () {
+          replayGate.release("message-id");
+          yield* Effect.promise(() => replayGate.waitForReached("focus"));
+          yield* TestClock.adjust("1999 millis");
+          assert.isFalse(yield* Deferred.isDone(cancelSent), "the echo must not release Stop");
+          yield* TestClock.adjust("1 millis");
+          yield* Deferred.await(cancelSent);
+          // Kiro acknowledges, and Stop still has its own time to see it.
+          replayGate.release("focus");
+          assert.isTrue(Exit.isSuccess(yield* Fiber.join(stopFiber)));
+        }),
+    }),
+  );
+
+  it.effect("fails a Stop Kiro never acknowledges after the 10 s wait", () =>
+    earlyStop({
+      gates: [],
+      // Kiro never starts the prompt and never answers it.
+      frames: [messageIdEcho, cancel],
+      drive: ({ cancelWritten, stopFiber }) =>
+        Effect.gen(function* () {
+          yield* TestClock.adjust("2 seconds");
+          yield* Deferred.await(cancelWritten);
+          // The acknowledgement wait gets its full 10 s after the cancel.
+          yield* TestClock.adjust("9999 millis");
+          assert.isUndefined(stopFiber.pollUnsafe(), "Stop must still wait for Kiro's answer");
+          yield* TestClock.adjust("1 millis");
+          assert.isTrue(Exit.isFailure(yield* Fiber.join(stopFiber)));
+        }),
+    }),
   );
 
   it.effect("sends no cancel when Kiro finishes the prompt before starting it", () =>
-    stopBeforeKiroStarts({
+    releaseInOrder({
       gates: ["session/prompt.result"],
       expectCancel: false,
       frames: [answer("session/prompt", { stopReason: "end_turn" })],

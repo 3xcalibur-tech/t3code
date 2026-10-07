@@ -139,17 +139,44 @@ const applyKiroModelSelection =
 const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 
 /**
- * Kiro's own marker that it has started a prompt: a `session_info_update`
- * whose `_meta.kiro.kind` is `turn_start` (recorded on 2.27). The
- * `user_message_id_assigned` echo comes earlier, while Kiro still drops a
- * cancel, and the previous prompt's `context_usage` can arrive after the next
- * `session/prompt` went out, so neither counts.
+ * Evidence that Kiro has started the current prompt, after which Stop sends
+ * `session/cancel`: its `session_info_update` with `_meta.kiro.kind: "turn_start"`,
+ * or output only a running prompt produces (assistant text or thoughts, tool
+ * calls, plans). The `user_message_id_assigned` echo and context usage do not
+ * count: the echo arrives within milliseconds of `session/prompt`, and the
+ * previous prompt's context usage can arrive after the next one went out.
+ *
+ * Kiro's ACP docs do not promise `turn_start`, so Stop also gives up waiting
+ * after KIRO_CANCEL_HOLD_BOUND. Evidence: in the 2.27.0 recordings
+ * (`turn_interrupt`, `message_steering`) a cancel sent right after the echo,
+ * before `turn_start`, was honored. On 2.27.1 TinBane saw a cancel sent
+ * 0-0.5 s after `session/prompt` dropped (the turn ran to completion) and one
+ * at 1.5 s or later honored.
  */
-function isKiroTurnStart(update: EffectAcpSchema.SessionUpdate): boolean {
-  if (update.sessionUpdate !== "session_info_update") return false;
-  const kiro = update._meta?.kiro;
-  return typeof kiro === "object" && kiro !== null && "kind" in kiro && kiro.kind === "turn_start";
+function isKiroPromptActivity(update: EffectAcpSchema.SessionUpdate): boolean {
+  switch (update.sessionUpdate) {
+    case "agent_message_chunk":
+    case "agent_message":
+    case "agent_thought_chunk":
+    case "agent_thought":
+    case "tool_call":
+    case "tool_call_update":
+    case "tool_call_content_chunk":
+    case "plan_update":
+      return true;
+    case "session_info_update": {
+      const kiro = update._meta?.kiro;
+      return (
+        typeof kiro === "object" && kiro !== null && "kind" in kiro && kiro.kind === "turn_start"
+      );
+    }
+    default:
+      return false;
+  }
 }
+
+/** Past TinBane's dropped 0-0.5 s window and his honored 1.5 s cancel. */
+const KIRO_CANCEL_HOLD_BOUND = "2 seconds";
 
 /**
  * Kiro's prompt errors carry a message meant for the user (live 2.27: -32000
@@ -196,9 +223,9 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
     sessionConfigForPolicy: (policy) => [
       { id: KIRO_AUTOPILOT_CONFIG_ID, value: kiroAutopilotValue(policy) },
     ],
-    // Kiro 2.27 drops a `session/cancel` sent before it starts the prompt
-    // (live: 0-0.5 s after `session/prompt`) and runs the turn to completion.
-    cancelAfterPromptStarts: isKiroTurnStart,
+    // See isKiroPromptActivity: Kiro 2.27.1 can drop a cancel sent just after
+    // `session/prompt` and run the turn to completion.
+    cancelAfterPromptStarts: { isStart: isKiroPromptActivity, bound: KIRO_CANCEL_HOLD_BOUND },
     permissionDisposition: kiroPermissionDisposition,
     approvalOptions: kiroApprovalOptions,
     // Kiro V3 advertises `promptCapabilities.image`; the shared adapter reads it.

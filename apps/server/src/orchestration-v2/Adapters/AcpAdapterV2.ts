@@ -129,7 +129,7 @@ export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
  * wake. Longer floors (4–20s) only prolonged Working. No per-model carveouts.
  */
 const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
-/** One Stop's whole budget: holding the cancel plus waiting for the agent to acknowledge it. */
+/** How long Stop waits for the agent to acknowledge `session/cancel`. */
 const ACP_INTERRUPT_TIMEOUT = Duration.seconds(10);
 
 export interface AcpAdapterV2RuntimeInput {
@@ -407,13 +407,16 @@ export interface AcpAdapterV2Flavor {
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
   /**
-   * Hold `session/cancel` until an update for the session matches this
-   * predicate (the agent's own "prompt started" marker), or skip the cancel
-   * when the prompt settles first. Only updates after `session/prompt` went
-   * out count. Kiro 2.27 drops a cancel that arrives before it has started the
-   * prompt and runs the turn to completion.
+   * Hold `session/cancel` until the agent has started the prompt: an update
+   * after `session/prompt` went out matches `isStart`, or `bound` has passed
+   * since it went out. The cancel is skipped when the prompt settles first.
+   * Kiro 2.27.1 can drop a cancel sent just after the prompt and run the turn
+   * to completion.
    */
-  readonly cancelAfterPromptStarts?: (update: EffectAcpSchema.SessionUpdate) => boolean;
+  readonly cancelAfterPromptStarts?: {
+    readonly isStart: (update: EffectAcpSchema.SessionUpdate) => boolean;
+    readonly bound: Duration.Input;
+  };
   /**
    * Kill and respawn the ACP child process before the next `session/prompt` after a
    * user interrupt. Grok can keep `task_already_running` state until the process exits.
@@ -1243,7 +1246,9 @@ interface ActiveAcpTurn {
   readonly promptWireSettled: Deferred.Deferred<void, never>;
   /** Completed once `session/prompt` is the runtime's active prompt. */
   readonly promptDispatched: Deferred.Deferred<void, never>;
-  /** Completed by the flavor's `cancelAfterPromptStarts` marker after dispatch. */
+  /** Clock millis just before `session/prompt` was handed to the runtime. */
+  promptSentAt: number | null;
+  /** Completed when an update after dispatch matches `cancelAfterPromptStarts.isStart`. */
   readonly promptStarted: Deferred.Deferred<void, never>;
   backgroundFinalizeGeneration: number;
 }
@@ -5454,7 +5459,7 @@ export function makeAcpAdapterV2(
         const markPromptStarted = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
-          const promptStarts = flavor.cancelAfterPromptStarts;
+          const promptStarts = flavor.cancelAfterPromptStarts?.isStart;
           if (promptStarts === undefined) return;
           const context = yield* Ref.get(activeTurn);
           if (context === null || context.nativeThreadId !== notification.sessionId) return;
@@ -6580,21 +6585,29 @@ export function makeAcpAdapterV2(
 
         /**
          * `cancelAfterPromptStarts`: waits until the agent has started the
-         * prompt. False when the prompt settled first, so there is nothing to
-         * cancel. A hold that outlives `timeout` cancels anyway.
+         * prompt, or the flavor's bound has passed since `session/prompt` was
+         * sent (since Stop, for a turn that sent none). False when the prompt
+         * settled first, so there is nothing to cancel. The acknowledgement
+         * wait after it keeps its own timeout.
          */
-        const promptStillRunsAfterHold = Effect.fnUntraced(function* (
-          context: ActiveAcpTurn,
-          timeout: Duration.Duration,
-        ) {
-          if (flavor.cancelAfterPromptStarts === undefined) return true;
+        const promptStillRunsAfterHold = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
+          const hold = flavor.cancelAfterPromptStarts;
+          if (hold === undefined) return true;
           if (yield* Deferred.isDone(context.promptStarted)) return true;
           yield* options.testHooks?.onCancelHeld?.() ?? Effect.void;
-          const started = yield* Effect.raceFirst(
-            Deferred.await(context.promptStarted).pipe(Effect.as(true)),
+          const boundPassed = Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const elapsed = now - (context.promptSentAt ?? now);
+            yield* Effect.sleep(
+              Duration.millis(Math.max(0, Duration.toMillis(hold.bound) - elapsed)),
+            );
+          });
+          return yield* Effect.raceFirst(
+            Effect.raceFirst(Deferred.await(context.promptStarted), boundPassed).pipe(
+              Effect.as(true),
+            ),
             Deferred.await(context.completed).pipe(Effect.as(false)),
-          ).pipe(Effect.timeoutOption(timeout));
-          return Option.getOrElse(started, () => true);
+          );
         });
         const quarantineStoppedRun = Effect.fnUntraced(function* () {
           yield* continuationPermit.withPermit(
@@ -7073,6 +7086,7 @@ export function makeAcpAdapterV2(
               promptSettledStatus: null,
               promptWireSettled,
               promptDispatched,
+              promptSentAt: null,
               promptStarted,
               backgroundFinalizeGeneration: 0,
             };
@@ -7205,6 +7219,7 @@ export function makeAcpAdapterV2(
             }
             const promptGeneration = yield* Ref.get(runtimeCallbackGeneration);
             const promptOptions = { dispatched: context.promptDispatched };
+            context.promptSentAt = yield* Clock.currentTimeMillis;
             yield* runtime.prompt({ prompt: promptParts!.prompt }, promptOptions).pipe(
               Effect.tap(() =>
                 Ref.update(promptInstructionStates, (current) => {
@@ -7730,13 +7745,6 @@ export function makeAcpAdapterV2(
                         // work remains, so session/cancel has nothing to acknowledge.
                         yield* finalizeTurn(context, "interrupted");
                       }
-                      // Holding the cancel and waiting for its acknowledgement
-                      // share one deadline, so a held Stop still fails in 10 s.
-                      const deadline =
-                        (yield* Clock.currentTimeMillis) + Duration.toMillis(ACP_INTERRUPT_TIMEOUT);
-                      const remaining = Effect.map(Clock.currentTimeMillis, (now) =>
-                        Duration.millis(Math.max(0, deadline - now)),
-                      );
                       if (hardRestart) {
                         if (runtime.terminateProcessGroup === undefined) {
                           return yield* poisonTeardown(
@@ -7764,10 +7772,7 @@ export function makeAcpAdapterV2(
                         // acknowledge and would only threaten still-running
                         // background subagents. Skip it and leave the runtime
                         // untouched for the replacement turn.
-                        if (
-                          !settledSoftInterrupt &&
-                          (yield* promptStillRunsAfterHold(context, yield* remaining))
-                        ) {
+                        if (!settledSoftInterrupt && (yield* promptStillRunsAfterHold(context))) {
                           yield* runtime.cancel;
                         }
                         if (restartRuntime && flavor.restartRuntimeAfterInterrupt === true) {
@@ -7775,7 +7780,7 @@ export function makeAcpAdapterV2(
                         }
                       }
                       const stopped = yield* Deferred.await(context.completed).pipe(
-                        Effect.timeoutOption(yield* remaining),
+                        Effect.timeoutOption(ACP_INTERRUPT_TIMEOUT),
                       );
                       if (Option.isNone(stopped)) {
                         if (!context.finalized) {
