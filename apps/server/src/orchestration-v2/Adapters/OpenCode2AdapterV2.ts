@@ -3468,8 +3468,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         strays.set(childId, caller);
         retired.add(childId);
         // OpenCode reports its end to the session that called it; that
-        // report answers no turn, so the execution it wakes is stopped.
-        (threads.get(info.parentID ?? "") ?? caller).stoppedChildren.add(childId);
+        // report answers no turn, so the execution it wakes is stopped. A
+        // deeper one reports to a stray, which T3 does not track.
+        threads.get(info.parentID ?? "")?.stoppedChildren.add(childId);
       };
       for (const wake of wakes) {
         wake.dropped = true;
