@@ -2,8 +2,14 @@
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
 import {
+  BUILT_IN_BROWSER_PROFILES,
+  DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
+  findBrowserProfile,
   INCOGNITO_BROWSER_PROFILE_ID,
+  resolveBrowserProfiles,
+  type BrowserProfile,
+  type PreviewReportProfilesInput,
   PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewViewportSetting as PreviewViewportSettingSchema,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
@@ -237,6 +243,11 @@ export class ServerBrowser extends Context.Service<
     }) => Effect.Effect<Option.Option<{ readonly path: string; readonly fileName: string }>>;
     /** Deletes a human profile's server-side storage, closing its open tabs first. */
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
+    /**
+     * Records a client's browser profiles for agents' preview_open. In memory:
+     * clients report again on connect and whenever the list changes.
+     */
+    readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
   }
 >()("t3/preview/ServerBrowser") {}
 
@@ -329,6 +340,14 @@ interface ServerDownload {
 }
 
 /** One agent session and the whole server; each tab holds a renderer process. */
+/** Operations an agent may run on any tab in its thread, even while a human drives it. */
+const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> = new Set([
+  "status",
+  "snapshot",
+  "evaluate",
+  "waitFor",
+]);
+
 const AGENT_TAB_LIMIT = 8;
 const SERVER_TAB_LIMIT = 32;
 /** Agent tabs nobody watches close after this long without an agent request. */
@@ -706,10 +725,11 @@ const make = Effect.gen(function* () {
       adopted === undefined && (await desktopRenders(snapshot))
         ? await connectDesktop(snapshot)
         : null;
+    // An agent tab without a profile (no client reported one) keeps throwaway storage.
     const isolatedContext =
       adopted === undefined &&
       desktop === null &&
-      (snapshot.automationOwner !== undefined ||
+      ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
         snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
     const context =
       adopted?.page.context() ??
@@ -1091,10 +1111,75 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const latestThreadTab = (threadId: string, agentSessionId?: string) =>
-    [...tabs.values()]
-      .filter((tab) => tab.threadId === threadId && tab.control.agentId === agentSessionId)
-      .sort((left, right) => right.createdAt - left.createdAt)[0];
+  /**
+   * The tab a request without a tabId means: the caller's newest tab, else the
+   * thread's tab the user is looking at or used last, so "this page" works.
+   */
+  const latestThreadTab = (threadId: string, agentSessionId?: string) => {
+    const threadTabs = [...tabs.values()].filter((tab) => tab.threadId === threadId);
+    return (
+      threadTabs
+        .filter((tab) => tab.control.agentId === agentSessionId)
+        .sort((left, right) => right.createdAt - left.createdAt)[0] ??
+      threadTabs.sort(
+        (left, right) =>
+          Number(right.viewers.size > 0) - Number(left.viewers.size > 0) ||
+          right.usedAt - left.usedAt,
+      )[0]
+    );
+  };
+
+  const tabOwner = (tab: ServerTab) =>
+    tab.control.controller !== null
+      ? ("human" as const)
+      : tab.control.agentId !== null
+        ? ("agent" as const)
+        : ("unclaimed" as const);
+
+  /** The latest profile list a client reported; agents choose from it. */
+  let reportedProfiles: {
+    readonly profiles: ReadonlyArray<BrowserProfile>;
+    readonly defaultProfileId: string;
+  } | null = null;
+
+  const reportProfiles: ServerBrowser["Service"]["reportProfiles"] = (input) =>
+    Effect.sync(() => {
+      const profiles = resolveBrowserProfiles(input.profiles);
+      reportedProfiles = {
+        profiles,
+        defaultProfileId:
+          findBrowserProfile(profiles, input.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
+      };
+    });
+
+  const profileStatus = () => {
+    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
+    return {
+      profiles: profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        ...(profile.kind === "incognito" ? { incognito: true } : {}),
+      })),
+      ...(reportedProfiles ? { defaultProfileId: reportedProfiles.defaultProfileId } : {}),
+    };
+  };
+
+  /** Matches an id, then a case-insensitive name. Omitted means the reported default. */
+  const resolveOpenProfile = (requested: string | undefined): string | undefined => {
+    if (requested === undefined) return reportedProfiles?.defaultProfileId;
+    const profiles = reportedProfiles?.profiles ?? BUILT_IN_BROWSER_PROFILES;
+    const wanted = requested.toLowerCase();
+    const match =
+      findBrowserProfile(profiles, requested) ??
+      profiles.find((profile) => profile.name.toLowerCase() === wanted);
+    if (match) return match.id;
+    throw new ServerBrowserPage.ServerBrowserOperationError(
+      "PreviewAutomationUnknownProfileError",
+      `No browser profile is named "${requested}". Use one of: ${profiles
+        .map((profile) => `${profile.name} (id ${profile.id})`)
+        .join(", ")}.`,
+    );
+  };
 
   const statusWithTitle = async (
     tab: ServerTab | undefined,
@@ -1108,6 +1193,7 @@ const make = Effect.gen(function* () {
         url: null,
         title: null,
         loading: false,
+        ...profileStatus(),
       };
     }
     const url = tab.page.url();
@@ -1120,12 +1206,7 @@ const make = Effect.gen(function* () {
       title: null,
       loading: tab.loading,
       control: {
-        owner:
-          tab.control.controller !== null
-            ? ("human" as const)
-            : tab.control.agentId !== null
-              ? ("agent" as const)
-              : ("unclaimed" as const),
+        owner: tabOwner(tab),
         ownedByCaller: tab.control.agentId === agentSessionId,
         generation: tab.control.generation,
       },
@@ -1136,15 +1217,17 @@ const make = Effect.gen(function* () {
       viewportSetting: tab.setting,
       ...(viewport ? { viewport } : {}),
       tabs: [...tabs.values()]
-        .filter(
-          (candidate) =>
-            candidate.threadId === tab.threadId && candidate.control.agentId === agentSessionId,
-        )
+        .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
           url: candidate.page.url() === "about:blank" ? null : candidate.page.url(),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
+          owner: tabOwner(candidate),
+          ownedByCaller: candidate.control.agentId === agentSessionId,
+          visible: candidate.viewers.size > 0,
+          ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
         })),
+      ...profileStatus(),
       downloads: tab.downloads.map(({ fileName, path, sizeBytes, url, completedAt }) => ({
         fileName,
         path,
@@ -1440,19 +1523,26 @@ const make = Effect.gen(function* () {
         "No server preview tab is open for this thread. Call preview_open first.",
       );
     }
-    if (tab.control.agentId !== request.agentSessionId)
+    // Any tab in the thread can be read; acting is checked by its control.
+    if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted(
-        "This tab belongs to another agent session or a human. Open your own tab.",
+        "This tab belongs to another agent session. You can read it, but open your own tab to act.",
         "agentMismatch",
       );
     return tab;
   };
 
-  /** Any request, even a failed one, keeps the agent's tabs on the thread from idling out. */
+  /**
+   * Any request, even a failed one, keeps the agent's tabs on the thread from
+   * idling out. The tab it targeted becomes the thread's most recently used.
+   */
   const markUsed = (request: PreviewAutomationRequest) => {
     const now = Date.now();
     for (const tab of tabs.values()) {
-      if (tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId)
+      if (
+        tab.threadId === request.threadId &&
+        (tab.control.agentId === request.agentSessionId || tab.tabId === request.tabId)
+      )
         tab.usedAt = now;
     }
   };
@@ -1488,7 +1578,7 @@ const make = Effect.gen(function* () {
             "tabRequired",
           );
         // A tab still launching exists only as a session, so resolve it like a viewer would.
-        const existing =
+        const found =
           reuse && request.tabId !== undefined
             ? await Effect.runPromise(
                 findTab(request.threadId, request.tabId).pipe(
@@ -1498,7 +1588,14 @@ const make = Effect.gen(function* () {
                 ),
               )
             : undefined;
+        // Only an explicit tabId reuses a tab this session did not open; a tab
+        // it last read (such as the user's) is not taken over implicitly.
+        const existing =
+          found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
+            ? found
+            : undefined;
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
+        const profileId = existing ? undefined : resolveOpenProfile(open.profileId);
         if (!existing) {
           closeIdleAgentTabs();
           assertTabCapacity(request.agentSessionId);
@@ -1510,6 +1607,7 @@ const make = Effect.gen(function* () {
               manager.open({
                 threadId: request.threadId,
                 ...(url ? { url } : {}),
+                ...(profileId === undefined ? {} : { profileId }),
                 runtime: "server",
                 reveal: false,
                 automationOwner: request.agentSessionId,
@@ -1567,7 +1665,7 @@ const make = Effect.gen(function* () {
         const recordings = [...tabs.values()].filter(
           (candidate) =>
             candidate.threadId === request.threadId &&
-            candidate.control.agentId === request.agentSessionId &&
+            candidate.control.agentMayAct(request.agentSessionId ?? "") &&
             (candidate.recording || candidate.recordingStart),
         );
         const targetTabId =
@@ -1587,6 +1685,11 @@ const make = Effect.gen(function* () {
     const tab = await requireTab(request);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
+      if (tab.control.agentId !== request.agentSessionId)
+        throw new BrowserControlInterrupted(
+          "Only the agent session that opened this tab can close it.",
+          "agentMismatch",
+        );
       if (tab.control.controller !== null)
         throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
       void tab.control.close().catch(constVoid);
@@ -1602,7 +1705,26 @@ const make = Effect.gen(function* () {
       await resolveDialog(tab, input as PreviewAutomationDialogInput);
       return statusWithTitle(tab, request.agentSessionId);
     }
-    return tab.control.agent(request.agentSessionId!, async () => {
+    const agentSessionId = request.agentSessionId!;
+    // A tab this session did not open, while it cannot act there (another
+    // agent's, or the user's while they drive): read it in place, without
+    // queueing behind the human's input. Its own tabs keep the takeover
+    // contract: a human taking control interrupts every agent call.
+    if (
+      READ_OPERATIONS.has(request.operation) &&
+      tab.control.agentId !== agentSessionId &&
+      !tab.control.agentCanActNow(agentSessionId)
+    ) {
+      return tab.control.observe(async () => {
+        if (tab.dialog)
+          throw new BrowserControlInterrupted(
+            "A browser dialog is pending. Read preview_status.",
+            "dialogPending",
+          );
+        return executeTabOperation(tab, request);
+      });
+    }
+    return tab.control.agent(agentSessionId, async () => {
       if (tab.dialog)
         throw new BrowserControlInterrupted(
           "A browser dialog is pending. Read preview_status and use preview_dialog first.",
@@ -2194,6 +2316,7 @@ const make = Effect.gen(function* () {
   return ServerBrowser.of({
     attachViewer,
     clearProfile,
+    reportProfiles,
     openDownload,
     answerFileChooser,
   });

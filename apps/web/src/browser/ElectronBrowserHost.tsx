@@ -136,11 +136,11 @@ function AuthorizedBrowserWebview(props: ComponentProps<typeof HostedBrowserWebv
 }
 
 /**
- * Tabs opened without a profile (agent `preview_open`) use the configured
- * default, like human opens. The server cannot read client settings, so the
- * fallback happens here. It is latched once settings load: Electron fixes the
- * partition when the guest attaches, so a later settings change must not move
- * a live tab.
+ * Agent `preview_open` normally carries the profile clients reported (see
+ * BrowserProfileReporter). An agent tab opened before any client reported has
+ * none, so it falls back to the configured default here. It is latched once
+ * settings load: Electron fixes the partition when the guest attaches, so a
+ * later settings change must not move a live tab.
  */
 function useTabProfileId(profileId: string | undefined): string | undefined {
   const hydrated = useClientSettingsHydrated();
