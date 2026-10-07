@@ -285,61 +285,36 @@ const normalizeCaptureRect = (value: unknown): PreviewAnnotationRect | null => {
   };
 };
 
-/** `capturePage` never settles when the guest's compositor is wedged. */
-const ANNOTATION_SCREENSHOT_TIMEOUT = "5 seconds";
-
 /**
- * Crops the guest for a picked annotation. A stalled `capturePage` resolves to
- * `null` after the timeout: the annotation is still sendable without its
- * screenshot, and the pick session must settle either way.
+ * Crops a full-page capture to a picked annotation. `cropRect` is in CSS px;
+ * the capture's pixels are CSS px × the guest's `devicePixelRatio`.
  */
-const captureAnnotationScreenshot = (
-  tabId: string,
-  wc: Electron.WebContents,
+const cropAnnotationScreenshot = (
+  image: Electron.NativeImage,
   cropRect: PreviewAnnotationRect | null,
-): Effect.Effect<PreviewAnnotationPayload["screenshot"], PreviewManagerError> =>
-  Effect.tryPromise({
-    // The unused abort signal is what makes this interruptible, and therefore
-    // what lets the timeout below fire. Drop the parameter and a stalled
-    // capture strands the pick session again.
-    try: (_signal) =>
-      wc.capturePage(
-        cropRect
-          ? {
-              x: cropRect.x,
-              y: cropRect.y,
-              width: cropRect.width,
-              height: cropRect.height,
-            }
-          : undefined,
-      ),
-    catch: (cause) =>
-      new PreviewOperationError({
-        operation: "captureAnnotationScreenshot",
-        tabId,
-        webContentsId: wc.id,
-        cause,
-      }),
-  }).pipe(
-    Effect.map((image): PreviewAnnotationPayload["screenshot"] => {
-      const size = image.getSize();
-      return {
-        dataUrl: image.toDataURL(),
-        width: size.width,
-        height: size.height,
-        cropRect: cropRect ?? { x: 0, y: 0, width: size.width, height: size.height },
-      };
-    }),
-    Effect.timeoutOption(ANNOTATION_SCREENSHOT_TIMEOUT),
-    Effect.flatMap((screenshot) =>
-      Option.isSome(screenshot)
-        ? Effect.succeed(screenshot.value)
-        : Effect.logWarning("preview annotation screenshot timed out").pipe(
-            Effect.annotateLogs({ tabId, webContentsId: wc.id }),
-            Effect.as(null),
-          ),
-    ),
-  );
+  devicePixelRatio: number,
+): PreviewAnnotationPayload["screenshot"] => {
+  const full = image.getSize();
+  if (!cropRect) {
+    return {
+      dataUrl: image.toDataURL(),
+      width: full.width,
+      height: full.height,
+      cropRect: { x: 0, y: 0, width: full.width, height: full.height },
+    };
+  }
+  const scale = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  const x = Math.min(full.width - 1, Math.max(0, Math.floor(cropRect.x * scale)));
+  const y = Math.min(full.height - 1, Math.max(0, Math.floor(cropRect.y * scale)));
+  const cropped = image.crop({
+    x,
+    y,
+    width: Math.max(1, Math.min(full.width - x, Math.ceil(cropRect.width * scale))),
+    height: Math.max(1, Math.min(full.height - y, Math.ceil(cropRect.height * scale))),
+  });
+  const size = cropped.getSize();
+  return { dataUrl: cropped.toDataURL(), width: size.width, height: size.height, cropRect };
+};
 
 const findZoomStep = (current: number): number => {
   const index = ZOOM_LEVELS.findIndex(
@@ -2273,8 +2248,23 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           const cropRect = normalizeCaptureRect(args[1]);
           const submission =
             args[2] === "send" && annotationSendEnabled.get(tabId) === true ? "send" : "attach";
+          const devicePixelRatio = typeof args[3] === "number" ? args[3] : 1;
           runFork(
-            captureAnnotationScreenshot(tabId, wc, cropRect).pipe(
+            // The full-page capture with retries is what the screenshot button
+            // uses. A single cropped `capturePage(rect)` with a fixed timeout
+            // dropped the crop on pages where that capture was merely slow.
+            capturePageWithRetry(
+              { operation: "captureAnnotationScreenshot", tabId, webContentsId: wc.id },
+              tabId,
+              wc,
+            ).pipe(
+              Effect.map((image) => cropAnnotationScreenshot(image, cropRect, devicePixelRatio)),
+              Effect.tapError((error) =>
+                Effect.logWarning("preview annotation screenshot failed").pipe(
+                  Effect.annotateLogs({ tabId, webContentsId: wc.id, error: error.message }),
+                ),
+              ),
+              Effect.withSpan("PreviewManager.captureAnnotationScreenshot"),
               // The renderer cannot tell a dropped crop from a comment-only
               // pick by the null alone, so a failed or timed-out capture is
               // flagged on the result.
