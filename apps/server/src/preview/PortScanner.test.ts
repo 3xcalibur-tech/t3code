@@ -748,8 +748,13 @@ effectIt.effect(
       ]);
       yield* scanner.scan();
       expect(lsofSpawns).toBe(1);
-      // Owners are remembered per socket, so the fd walk does not repeat.
-      expect(fdWalks).toEqual(["77", "4242"]);
+      // Ports 22 and 3001 have no readable owner, so the second scan walks
+      // again; it stops at 77, which holds no listener, once nothing is left.
+      expect(fdWalks).toEqual(["77", "4242", "77", "4242"]);
+      yield* scanner.scan();
+      yield* scanner.scan();
+      // Unresolved owners are retried a bounded number of times.
+      expect(fdWalks).toEqual(["77", "4242", "77", "4242", "77", "4242"]);
     }).pipe(Effect.provide(layer));
   },
 );

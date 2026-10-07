@@ -78,6 +78,8 @@ const POLL_INTERVAL = Duration.seconds(3);
 const LSOF_TIMEOUT_MS = 5_000;
 /** File descriptors one `/proc` walk may read before it stops looking for socket owners. */
 const PROC_FD_WALK_LIMIT = 50_000;
+/** Scans that retry the fd walk for a listening socket whose owner was not found. */
+const SOCKET_OWNER_ATTEMPTS = 3;
 const WINDOWS_LISTENER_TIMEOUT_MS = 5_000;
 const WEB_PROBE_TIMEOUT = Duration.seconds(1);
 const WEB_PROBE_CACHE_TTL_MS = Duration.toMillis(Duration.seconds(15));
@@ -346,10 +348,12 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
   const webProbeCacheRef = yield* Ref.make<ReadonlyMap<string, WebProbeCacheEntry>>(new Map());
   const scanSemaphore = yield* Semaphore.make(1);
   const lsofMissingRef = yield* Ref.make(false);
-  /** Owners of listening socket inodes; null when no readable process holds it. */
+  /** Confirmed owners of listening socket inodes. */
   const socketOwnersRef = yield* Ref.make<
-    ReadonlyMap<string, { readonly pid: number; readonly processName: string | null } | null>
+    ReadonlyMap<string, { readonly pid: number; readonly processName: string | null }>
   >(new Map());
+  /** Fd walks that found no owner, per socket inode; retried up to `SOCKET_OWNER_ATTEMPTS`. */
+  const socketOwnerMissesRef = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
 
   /** Maps socket inodes to the processes holding them, by `/proc/<pid>/fd`. */
   const findSocketOwners = Effect.fn("PortDiscovery.findSocketOwners")(function* (
@@ -404,13 +408,24 @@ export const make = Effect.gen(function* PortDiscoveryMake() {
       Option.isSome(table) ? parseProcNetTcp(table.value) : [],
     );
     const known = yield* Ref.get(socketOwnersRef);
+    const knownMisses = yield* Ref.get(socketOwnerMissesRef);
     const inodes = new Set(listeners.map((listener) => listener.inode));
-    // Listeners rarely change, so the fd walk runs only for sockets not seen before.
-    const unseen = new Set([...inodes].filter((inode) => !known.has(inode)));
+    // Listeners rarely change, so the fd walk runs only for sockets without a
+    // confirmed owner, and gives up on one after a few walks miss it (another
+    // user's process, or one that exited mid-walk).
+    const unseen = new Set(
+      [...inodes].filter(
+        (inode) => !known.has(inode) && (knownMisses.get(inode) ?? 0) < SOCKET_OWNER_ATTEMPTS,
+      ),
+    );
     const found = unseen.size === 0 ? new Map() : yield* findSocketOwners(unseen);
-    const owners = new Map([...known].filter(([inode]) => inodes.has(inode)));
-    for (const inode of unseen) owners.set(inode, found.get(inode) ?? null);
+    const owners = new Map([...known, ...found].filter(([inode]) => inodes.has(inode)));
+    const misses = new Map([...knownMisses].filter(([inode]) => inodes.has(inode)));
+    for (const inode of unseen) {
+      if (!found.has(inode)) misses.set(inode, (misses.get(inode) ?? 0) + 1);
+    }
     yield* Ref.set(socketOwnersRef, owners);
+    yield* Ref.set(socketOwnerMissesRef, misses);
     const seen = new Map<number, DiscoveredLocalServer>();
     for (const { port, inode } of listeners) {
       const owner = owners.get(inode) ?? null;
