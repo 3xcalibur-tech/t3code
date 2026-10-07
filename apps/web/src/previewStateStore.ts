@@ -470,6 +470,16 @@ export function isPreviewSupportedInRuntime(): boolean {
   return Boolean(window.desktopBridge?.preview);
 }
 
+/**
+ * Forgets a deleted thread's previews. The server closes their sessions too,
+ * but the desktop host keeps a page for every session held here.
+ */
+export function clearThreadPreviewState(ref: ScopedThreadRef): void {
+  updateThreadPreviewState(ref, (current) =>
+    Object.keys(current.sessions).length === 0 ? current : EMPTY_THREAD_PREVIEW_STATE,
+  );
+}
+
 export function resetPreviewStateForTests(): void {
   for (const threadKey of changedPreviewThreadKeys) {
     appAtomRegistry.set(previewStateAtom(threadKey), EMPTY_THREAD_PREVIEW_STATE);
