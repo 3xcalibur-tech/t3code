@@ -13,7 +13,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import * as browserDefaults from "~/browser/browserDefaults";
 import { BrowserSettingsReadError, openUrlInPreview } from "~/browser/openFileInPreview";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
-import { readThreadPreviewState, resetPreviewStateForTests } from "~/previewStateStore";
+import {
+  applyPreviewServerSnapshot,
+  readThreadPreviewState,
+  resetPreviewStateForTests,
+} from "~/previewStateStore";
 
 import { openPreviewSession } from "./openPreviewSession";
 
@@ -139,4 +143,43 @@ describe("openPreviewSession", () => {
       });
     },
   );
+});
+
+describe("openUrlInPreview from a link", () => {
+  it("opens under the source tab's profile instead of the default", async () => {
+    const openPreview = vi.fn(async (_arg: { input: PreviewOpenInput }) =>
+      AsyncResult.success(snapshot),
+    );
+
+    await openUrlInPreview({ openPreview, threadRef, url: "https://t3.chat/", profileId: "work" });
+
+    expect(openPreview.mock.calls[0]?.[0].input.profileId).toBe("work");
+  });
+
+  it("keeps the current tab active for a background open", async () => {
+    applyPreviewServerSnapshot(threadRef, { ...snapshot, tabId: "tab-current" });
+
+    await openUrlInPreview({
+      openPreview: async () => AsyncResult.success(snapshot),
+      threadRef,
+      url: "https://t3.chat/",
+      background: true,
+    });
+
+    const state = readThreadPreviewState(threadRef);
+    expect(state.activeTabId).toBe("tab-current");
+    expect(Object.keys(state.sessions).toSorted()).toEqual(["tab-1", "tab-current"]);
+  });
+
+  it("activates the new tab for a foreground open", async () => {
+    applyPreviewServerSnapshot(threadRef, { ...snapshot, tabId: "tab-current" });
+
+    await openUrlInPreview({
+      openPreview: async () => AsyncResult.success(snapshot),
+      threadRef,
+      url: "https://t3.chat/",
+    });
+
+    expect(readThreadPreviewState(threadRef).activeTabId).toBe("tab-1");
+  });
 });

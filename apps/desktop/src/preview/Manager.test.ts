@@ -158,13 +158,24 @@ describe("previewWindowOpenAction", () => {
     ).toBe("popup");
   });
 
-  it("keeps target=_blank links in the preview tab", () => {
+  it("opens target=_blank links as a new tab", () => {
     expect(PreviewManager.previewWindowOpenAction(details({ disposition: "foreground-tab" }))).toBe(
-      "navigate",
+      "new-tab",
     );
     expect(PreviewManager.previewWindowOpenAction(details({ disposition: "background-tab" }))).toBe(
-      "navigate",
+      "new-tab",
     );
+  });
+
+  it("keeps a form POST with a body on the in-place path", () => {
+    // A new tab can only reopen the URL as a GET, which would drop the body.
+    const postBody = { data: [], contentType: "application/x-www-form-urlencoded" };
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        ...details({ disposition: "foreground-tab" }),
+        postBody,
+      }),
+    ).toBe("navigate");
   });
 
   it("does not hand a window to schemes that cannot be hardened", () => {
@@ -580,6 +591,40 @@ describe("PreviewManager", () => {
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
+
+  effectIt.effect("opens a target=_blank link as a new tab without navigating the opener", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        fromId.mockReturnValue(preview.webContents);
+        const opened: Array<{ tabId: string; url: string; background: boolean }> = [];
+        yield* manager.subscribeOpenLinks((event) => Effect.sync(() => void opened.push(event)));
+        yield* manager.createTab("tab_links");
+        yield* manager.registerWebview("tab_links", 42);
+        const openHandler = (preview.webContents as Electron.WebContents).setWindowOpenHandler as
+          | ReturnType<typeof vi.fn>
+          | undefined;
+        const handler = openHandler?.mock.lastCall?.[0] as (
+          details: Partial<Electron.HandlerDetails>,
+        ) => { action: string };
+
+        expect(
+          handler({ url: "https://github.com/issues/1", disposition: "foreground-tab" }),
+        ).toEqual({ action: "deny" });
+        expect(handler({ url: "about:blank", disposition: "new-window" })).toEqual({
+          action: "deny",
+        });
+        handler({ url: "https://github.com/issues/2", disposition: "background-tab" });
+        yield* settle(() => opened.length === 2);
+
+        expect(preview.loadURL).not.toHaveBeenCalled();
+        expect(opened).toEqual([
+          { tabId: "tab_links", url: "https://github.com/issues/1", background: false },
+          { tabId: "tab_links", url: "https://github.com/issues/2", background: true },
+        ]);
+      }),
+    ),
+  );
 
   effectIt.effect("keeps preview shortcuts out of the host window", () =>
     withManager((manager) =>
