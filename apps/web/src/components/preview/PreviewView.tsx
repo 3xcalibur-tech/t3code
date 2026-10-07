@@ -49,6 +49,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { previewBridge } from "./previewBridge";
 import { subscribePreviewAction } from "./previewActionBus";
 import { openPreviewSession } from "./openPreviewSession";
+import { showPreviewPopup } from "./showPreviewPopup";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
 import { PreviewMoreMenu, type PreviewMoreMenuActions } from "./PreviewMoreMenu";
@@ -995,6 +996,7 @@ export function PreviewView({
                 onControl={(control) =>
                   setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
                 }
+                onPopup={(popupTabId) => showPreviewPopup(threadRef, popupTabId, "panel")}
                 // Stays connected under the empty state so a URL picked there reaches the page.
                 className={cn(
                   "absolute inset-0 h-full w-full",

@@ -727,6 +727,33 @@ it.live("a popup becomes the agent's own tab and keeps its opener page", () =>
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("a popup from a person's click is shown to that person, with its opener kept", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      yield* Effect.yieldNow;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      const watcher = yield* browser.attachViewer(viewerInput(opened.tabId, false));
+      const viewer = yield* browser.attachViewer(viewerInput(opened.tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const opener = contexts[0]!.page;
+      const popup = makeContext();
+      opener.emit("popup", popup.page);
+      let shown = yield* Queue.take(viewer.output);
+      while (shown._tag !== "popup") shown = yield* Queue.take(viewer.output);
+      const sessions = (yield* manager.list({ threadId: scope.thread.threadId })).sessions;
+      expect(sessions.map((session) => session.tabId)).toEqual(
+        expect.arrayContaining([opened.tabId, shown.tabId]),
+      );
+      expect((yield* Queue.clear(watcher.output)).some((item) => item._tag === "popup")).toBe(
+        false,
+      );
+      expect(opener.close).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("closing a tab while a viewer is still opening it does not leave its page behind", () =>
   Effect.scoped(
     Effect.gen(function* () {

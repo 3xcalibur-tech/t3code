@@ -185,6 +185,8 @@ export type ServerBrowserViewerOutput =
       readonly accept: string;
     }
   | { readonly _tag: "fileChooserClosed"; readonly id: string }
+  /** The page this viewer controls opened a new tab; the viewer shows it, as a browser would. */
+  | { readonly _tag: "popup"; readonly tabId: string }
   | {
       readonly _tag: "download";
       readonly id: string;
@@ -1012,6 +1014,10 @@ const make = Effect.gen(function* () {
       return;
     }
     const url = popup.url();
+    // Captured now: the person whose click opened the popup gets switched to it.
+    const controller = [...opener.viewers].find(
+      (viewer) => viewer.id === opener.control.controller,
+    );
     await Effect.runPromise(
       manager.open({
         threadId: opener.threadId,
@@ -1028,9 +1034,16 @@ const make = Effect.gen(function* () {
             openerTabId: opener.tabId,
           }),
       }),
-    ).catch(async () => {
-      await popup.close().catch(constVoid);
-    });
+    ).then(
+      (snapshot) => {
+        // The opener stays open behind it, so `window.opener` can still report back.
+        if (opener.control.agentId === null)
+          controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+      },
+      async () => {
+        await popup.close().catch(constVoid);
+      },
+    );
   };
 
   const ensureTab = (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {

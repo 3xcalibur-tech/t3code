@@ -457,6 +457,35 @@ export function setActivePreviewTab(ref: ScopedThreadRef, tabId: string): void {
   });
 }
 
+/**
+ * Runs `action` once the thread's preview state has the tab, which a popup's
+ * `opened` event may deliver after the stream that announced it. Gives up
+ * after `timeoutMs`. Returns a cancel function.
+ */
+export function whenPreviewTabKnown(
+  ref: ScopedThreadRef,
+  tabId: string,
+  action: () => void,
+  timeoutMs = 5_000,
+): () => void {
+  const atom = previewStateAtom(scopedThreadKey(ref));
+  if (appAtomRegistry.get(atom).sessions[tabId]) {
+    action();
+    return () => {};
+  }
+  const stop = () => {
+    clearTimeout(timer);
+    unsubscribe();
+  };
+  const unsubscribe = appAtomRegistry.subscribe(atom, (state) => {
+    if (!state.sessions[tabId]) return;
+    stop();
+    action();
+  });
+  const timer = setTimeout(stop, timeoutMs);
+  return stop;
+}
+
 export function rememberPreviewUrl(ref: ScopedThreadRef, url: string): void {
   if (url.trim().length === 0) return;
   updateThreadPreviewState(ref, (current) => ({
