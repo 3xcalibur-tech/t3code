@@ -537,7 +537,7 @@ struct FeatureRootModelTests {
         let client = FeatureClientStub()
         let model = testRootModel(client: client)
 
-        let save = Task { await model.saveAppearance(.light) }
+        let save = Task { await model.savePreference(\.appearance, value: .light) }
         await Task.yield()
 
         #expect(model.snapshot.settings.appearance == .light)

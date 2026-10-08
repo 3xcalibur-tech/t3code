@@ -1278,11 +1278,6 @@ public final class FeatureRootModel {
     }
 
     @discardableResult
-    public func saveAppearance(_ appearance: FeatureAppearance) async -> Bool {
-        await savePreference(\.appearance, value: appearance)
-    }
-
-    @discardableResult
     public func saveTextSizes(
         textSize: FeatureTextSizeAdjustment,
         codeSize: FeatureTextSizeAdjustment
