@@ -204,7 +204,6 @@ import { environmentThreadShells, threadEnvironment } from "../../state/threads"
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useV2ItemSupport } from "../../state/v2-item-support";
 import {
-  basename,
   fileRoutePathSegments,
   isAbsolutePath,
   resolveWorkspaceRelativeFilePath,
@@ -1732,7 +1731,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const screenColor = theme["--color-screen"];
   const userBubbleColor = theme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
-    (href: string) => {
+    (href: string, imageEmbed = false) => {
       const threadLink = parseThreadLinkHref(href);
       if (threadLink) {
         navigation.navigate("Thread", {
@@ -1741,44 +1740,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         });
         return;
       }
-      const presentation = resolveMarkdownLinkPresentation(href);
-      if (presentation.kind === "file") {
-        const relativePath = resolveWorkspaceRelativeFilePath(
-          props.workspaceRoot,
-          presentation.path,
-        );
-        if (relativePath) {
-          void Haptics.selectionAsync();
-          if (isPdfFile({ name: relativePath })) {
-            setExpandedFile(
-              (current) =>
-                current ?? {
-                  kind: "pdf",
-                  name: relativePath.split("/").at(-1),
-                  environmentId: props.environmentId,
-                  resource: {
-                    _tag: "workspace-file",
-                    threadId: props.threadId,
-                    path: relativePath,
-                  },
-                },
-            );
-            return;
-          }
-          navigation.navigate("ThreadFile", {
-            environmentId: String(props.environmentId),
-            threadId: String(props.threadId),
-            path: fileRoutePathSegments(relativePath),
-            ...(presentation.line ? { line: String(presentation.line) } : {}),
-          });
-          return;
-        }
-      }
-
       const media = resolveMarkdownMediaPreview(href, {
         environmentId: props.environmentId,
         threadId: props.threadId,
         workspaceRoot: props.workspaceRoot,
+        imageEmbed,
       });
       if (media) {
         void Haptics.selectionAsync();
@@ -1790,26 +1756,28 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         return;
       }
 
+      const presentation = resolveMarkdownLinkPresentation(href);
+      if (presentation.kind === "file") {
+        const relativePath = resolveWorkspaceRelativeFilePath(
+          props.workspaceRoot,
+          presentation.path,
+        );
+        if (relativePath) {
+          void Haptics.selectionAsync();
+          navigation.navigate("ThreadFile", {
+            environmentId: String(props.environmentId),
+            threadId: String(props.threadId),
+            path: fileRoutePathSegments(relativePath),
+            ...(presentation.line ? { line: String(presentation.line) } : {}),
+          });
+          return;
+        }
+      }
+
       // A host file outside the workspace, such as a report an agent wrote to
       // a temp directory, opens read-only in the file screen.
       if (presentation.kind === "file" && isAbsolutePath(presentation.path)) {
         void Haptics.selectionAsync();
-        if (isPdfFile({ name: presentation.path })) {
-          setExpandedFile(
-            (current) =>
-              current ?? {
-                kind: "pdf",
-                name: basename(presentation.path),
-                environmentId: props.environmentId,
-                resource: {
-                  _tag: "media-file",
-                  threadId: props.threadId,
-                  path: presentation.path,
-                },
-              },
-          );
-          return;
-        }
         navigation.navigate("ThreadFile", {
           environmentId: String(props.environmentId),
           threadId: String(props.threadId),
@@ -1820,12 +1788,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       }
 
       if (presentation.kind !== "file" && presentation.href) {
-        if (/^https?:\/\//i.test(presentation.href) && isPdfFile({ name: presentation.href })) {
-          setExpandedFile(
-            (current) => current ?? { kind: "pdf", uri: presentation.href!, name: "Document.pdf" },
-          );
-          return;
-        }
         void tryOpenExternalUrl(presentation.href, "markdown-link");
       }
     },
@@ -1839,7 +1801,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const markdownLinkHandlers = useMemo<MarkdownLinkHandlers>(
     () => ({
       onLinkPress: onMarkdownLinkPress,
-      onImagePress: onMarkdownLinkPress,
+      onImagePress: (href) => onMarkdownLinkPress(href, true),
       resolveImageSource,
       fileContextMenu: (href) => {
         const target = resolveFileChipTarget(href, props.workspaceRoot);
