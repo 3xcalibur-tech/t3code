@@ -18,13 +18,15 @@ const state = vi.hoisted(() => ({
   checkpoints: [] as ReadonlyArray<ThreadCheckpointSummary>,
 }));
 
-vi.mock("@t3tools/client-runtime/state/thread-checkpoints", () => ({
+vi.mock(import("@t3tools/client-runtime/state/thread-checkpoints"), async (importOriginal) => ({
+  ...(await importOriginal()),
   deriveThreadCheckpointSummaries: () => state.checkpoints,
 }));
 vi.mock("react", () => ({
   useCallback: <A>(callback: A) => callback,
   useEffect: (effect: () => void) => state.effects.push(effect),
   useMemo: <A>(factory: () => A) => factory(),
+  useState: <A>(initial: A) => [initial, () => {}],
 }));
 vi.mock("../../state/session", () => ({
   environmentSession: { sessionStateAtom: () => state.sessionAtom },
