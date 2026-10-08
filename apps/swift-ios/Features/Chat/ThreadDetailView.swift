@@ -933,7 +933,7 @@ public struct ThreadDetailView: View {
                         set: { enabled in Task { await model.setAutoSettle(thread.id, enabled: enabled) } }
                     ))
                 }
-                let isSettled = model.isEffectivelySettled(currentThread)
+                let isSettled = currentThread.isEffectivelySettled()
                 if (isSettled || currentThread.canSettleNow()), !currentThread.isArchived {
                     Button {
                         Task { await model.setSettled(thread.id, settled: !isSettled) }

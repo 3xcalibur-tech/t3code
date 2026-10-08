@@ -332,13 +332,12 @@ struct HomeThreadMetadataTests {
         )
 
         #expect(thread.homeEnvironmentLabel(in: snapshot) == "leftbook")
-        #expect(thread.homeProviderLabel(in: snapshot) == "Codex Work")
         #expect(thread.branch == "feat/web-v2-home")
         #expect(thread.worktreePath == "/worktrees/web-v2-home")
     }
 
     @Test
-    func rowAttributionFallsBackThroughProjectAndProviderCatalog() {
+    func rowAttributionFallsBackThroughProject() {
         let thread = FeatureThread(
             id: "thread",
             projectID: "project",
@@ -367,7 +366,6 @@ struct HomeThreadMetadataTests {
         )
 
         #expect(thread.homeEnvironmentLabel(in: snapshot) == "steambox")
-        #expect(thread.homeProviderLabel(in: snapshot) == "Claude")
     }
 
     @Test

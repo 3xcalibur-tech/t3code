@@ -807,11 +807,9 @@ struct DailyUXSidebarIndex {
     let working: [FeatureThread]
     let snoozed: [FeatureThread]
     let settled: [FeatureThread]
-    let searchResults: [FeatureThread]
 
     init(
         snapshot: FeatureSnapshot,
-        query: String,
         projectID: String? = nil,
         now: Date = .now,
         inboxReturns: FeatureInboxReturnTracker = .init()
@@ -859,12 +857,6 @@ struct DailyUXSidebarIndex {
                 }
                 return lhs.id < rhs.id
             }
-
-        searchResults = Self.matchingThreads(
-            pinned + active + working + snoozed + settled,
-            snapshot: snapshot,
-            query: query
-        )
     }
 
     /// The pinned or active list in display order, independent of project
@@ -1340,26 +1332,6 @@ extension FeatureThread {
         return environmentName
     }
 
-    func homeProviderLabel(in snapshot: FeatureSnapshot) -> String? {
-        if let providerName = providerName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !providerName.isEmpty {
-            return providerName
-        }
-        guard let providerID else { return nil }
-        let projectEnvironmentID = snapshot.projects
-            .first(where: { $0.id == projectID })?
-            .environmentID
-        let resolvedEnvironmentID = environmentID ?? projectEnvironmentID
-        let providers = resolvedEnvironmentID.flatMap {
-            snapshot.providersByEnvironment?[$0]
-        } ?? []
-        return providers.first(where: { $0.id == providerID })?.name ?? providerID
-    }
-
-    var needsAttention: Bool {
-        state == .waitingForApproval || state == .waitingForInput || state == .failed
-    }
-
     func isEffectivelySettled() -> Bool {
         FeatureThreadLifecyclePolicy.isSettled(self)
     }
@@ -1597,26 +1569,6 @@ enum DailyUXModelOptions {
             }
         }
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
-    }
-
-    /// The compact composer gives reasoning its own non-compressible label so
-    /// a long model name cannot hide the setting users change most often.
-    static func reasoningSummary(
-        for model: FeatureModel,
-        selections: [FeatureModelOptionSelection]
-    ) -> String? {
-        guard let descriptor = reasoningDescriptor(for: model),
-              let value = value(for: descriptor, in: selections) else {
-            return nil
-        }
-
-        switch value {
-        case let .string(choiceID):
-            return descriptor.choices.first(where: { $0.id == choiceID })?.label
-                ?? choiceID
-        case let .boolean(isEnabled):
-            return isEnabled ? descriptor.label : nil
-        }
     }
 
     private static func isReasoningDescriptor(

@@ -721,10 +721,6 @@ public final class FeatureRootModel {
         }
     }
 
-    func isEffectivelySettled(_ thread: FeatureThread) -> Bool {
-        thread.isEffectivelySettled()
-    }
-
     public func setRuntimeMode(_ id: String, mode: FeatureRuntimeMode) async {
         guard let environmentID = snapshot.threads.first(where: { $0.id == id })?.environmentID else {
             return

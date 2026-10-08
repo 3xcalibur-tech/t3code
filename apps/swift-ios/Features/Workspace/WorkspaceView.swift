@@ -1096,7 +1096,6 @@ struct HomePresentation {
     ) {
         let index = DailyUXSidebarIndex(
             snapshot: snapshot,
-            query: "",
             projectID: projectID,
             now: now,
             inboxReturns: inboxReturns

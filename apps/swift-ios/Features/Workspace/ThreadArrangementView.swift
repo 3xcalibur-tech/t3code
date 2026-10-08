@@ -125,7 +125,7 @@ private struct ThreadArrangementCollection: UIViewRepresentable {
             if let pendingRows {
                 rows = pendingRows
             } else {
-                let index = DailyUXSidebarIndex(snapshot: parent.model.snapshot, query: "", now: parent.now)
+                let index = DailyUXSidebarIndex(snapshot: parent.model.snapshot, now: parent.now)
                 rows = ThreadArrangementSection.allCases.flatMap { section -> [Row] in
                     let threads: [FeatureThread]
                     switch section {
