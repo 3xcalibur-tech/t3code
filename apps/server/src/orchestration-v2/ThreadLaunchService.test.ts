@@ -127,7 +127,7 @@ function makeHarness(options: HarnessOptions = {}) {
   // (no createWorktree call to learn it from otherwise) and updated to
   // match whatever a new worktree actually gets checked out on, including a
   // server-generated name the client never specified.
-  let liveBranch = "t3code/abcd1234";
+  let liveBranch = "t3/abcd1234";
   const createWorktree = vi.fn(
     (
       ...args: Parameters<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>
@@ -1280,7 +1280,7 @@ it.effect(
             command: "command:launch:stale-rename",
             thread: "thread:launch:stale-rename",
             message: "Build the feature",
-            workspace: { type: "worktree", baseRef: "main", branch: "t3code/abcd1234" },
+            workspace: { type: "worktree", baseRef: "main", branch: "t3/abcd1234" },
           }),
         );
         yield* Deferred.await(branchNameStarted);
@@ -1292,7 +1292,7 @@ it.effect(
           commandId: CommandId.make("command:drift-follow:stale-rename"),
           threadId: launched.threadId,
           branch: "feature/agent-chosen",
-          expectedBranch: "t3code/abcd1234",
+          expectedBranch: "t3/abcd1234",
           expectedWorktreePath: "/repo-worktrees/temp",
           requireExclusiveWorktree: true,
         });
@@ -1355,7 +1355,7 @@ it.effect(
             command: "command:launch:real-branch-moved",
             thread: "thread:launch:real-branch-moved",
             message: "Build the feature",
-            workspace: { type: "worktree", baseRef: "main", branch: "t3code/abcd1234" },
+            workspace: { type: "worktree", baseRef: "main", branch: "t3/abcd1234" },
           }),
         );
         yield* Deferred.await(branchNameStarted);
@@ -1366,7 +1366,7 @@ it.effect(
         assert.equal(harness.renameBranch.mock.calls.length, 0);
         assert.equal(
           (yield* threads.getThreadProjection(launched.threadId)).thread.branch,
-          "t3code/abcd1234",
+          "t3/abcd1234",
         );
       }).pipe(Effect.provide(harness.layer));
     }),

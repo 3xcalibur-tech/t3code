@@ -20,7 +20,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as RunFinalization from "./RunFinalizationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
-// observerLive's construction resolves ProjectService even when a scenario
+// layerObserver's construction resolves ProjectService even when a scenario
 // only exercises refresh/followBranchDrift, not followWorktreeMove.
 const unusedProjectService = Layer.mock(ProjectService.ProjectService)({
   getById: () => Effect.die("not exercised by this scenario"),
@@ -154,7 +154,7 @@ it.effect.each(
 
 // #11078: a `git checkout`/`git switch` run inside a thread's dedicated
 // worktree bypasses T3's own commands, so the stamped branch goes stale.
-// `observerLive.refresh` must follow that drift instead of only comparing it
+// `layerObserver.refresh` must follow that drift instead of only comparing it
 // against the stamp and giving up.
 it.effect.each(
   (
@@ -207,7 +207,7 @@ it.effect.each(
     (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
       Effect.succeed({ sequence: 1, storedEvents: [] }),
   );
-  const layer = RunFinalization.observerLive.pipe(
+  const layer = RunFinalization.layerObserver.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),
@@ -263,7 +263,7 @@ it.effect.each(
 it.effect("logs and continues when the branch-drift follow is rejected", () => {
   const threadId = ThreadId.make("thread-branch-drift-rejected");
   const runId = RunId.make("completed-run");
-  const layer = RunFinalization.observerLive.pipe(
+  const layer = RunFinalization.layerObserver.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),
@@ -385,7 +385,7 @@ it.effect.each(
     (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
       Effect.succeed({ sequence: 1, storedEvents: [] }),
   );
-  const layer = RunFinalization.observerLive.pipe(
+  const layer = RunFinalization.layerObserver.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceEntries.WorkspaceEntries)({
@@ -465,7 +465,7 @@ it.effect(
       (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
         Effect.succeed({ sequence: 1, storedEvents: [] }),
     );
-    const layer = RunFinalization.observerLive.pipe(
+    const layer = RunFinalization.layerObserver.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),
@@ -519,7 +519,7 @@ it.effect("does not follow a worktree move for a stale, no-longer-active run", (
   const threadId = ThreadId.make("thread-worktree-move-stale-run");
   const runId = RunId.make("old-run");
   const dispatch = vi.fn(() => Effect.die("a stale run must not dispatch a location update"));
-  const layer = RunFinalization.observerLive.pipe(
+  const layer = RunFinalization.layerObserver.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),

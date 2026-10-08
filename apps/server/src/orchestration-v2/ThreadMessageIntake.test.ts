@@ -755,14 +755,14 @@ it.effect(
         // wire schema, so a client sending this directly must not be able to
         // request skipping the detach an explicit handoff is supposed to do.
         preserveProviderSession: true,
-      }).pipe(Effect.provide(failingDispatch(captured)), Effect.result);
+      }).pipe(Effect.provide(layerFailingDispatch(captured)), Effect.result);
       expect(captured).toHaveLength(1);
       const command = captured[0]!;
       expect(command.type).toBe("thread.metadata.update");
       if (command.type !== "thread.metadata.update") return;
       expect(command.preserveProviderSession).toBeUndefined();
       expect(command.worktreePath).toBe("/repo/.claude/worktrees/feature");
-    }).pipe(Effect.provide(intakeTestLayer)),
+    }).pipe(Effect.provide(layerIntakeTest)),
 );
 
 it.effect("applies the image budget across all questions before dispatch", () =>
