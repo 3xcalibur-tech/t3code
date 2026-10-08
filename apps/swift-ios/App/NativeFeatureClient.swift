@@ -6688,9 +6688,13 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                 mapped.supportsProjectSettingsOverrides = supportsProjectSettings
                 return mapped
             }
+            // These are server paths. `isDirectory` skips a useless local file system check.
+            let scratchRoot = projectConfig?.scratchWorkspaceRoot.map {
+                URL(fileURLWithPath: $0, isDirectory: true).standardizedFileURL.path
+            }
             for var project in mappedProjects {
-                project.isScratch = projectConfig?.scratchWorkspaceRoot.map {
-                    URL(fileURLWithPath: $0).standardizedFileURL.path == URL(fileURLWithPath: project.path).standardizedFileURL.path
+                project.isScratch = scratchRoot.map {
+                    $0 == URL(fileURLWithPath: project.path, isDirectory: true).standardizedFileURL.path
                 } ?? false
                 if project.isScratch == true { project.defaultWorkspaceMode = .local }
                 project.threadCount = threadCountByProjectID[project.id, default: 0]
