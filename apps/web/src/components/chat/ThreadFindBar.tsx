@@ -130,6 +130,7 @@ export function ThreadFindBar({
         onChange={(event) => {
           setQuery(event.target.value);
           setPosition(null);
+          setNavigation((count) => count + 1);
         }}
       />
       <span
