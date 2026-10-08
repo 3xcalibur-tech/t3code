@@ -51,14 +51,17 @@ struct FeatureToolActivityIcon: View {
         .accessibilityHidden(true)
         .task(id: key) {
             guard let key, Self.images.object(forKey: key as NSString) == nil else { return }
-            var url: URL?
+            var nativeURL: URL?
             if let context, let app = presentation?.nativeApp {
-                url = try? await context.resolver.nativeAppIconURL(threadID: context.threadID, app: app)
+                nativeURL = try? await context.resolver.nativeAppIconURL(threadID: context.threadID, app: app)
             }
-            guard let url = url ?? staticURL,
+            guard let url = nativeURL ?? staticURL,
                   let decoded = try? await MarkdownImageLoader.load(url, maximumPixelSize: 48),
                   !Task.isCancelled else { return }
-            Self.images.setObject(decoded.image, forKey: key as NSString)
+            // A static fallback stays local, so the next mount retries the native icon.
+            if nativeURL != nil || presentation?.nativeApp == nil {
+                Self.images.setObject(decoded.image, forKey: key as NSString)
+            }
             loaded = (key, decoded.image)
         }
     }

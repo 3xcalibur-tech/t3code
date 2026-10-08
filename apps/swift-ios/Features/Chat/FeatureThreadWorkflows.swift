@@ -143,7 +143,7 @@ public struct FeatureThreadWorkflows: Sendable, Equatable, Codable {
 
     public init(projection raw: JSONValue, environmentID: String) throws {
         // Live updates can contain a large transcript. Decode only the keys
-        // Projection reads, so messages and turn items are not encoded again.
+        // Projection reads, so messages and full turn items are skipped.
         let keys = ["thread", "runs", "subagents", "providerThreads", "providerSessions", "visibleTurnItems"]
         let projection = try JSONValue.object(Dictionary(uniqueKeysWithValues: keys.compactMap { key in
             raw[key].map { (key, $0) }

@@ -4598,8 +4598,8 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return snapshot
         }
 
-        // Take the snapshot out of the dictionary so the buffer append below
-        // mutates in place instead of copying the whole buffer. Every path
+        // Take the snapshot out of the dictionary so the dictionary does not
+        // hold a second reference to the buffer during the append. Every path
         // stores it back before returning.
         var snapshot = terminalSnapshots.removeValue(forKey: key)
             ?? FeatureTerminalSnapshot(threadID: threadID, terminalID: terminalID)
