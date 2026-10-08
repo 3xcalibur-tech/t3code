@@ -235,7 +235,10 @@ import {
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
-import { isCommandPaletteOpen } from "../commandPaletteBus";
+import { isCommandPaletteOpen, onOpenThreadFind } from "../commandPaletteBus";
+import { ThreadFindBar } from "./chat/ThreadFindBar";
+import type { ThreadFindTarget } from "./chat/useThreadFindTarget";
+import type { CitationHistoryPage } from "./chat/useAssistantCitationTarget";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
@@ -1589,6 +1592,21 @@ export default function ChatView(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  // Find belongs to one thread, so switching threads closes it.
+  const [threadFind, setThreadFind] = useState<{
+    readonly threadKey: string;
+    readonly focusRequest: number;
+  } | null>(null);
+  const [findTarget, setFindTarget] = useState<ThreadFindTarget | null>(null);
+  const threadFindOpen = routeKind === "server" && threadFind?.threadKey === routeThreadKey;
+  const openThreadFindBar = useCallback(() => {
+    if (routeKind !== "server") return;
+    setThreadFind((current) => ({
+      threadKey: routeThreadKey,
+      focusRequest: (current?.focusRequest ?? 0) + 1,
+    }));
+  }, [routeKind, routeThreadKey]);
+  useEffect(() => onOpenThreadFind(openThreadFindBar), [openThreadFindBar]);
   const currentRouteThreadKeyRef = useRef<string | null>(routeThreadKey);
   useLayoutEffect(() => {
     currentRouteThreadKeyRef.current = routeThreadKey;
@@ -1735,6 +1753,20 @@ export default function ChatView(props: ChatViewProps) {
       hasMoreHistory: serverThreadHistory.hasMoreHistory,
       loading: serverThreadHistory.loading,
       error: serverThreadHistory.error,
+      onLoadEarlier: () => {
+        void loadEarlierThreadHistory({
+          environmentId: routeThreadDetailRef.environmentId,
+          input: { threadId: routeThreadDetailRef.threadId },
+        });
+      },
+    };
+  }, [loadEarlierThreadHistory, routeThreadDetailRef, serverThreadHistory]);
+  // Citations and find load older pages until their message arrives.
+  const loadEarlierHistoryPage = useMemo<CitationHistoryPage | null>(() => {
+    if (routeThreadDetailRef === null || !serverThreadHistory.hasMoreHistory) return null;
+    return {
+      loading: serverThreadHistory.loading,
+      cursor: serverThreadHistory.historyCursor,
       onLoadEarlier: () => {
         void loadEarlierThreadHistory({
           environmentId: routeThreadDetailRef.environmentId,
@@ -7968,6 +8000,20 @@ export default function ChatView(props: ChatViewProps) {
       });
       if (!command) return;
 
+      if (command === "thread.find") {
+        // Right panel surfaces such as diffs and files have their own find.
+        if (
+          event.target instanceof Element &&
+          event.target.closest("[data-right-panel-surface-content]")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        openThreadFindBar();
+        return;
+      }
+
       if (command === "thread.copyReference") {
         event.preventDefault();
         event.stopPropagation();
@@ -8247,6 +8293,7 @@ export default function ChatView(props: ChatViewProps) {
     supportsSettlement,
     confirmAndUnpinThread,
     copyActiveThreadReference,
+    openThreadFindBar,
     getShortcutContext,
     toggleRightPanel,
     toggleThreadPanel,
@@ -11285,7 +11332,9 @@ export default function ChatView(props: ChatViewProps) {
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 citationRequest={paintOnlyDisplayedTimeline ? null : citationRequest}
+                findTarget={threadFindOpen && !paintOnlyDisplayedTimeline ? findTarget : null}
                 citationHistoryLoading={threadDetailLoading}
+                loadEarlier={paintOnlyDisplayedTimeline ? null : loadEarlierHistoryPage}
                 {...(!paintOnlyDisplayedTimeline
                   ? {
                       onCiteAssistantText: citeAssistantText,
@@ -11388,6 +11437,19 @@ export default function ChatView(props: ChatViewProps) {
                   ? {}
                   : { historyControls: threadHistoryControls })}
               />
+              {threadFindOpen && threadFind && !paintOnlyDisplayedTimeline ? (
+                <ThreadFindBar
+                  key={routeThreadKey}
+                  threadRef={routeThreadRef}
+                  revision={displayedTimeline.entries.length}
+                  focusRequest={threadFind.focusRequest}
+                  onTarget={setFindTarget}
+                  onClose={() => {
+                    setThreadFind(null);
+                    focusComposer();
+                  }}
+                />
+              ) : null}
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {showScrollToBottom && (

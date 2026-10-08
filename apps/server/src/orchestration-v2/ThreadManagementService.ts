@@ -8,6 +8,8 @@ import {
   CommandId,
   MessageId,
   type ModelSelection,
+  type OrchestrationFindInThreadInput,
+  type OrchestrationFindInThreadResult,
   type OrchestrationV2Actor,
   type OrchestrationV2Command,
   type OrchestrationV2GetTurnItemResult,
@@ -22,9 +24,11 @@ import {
   ProjectId,
   RunId,
   type ScheduledTaskId,
+  THREAD_FIND_MAX_MESSAGES,
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
+import { findTextOccurrences } from "@t3tools/shared/String";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -279,6 +283,10 @@ export interface ThreadManagementServiceShape {
   ) => Effect.Effect<Orchestrator.OrchestratorV2DispatchResult, Orchestrator.OrchestratorV2Error>;
   readonly getTimelinePage: Orchestrator.OrchestratorV2["Service"]["getTimelinePage"];
   readonly getMessageCount: Orchestrator.OrchestratorV2["Service"]["getMessageCount"];
+  /** Messages that contain `query`, with how often, for find in the open thread. */
+  readonly findInThread: (
+    input: OrchestrationFindInThreadInput,
+  ) => Effect.Effect<OrchestrationFindInThreadResult, Orchestrator.OrchestratorV2Error>;
   /**
    * One turn item with the input and output the thread stream withholds,
    * bounded for the wire. Clients fetch it when a tool row is expanded.
@@ -867,6 +875,22 @@ const make = Effect.gen(function* () {
     getMessageCount: (threadId) =>
       ensureProjectionTranscript(threadId).pipe(
         Effect.andThen(orchestrator.getMessageCount(threadId)),
+      ),
+    findInThread: ({ threadId, query }) =>
+      ensureProjectionTranscript(threadId).pipe(
+        Effect.andThen(
+          orchestrator.getTimelinePage(threadId, { query, limit: THREAD_FIND_MAX_MESSAGES }),
+        ),
+        Effect.map((page) => ({
+          matches: page.items.flatMap(({ item }) => {
+            if (item.type !== "user_message" && item.type !== "assistant_message") return [];
+            // The web folds a question's answer into its card, out of find's reach.
+            if (item.messageId.startsWith("async-answer:")) return [];
+            const count = findTextOccurrences(item.text, query).length;
+            return count > 0 ? [{ messageId: item.messageId, count }] : [];
+          }),
+          truncated: page.hasMore,
+        })),
       ),
     getTurnItem: (input) =>
       ensureProjectionTranscript(input.threadId).pipe(

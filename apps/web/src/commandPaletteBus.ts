@@ -37,3 +37,24 @@ export function isCommandPaletteOpen(): boolean {
     typeof document !== "undefined" && document.querySelector("[data-command-palette]") !== null
   );
 }
+
+const THREAD_FIND_OPEN_EVENT = "t3code:open-thread-find";
+let threadFindFocusPending = false;
+
+/** Opens find in the open thread. The palette hands it focus when it closes. */
+export function openThreadFind(): void {
+  threadFindFocusPending = true;
+  window.dispatchEvent(new CustomEvent(THREAD_FIND_OPEN_EVENT));
+}
+
+export function onOpenThreadFind(listener: () => void): () => void {
+  window.addEventListener(THREAD_FIND_OPEN_EVENT, listener);
+  return () => window.removeEventListener(THREAD_FIND_OPEN_EVENT, listener);
+}
+
+/** The find input, once, when the palette's last action opened find. */
+export function takeThreadFindFocusTarget(): HTMLElement | null {
+  if (!threadFindFocusPending) return null;
+  threadFindFocusPending = false;
+  return document.querySelector<HTMLElement>("[data-thread-find-input]");
+}

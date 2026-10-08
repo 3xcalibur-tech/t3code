@@ -2,6 +2,8 @@ import * as Schema from "effect/Schema";
 
 import {
   IsoDateTime,
+  MessageId,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -40,3 +42,23 @@ export class OrchestrationSearchThreadsError extends Schema.TaggedError<Orchestr
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/** At most this many matching messages come back. When more match, the newest are kept. */
+export const THREAD_FIND_MAX_MESSAGES = 1000;
+
+// Matching is ASCII case-insensitive, the same as the thread search above.
+export const OrchestrationFindInThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  query: TrimmedString.check(Schema.isMinLength(1), Schema.isMaxLength(200)),
+});
+export type OrchestrationFindInThreadInput = typeof OrchestrationFindInThreadInput.Type;
+
+/** Matching user and assistant messages in timeline order, including inherited fork history. */
+export const OrchestrationFindInThreadResult = Schema.Struct({
+  matches: Schema.Array(Schema.Struct({ messageId: MessageId, count: PositiveInt })).check(
+    Schema.isMaxLength(THREAD_FIND_MAX_MESSAGES),
+  ),
+  /** True when older matching messages were left out. */
+  truncated: Schema.Boolean,
+});
+export type OrchestrationFindInThreadResult = typeof OrchestrationFindInThreadResult.Type;

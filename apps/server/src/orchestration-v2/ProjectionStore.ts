@@ -5,6 +5,7 @@ import {
   usageLimitRunPresentedAsLatest,
 } from "@t3tools/shared/orchestrationV2ThreadError";
 import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
+import { foldAsciiCase } from "@t3tools/shared/String";
 import type {
   OrchestrationV2AppThread,
   OrchestrationV2CheckpointScope,
@@ -300,6 +301,11 @@ export interface ProjectionTimelinePageOptions {
   readonly afterPosition?: number;
   readonly itemId?: TurnItemId;
   readonly view?: "messages" | "activity";
+  /**
+   * Keeps only user and assistant messages whose text contains it, ASCII
+   * case-insensitive. The page then holds the newest `limit` matches.
+   */
+  readonly query?: string;
   readonly limit: number;
 }
 export interface ProjectionTimelinePage {
@@ -4819,23 +4825,48 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+    // One scan per thread in the fork chain. Keys are `${sourceThreadId}\0${sourceItemId}`.
+    const readTextMatches = (rows: ReadonlyArray<TimelineIndexRow>, query: string) =>
+      Effect.gen(function* () {
+        const pattern = foldAsciiCase(query);
+        const matches = new Set<string>();
+        for (const sourceThreadId of new Set(rows.map((row) => row.sourceThreadId))) {
+          const found = yield* sql<{ readonly turn_item_id: string }>`
+            SELECT turn_item_id FROM orchestration_v2_projection_turn_items
+            WHERE thread_id = ${sourceThreadId}
+              AND type IN ('user_message', 'assistant_message')
+              AND instr(lower(json_extract(payload_json, '$.text')), ${pattern}) > 0`;
+          for (const row of found) matches.add(`${sourceThreadId}\u0000${row.turn_item_id}`);
+        }
+        return matches;
+      });
+
     const getTimelinePage: ProjectionStoreV2Shape["getTimelinePage"] = (threadId, options) =>
       sql
         .withTransaction(
           Effect.gen(function* () {
             const index = yield* readTimelineIndex(threadId, new Set());
+            const textMatches =
+              options.query === undefined
+                ? null
+                : yield* readTextMatches(index.visible, options.query);
             const matching = index.visible
               .map((row, position) => ({ ...row, position }))
               .filter((row) =>
                 options.itemId === undefined
                   ? row.position > (options.afterPosition ?? -1) &&
-                    (options.view === "activity" ||
-                      ["user_message", "assistant_message", "proposed_plan"].includes(
-                        row.item.type,
-                      ))
+                    (textMatches === null
+                      ? options.view === "activity" ||
+                        ["user_message", "assistant_message", "proposed_plan"].includes(
+                          row.item.type,
+                        )
+                      : textMatches.has(`${row.sourceThreadId}\u0000${row.sourceItemId}`))
                   : row.sourceItemId === options.itemId,
               );
-            const page = matching.slice(0, options.limit);
+            const page =
+              textMatches === null
+                ? matching.slice(0, options.limit)
+                : matching.slice(Math.max(0, matching.length - options.limit));
             const items = yield* Effect.forEach(page, (row) =>
               Effect.gen(function* () {
                 if (row.synthetic !== undefined)
@@ -6317,15 +6348,22 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
       getTimelinePage: (threadId, options) =>
         service.getThreadProjection(threadId).pipe(
           Effect.map((projection) => {
+            const query = options.query === undefined ? null : foldAsciiCase(options.query);
             const matching = projection.visibleTurnItems.filter((row) =>
               options.itemId === undefined
                 ? row.position > (options.afterPosition ?? -1) &&
-                  (options.view === "activity" ||
-                    ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
+                  (query === null
+                    ? options.view === "activity" ||
+                      ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type)
+                    : (row.item.type === "user_message" || row.item.type === "assistant_message") &&
+                      foldAsciiCase(row.item.text).includes(query))
                 : row.sourceItemId === options.itemId,
             );
             return {
-              items: matching.slice(0, options.limit),
+              items:
+                query === null
+                  ? matching.slice(0, options.limit)
+                  : matching.slice(Math.max(0, matching.length - options.limit)),
               totalItems: projection.visibleTurnItems.length,
               hasMore: matching.length > options.limit,
             };

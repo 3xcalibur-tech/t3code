@@ -3995,6 +3995,31 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ],
       );
 
+      // Find reads the same visible history: the fork keeps its inherited copy
+      // of the rolled-back run, while the source thread no longer shows it.
+      const messageTexts = (page: {
+        readonly items: typeof targetAfterRollback.visibleTurnItems;
+      }) =>
+        page.items.map(({ item }) =>
+          item.type === "user_message" || item.type === "assistant_message" ? item.text : null,
+        );
+      const forkFind = yield* projectionStore.getTimelinePage(targetThreadId, {
+        query: "TWO",
+        limit: 10,
+      });
+      assert.deepEqual(messageTexts(forkFind), ["source two", "two"]);
+      const sourceFind = yield* projectionStore.getTimelinePage(sourceThreadId, {
+        query: "two",
+        limit: 10,
+      });
+      assert.deepEqual(sourceFind.items, []);
+      const newestFind = yield* projectionStore.getTimelinePage(targetThreadId, {
+        query: "o",
+        limit: 1,
+      });
+      assert.deepEqual(messageTexts(newestFind), ["two"]);
+      assert.isTrue(newestFind.hasMore);
+
       yield* projectionStore.apply({
         id: EventId.make("event:projection-fork-source-rollback:run-3"),
         type: "run.updated",

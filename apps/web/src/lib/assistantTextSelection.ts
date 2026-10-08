@@ -1,4 +1,5 @@
 import { ASSISTANT_CITATION_CONTEXT_LENGTH, type AssistantCitation } from "@t3tools/contracts";
+import { findTextOccurrences } from "@t3tools/shared/String";
 
 export type AssistantTextSelector = {
   readonly text: string;
@@ -279,4 +280,19 @@ export function resolveAssistantCitationRange(
   range.setStart(first.node, Math.max(0, start - first.start));
   range.setEnd(last.node, Math.min(last.node.length, end - last.start));
   return isUsableRange(root, range) ? range : null;
+}
+
+/** Every occurrence of `query` in the rendered text, ASCII case-insensitive, for find. */
+export function findTextRanges(root: HTMLElement, query: string): Range[] {
+  const stream = readAssistantText(root);
+  return findTextOccurrences(stream.text, query).flatMap((start) => {
+    const end = start + query.length;
+    const first = stream.chunks.find((chunk) => chunk.end > start);
+    const last = stream.chunks.findLast((chunk) => chunk.start < end);
+    if (first === undefined || last === undefined) return [];
+    const range = root.ownerDocument.createRange();
+    range.setStart(first.node, Math.max(0, start - first.start));
+    range.setEnd(last.node, Math.min(last.node.length, end - last.start));
+    return [range];
+  });
 }

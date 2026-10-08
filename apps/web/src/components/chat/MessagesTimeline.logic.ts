@@ -892,6 +892,36 @@ function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
 }
 
 /**
+ * The turn and superseded-attempt folds that can hide a message, for find to
+ * open. User messages never fold. Mirrors `deriveTurnFolds`.
+ */
+export function timelineMessageFolds(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+  messageId: string,
+): { readonly runId: RunId | null; readonly attemptId: RunAttemptId | null } {
+  let runlessKey: RunId | null = null;
+  for (const entry of timelineEntries) {
+    if (timelineEntryStartsResponse(entry)) {
+      const boundaryRunId =
+        entry.kind === "message"
+          ? entry.message.runId
+          : entry.kind === "work"
+            ? entry.entry.runId
+            : null;
+      runlessKey = boundaryRunId == null ? RunId.make(`runless:${entry.id}`) : null;
+    }
+    if (entry.kind === "message" && entry.message.id === messageId) {
+      if (entry.message.role === "user") break;
+      return {
+        runId: timelineEntryFoldRunId(entry, runlessKey),
+        attemptId: entry.attempt?.status === "superseded" ? entry.attempt.id : null,
+      };
+    }
+  }
+  return { runId: null, attemptId: null };
+}
+
+/**
  * A promptless provider restart replaces the native turn without adding a
  * user message. Keep every provider turn since the initiating prompt in one
  * visual response until the replacement turn settles. Steers keep that

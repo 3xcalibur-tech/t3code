@@ -38,6 +38,7 @@ import {
   threadReadLabelPrefix,
   threadReadTargetId,
   threadReadTargetTitle,
+  timelineMessageFolds,
   type MessagesTimelineRow,
   resolveTimelineToolPresentation,
   workEntryDisplayLabel,
@@ -5195,5 +5196,56 @@ describe("shouldCollapseUserMessage", () => {
 
     expect(text.length).toBeGreaterThan(600);
     expect(shouldCollapseUserMessage(text)).toBe(false);
+  });
+});
+
+describe("timelineMessageFolds", () => {
+  const at = "2026-01-01T00:00:00Z";
+  const message = (
+    id: string,
+    role: "user" | "assistant",
+    runId: RunId | null,
+    extra: Partial<Extract<TimelineEntry, { kind: "message" }>> = {},
+  ): TimelineEntry => ({
+    id,
+    kind: "message",
+    createdAt: at,
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: id,
+      runId,
+      createdAt: at,
+      updatedAt: at,
+      streaming: false,
+    },
+    ...extra,
+  });
+
+  it("opens the runless fold that a prompt lends its reply", () => {
+    const entries = [message("prompt", "user", null), message("reply", "assistant", null)];
+    expect(timelineMessageFolds(entries, "reply")).toEqual({
+      runId: RunId.make("runless:prompt"),
+      attemptId: null,
+    });
+    expect(timelineMessageFolds(entries, "prompt")).toEqual({ runId: null, attemptId: null });
+  });
+
+  it("opens the superseded attempt that hides a reply", () => {
+    const runId = RunId.make("run");
+    const attemptId = RunAttemptId.make("old-attempt");
+    const entries = [
+      message("prompt", "user", runId),
+      message("reply", "assistant", runId, {
+        attempt: {
+          id: attemptId,
+          runId,
+          status: "superseded",
+          attemptOrdinal: 0,
+          rootNodeId: NodeId.make("old-root"),
+        },
+      }),
+    ];
+    expect(timelineMessageFolds(entries, "reply")).toEqual({ runId, attemptId });
   });
 });
