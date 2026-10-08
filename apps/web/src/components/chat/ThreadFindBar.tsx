@@ -115,7 +115,13 @@ export function ThreadFindBar({
           event.preventDefault();
           event.stopPropagation();
           onClose();
-        } else if (event.key === "Enter" && event.target === inputRef.current) {
+        } else if (
+          event.key === "Enter" &&
+          event.target === inputRef.current &&
+          // Enter that confirms an IME candidate belongs to the query.
+          !event.nativeEvent.isComposing &&
+          event.keyCode !== 229
+        ) {
           event.preventDefault();
           move(event.shiftKey ? 1 : -1);
         }
