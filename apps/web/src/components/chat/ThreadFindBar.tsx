@@ -11,6 +11,8 @@ import type { ThreadFindTarget } from "./useThreadFindTarget";
 
 const FIND_DEBOUNCE_MS = 150;
 const NO_MATCHES = [] as const;
+// Target keys stay unique across reopenings, so a past navigation never looks finished.
+let findSessions = 0;
 
 /**
  * Cmd+F for the open thread. The server searches the whole saved history,
@@ -36,6 +38,7 @@ export function ThreadFindBar({
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState<ThreadFindPosition | null>(null);
   const [navigation, setNavigation] = useState(0);
+  const [session] = useState(() => ++findSessions);
   const settledQuery = useDebouncedValue(query.trim(), FIND_DEBOUNCE_MS);
   const result = useEnvironmentQuery(
     settledQuery
@@ -75,10 +78,10 @@ export function ThreadFindBar({
             messageId,
             occurrence,
             query: settledQuery,
-            key: `${settledQuery}\u0000${messageId}\u0000${occurrence}\u0000${navigation}`,
+            key: `${session}\u0000${settledQuery}\u0000${messageId}\u0000${occurrence}\u0000${navigation}`,
           }
         : null,
-    [messageId, navigation, occurrence, settledQuery],
+    [messageId, navigation, occurrence, session, settledQuery],
   );
   useEffect(() => onTarget(target), [onTarget, target]);
   useEffect(() => () => onTarget(null), [onTarget]);
