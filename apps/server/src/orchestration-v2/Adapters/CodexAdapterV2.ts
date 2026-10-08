@@ -65,6 +65,7 @@ import type {
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -657,6 +658,8 @@ const decodeCodexTurnStartParamsWithCollaborationMode = Schema.decodeUnknownEffe
 const CODEX_LUNA_RESERVE_MODEL = "gpt-reserve";
 /** The TUI's fallback normal model when the backend names none (tui/src/model_catalog.rs:8). */
 const CODEX_LUNA_MODEL = "gpt-6-luna";
+const CODEX_LUNA_RESERVE_READ_TIMEOUT = "3 seconds";
+const CODEX_LUNA_RESERVE_READ_BACKOFF_MS = 30_000;
 
 // Only the fields the TUI's fallback reads (tui/src/backend_banners.rs:18-36); other banners decode to none.
 const decodeCodexLunaReserveBanner = Schema.decodeUnknownOption(
@@ -1823,18 +1826,33 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         // so the next turn enters or leaves it. Ordinary sessions never pay for the read.
         const lunaReserve = yield* Ref.make<CodexLunaReserve | null>(null);
         const lunaReserveReadArmed = yield* Ref.make(false);
+        // Threads on this app-server start turns concurrently; one read at a
+        // time keeps a stale response from overwriting a newer one.
+        const lunaReservePermit = yield* Semaphore.make(1);
+        // A slow usage endpoint would otherwise cost every turn start the full timeout.
+        const lunaReserveReadPausedUntil = yield* Ref.make(0);
         const refreshLunaReserve = Effect.gen(function* () {
           if (!(yield* Ref.get(lunaReserveReadArmed)) && (yield* Ref.get(lunaReserve)) === null) {
             return;
           }
+          if ((yield* Clock.currentTimeMillis) < (yield* Ref.get(lunaReserveReadPausedUntil))) {
+            return;
+          }
           const response = yield* client
             .request("account/rateLimits/read", { supportsLunaReserve: true })
-            .pipe(Effect.timeoutOption("3 seconds"));
-          if (Option.isNone(response)) return;
+            .pipe(Effect.timeoutOption(CODEX_LUNA_RESERVE_READ_TIMEOUT));
+          if (Option.isNone(response)) {
+            yield* Ref.set(
+              lunaReserveReadPausedUntil,
+              (yield* Clock.currentTimeMillis) + CODEX_LUNA_RESERVE_READ_BACKOFF_MS,
+            );
+            return;
+          }
           yield* Ref.set(lunaReserveReadArmed, false);
           const next = codexLunaReserveFromRead(response.value);
           if (next !== undefined) yield* Ref.set(lunaReserve, next);
         }).pipe(
+          lunaReservePermit.withPermit,
           Effect.catch((cause) =>
             Effect.logDebug("Codex Luna Reserve usage read failed.", { cause }),
           ),
@@ -5707,6 +5725,15 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   ...(providerRetry === undefined ? {} : { providerRetry }),
                   ...(holdsForGoal ? { goalHoldTurn: completedTurn } : {}),
                 });
+              } else if (
+                input.status === "failed" &&
+                (input.failureCode === "usageLimitExceeded" ||
+                  input.failureCode === "rateLimitExceeded" ||
+                  (input.context.latestProviderFailure ?? providerRetry)?.failure.class ===
+                    "usage_limit")
+              ) {
+                // A subagent draws on the same account quota as its root thread.
+                yield* Ref.set(lunaReserveReadArmed, true);
               }
               const waiter = (yield* Ref.get(turnWaiters)).get(input.nativeTurnId);
               if (waiter !== undefined) {
