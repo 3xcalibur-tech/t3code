@@ -23,7 +23,10 @@ public enum OrchestrationV2Presentation {
     }
 
     public static func shellSnapshot(_ json: JSONValue) throws -> OrchestrationShellSnapshot {
-        let snapshot = try json.decode(OrchestrationV2ShellSnapshot.self)
+        try shellSnapshot(json.decode(OrchestrationV2ShellSnapshot.self))
+    }
+
+    public static func shellSnapshot(_ snapshot: OrchestrationV2ShellSnapshot) throws -> OrchestrationShellSnapshot {
         guard snapshot.snapshotSequence >= 0, snapshot.schemaVersion > 0 else {
             throw OrchestrationV2StateError.invalidPayload("shell sequence")
         }
