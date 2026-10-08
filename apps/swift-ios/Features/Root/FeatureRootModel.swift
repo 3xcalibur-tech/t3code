@@ -1667,22 +1667,7 @@ public final class FeatureRootModel {
         let id = incoming.thread.id
         acknowledgeDeliveredMessages(incoming)
         let prepared = addingPendingMessages(to: incoming)
-        let next = details[id].map { current in
-            FeatureThreadDetail(
-                thread: prepared.thread,
-                messages: replacingChangedSuffix(current.messages, with: prepared.messages),
-                approvals: replacingChangedSuffix(current.approvals, with: prepared.approvals),
-                userInputs: replacingChangedSuffix(current.userInputs, with: prepared.userInputs),
-                page: prepared.page,
-                activeSubagentCount: prepared.activeSubagentCount,
-                backgroundWorkIsActive: prepared.backgroundWorkIsActive,
-                isCompacting: prepared.isCompacting == true,
-                execution: prepared.execution,
-                workflows: prepared.workflows,
-                allowsProviderSwitch: prepared.allowsProviderSwitch,
-                recovery: prepared.recovery
-            )
-        } ?? prepared
+        let next = details[id].map { $0.mergingChangedSuffix(from: prepared) } ?? prepared
         guard details[id] != next else { return }
         details[id] = next
         markDetailRecentlyUsed(id)
@@ -1800,19 +1785,6 @@ public final class FeatureRootModel {
             revision: detailRevision,
             change: change
         )
-    }
-
-    private func replacingChangedSuffix<Element: Equatable>(
-        _ current: [Element],
-        with incoming: [Element]
-    ) -> [Element] {
-        guard current != incoming else { return current }
-        let prefixCount = zip(current, incoming).prefix { pair in
-            pair.0 == pair.1
-        }.count
-        var result = current
-        result.replaceSubrange(prefixCount..., with: incoming.dropFirst(prefixCount))
-        return result
     }
 
     private func restoreOutbox() async {

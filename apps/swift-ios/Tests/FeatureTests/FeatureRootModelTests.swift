@@ -17,6 +17,25 @@ struct FeatureRootModelTests {
     }
 
     @Test
+    func detailMergeTakesIncomingValuesAndNormalizesCompaction() {
+        let thread = FeatureThread(id: "thread", projectID: "project", title: "Task")
+        let kept = FeatureMessage(id: "user", role: .user, text: "Build the app")
+        let current = FeatureThreadDetail(
+            thread: thread,
+            messages: [kept, .init(id: "reply", role: .assistant, text: "Work")]
+        )
+        var incoming = FeatureThreadDetail(
+            thread: thread,
+            messages: [kept, .init(id: "reply", role: .assistant, text: "Working")],
+            activeSubagentCount: 2
+        )
+        incoming.isCompacting = nil
+        var expected = incoming
+        expected.isCompacting = false
+        #expect(current.mergingChangedSuffix(from: incoming) == expected)
+    }
+
+    @Test
     func readOnlyV2ConversationRejectsSendBeforeOutboxInsertion() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

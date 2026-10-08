@@ -6449,7 +6449,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
         if restoredDetailIDs.remove(threadID) != nil { latestDetails[threadID] = nil }
         let next = latestDetails[threadID].map { current in
-            mergedDetail(current: current, incoming: detail)
+            current.mergingChangedSuffix(from: detail)
         } ?? detail
         guard latestDetails[threadID] != next else { return }
         latestDetails[threadID] = next
@@ -6512,39 +6512,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             changedMessages: changedMessages,
             appendedMessageIDs: appendedMessageIDs
         )
-    }
-
-    private func mergedDetail(
-        current: FeatureThreadDetail,
-        incoming: FeatureThreadDetail
-    ) -> FeatureThreadDetail {
-        FeatureThreadDetail(
-            thread: incoming.thread,
-            messages: replacingChangedSuffix(current.messages, with: incoming.messages),
-            approvals: replacingChangedSuffix(current.approvals, with: incoming.approvals),
-            userInputs: replacingChangedSuffix(current.userInputs, with: incoming.userInputs),
-            page: incoming.page,
-            activeSubagentCount: incoming.activeSubagentCount,
-            backgroundWorkIsActive: incoming.backgroundWorkIsActive,
-            isCompacting: incoming.isCompacting == true,
-            execution: incoming.execution,
-            workflows: incoming.workflows,
-            allowsProviderSwitch: incoming.allowsProviderSwitch,
-            recovery: incoming.recovery
-        )
-    }
-
-    private func replacingChangedSuffix<Element: Equatable>(
-        _ current: [Element],
-        with incoming: [Element]
-    ) -> [Element] {
-        guard current != incoming else { return current }
-        let prefixCount = zip(current, incoming).prefix { pair in
-            pair.0 == pair.1
-        }.count
-        var result = current
-        result.replaceSubrange(prefixCount..., with: incoming.dropFirst(prefixCount))
-        return result
     }
 
     private func disconnectedSnapshot(
