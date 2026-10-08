@@ -50,7 +50,9 @@ export function ThreadFindBar({
   );
   const matches = result.data?.matches ?? NO_MATCHES;
   const { index, total } = useMemo(() => threadFindIndex(matches, position), [matches, position]);
-  const pending = query.trim() !== settledQuery || result.isPending;
+  // Matches belong to the previous query until the new one settles.
+  const stale = query.trim() !== settledQuery;
+  const pending = stale || result.isPending;
 
   const focusedRequestRef = useRef<number | null>(null);
   useEffect(() => {
@@ -73,11 +75,7 @@ export function ThreadFindBar({
   const occurrence = current?.occurrence;
   const target = useMemo<ThreadFindTarget | null>(
     () =>
-      // Matches for an older query must not move the view while the new one debounces.
-      query.trim() === settledQuery &&
-      messageId !== undefined &&
-      occurrence !== undefined &&
-      settledQuery
+      !stale && messageId !== undefined && occurrence !== undefined && settledQuery
         ? {
             messageId,
             occurrence,
@@ -85,13 +83,13 @@ export function ThreadFindBar({
             key: `${session}\u0000${settledQuery}\u0000${messageId}\u0000${occurrence}\u0000${navigation}`,
           }
         : null,
-    [messageId, navigation, occurrence, query, session, settledQuery],
+    [messageId, navigation, occurrence, session, settledQuery, stale],
   );
   useEffect(() => onTarget(target), [onTarget, target]);
   useEffect(() => () => onTarget(null), [onTarget]);
 
   const move = (step: -1 | 1) => {
-    if (total === 0) return;
+    if (total === 0 || stale) return;
     setPosition(threadFindPosition(matches, (index + step + total) % total));
     setNavigation((count) => count + 1);
   };
@@ -155,7 +153,7 @@ export function ThreadFindBar({
         size="icon-xs"
         aria-label="Older match"
         title="Older match (Enter)"
-        disabled={total === 0}
+        disabled={total === 0 || stale}
         onClick={() => move(-1)}
       >
         <ChevronUpIcon />
@@ -165,7 +163,7 @@ export function ThreadFindBar({
         size="icon-xs"
         aria-label="Newer match"
         title="Newer match (Shift+Enter)"
-        disabled={total === 0}
+        disabled={total === 0 || stale}
         onClick={() => move(1)}
       >
         <ChevronDownIcon />
