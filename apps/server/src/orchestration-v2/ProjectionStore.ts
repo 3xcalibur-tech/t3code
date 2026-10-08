@@ -458,6 +458,11 @@ export interface ProjectionStoreV2Shape {
     threadId: ThreadId,
     targetInstanceId?: ProviderInstanceId,
   ) => Effect.Effect<ProjectionThreadProviderContext, ProjectionStoreV2Error>;
+  /** Whether a provider session is also bound to a thread other than `threadId`. */
+  readonly isProviderSessionShared: (
+    threadId: ThreadId,
+    providerSessionId: ProviderSessionId,
+  ) => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly getRuntimeResponseContext: (
     threadId: ThreadId,
     requestId: RuntimeRequestId,
@@ -4418,6 +4423,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError(controlReadError(threadId)));
 
+    const isProviderSessionShared: ProjectionStoreV2Shape["isProviderSessionShared"] = (
+      threadId,
+      providerSessionId,
+    ) =>
+      sql<{ readonly shared: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_provider_session_bindings
+          WHERE provider_session_id = ${providerSessionId} AND thread_id <> ${threadId}
+        ) AS shared
+      `.pipe(
+        Effect.map((rows) => rows[0]?.shared === 1),
+        Effect.mapError(controlReadError(threadId)),
+      );
+
     const getRuntimeResponseContext: ProjectionStoreV2Shape["getRuntimeResponseContext"] = (
       threadId,
       requestId,
@@ -5725,6 +5744,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRuntimeRecoveryProjection,
       getRunningTurnContext,
       getThreadProviderContext,
+      isProviderSessionShared,
       getRuntimeResponseContext,
       getCheckpointContext,
       getCheckpointCaptureContext,
@@ -6112,6 +6132,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           };
         }),
+      isProviderSessionShared: (threadId, providerSessionId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...(state.providerSessionThreadIds.get(providerSessionId) ?? [])].some(
+              (boundThreadId) => boundThreadId !== threadId,
+            ),
+          ),
+        ),
       getThreadProviderContext: (threadId, targetInstanceId) =>
         Effect.gen(function* () {
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);

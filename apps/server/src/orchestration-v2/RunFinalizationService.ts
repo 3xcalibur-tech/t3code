@@ -9,7 +9,6 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -172,19 +171,25 @@ export const layerObserver = Layer.effect(
     // branch as the thread's branch, but only while the worktree still
     // belongs to exactly this thread. For a shared worktree, whose branch it
     // is would be ambiguous, so leave the stamp alone.
+    // Returns whether it dispatched the follow.
     const followBranchDrift = Effect.fn("RunFinalizationService.followBranchDrift")(function* (
       thread: OrchestrationV2ThreadShell,
+      cwd: string,
       refName: string,
       runId: RunId,
     ) {
       // No branch to compare-and-swap against, no dedicated worktree to own
-      // exclusively, or the first-turn auto-rename is still in flight.
+      // exclusively, the first-turn auto-rename is still in flight, or `cwd`
+      // is not the thread's worktree. The last one happens when
+      // followWorktreeMove just moved the thread out of the checkpoint cwd:
+      // that cwd's branch belongs to where the thread was, not where it is.
       if (
         thread.branch === null ||
         thread.worktreePath === null ||
+        thread.worktreePath !== cwd ||
         isTemporaryWorktreeBranch(refName)
       ) {
-        return;
+        return false;
       }
       yield* threads
         .dispatch({
@@ -210,6 +215,7 @@ export const layerObserver = Layer.effect(
             }),
           ),
         );
+      return true;
     });
 
     // The provider session's own cwd (tracked live by the adapter, e.g. from
@@ -229,16 +235,26 @@ export const layerObserver = Layer.effect(
         const thread = yield* projections.getThreadShell(threadId);
         if (!thread) return;
         if (thread.activeRunId !== null && thread.activeRunId !== runId) return;
-        const providerContext = yield* projections.getThreadProviderContext(threadId);
-        // Most recently updated, not last in array order: ProjectionStoreV2's
-        // SQL path already returns these ordered by updated_at, but
-        // layerMemory does not, so picking explicitly here works under both.
-        const liveCwd = providerContext.providerSessions
-          .toSorted(
-            (a, b) => DateTime.toEpochMillis(a.updatedAt) - DateTime.toEpochMillis(b.updatedAt),
-          )
-          .at(-1)?.cwd;
+        if (thread.activeProviderThreadId === null) return;
+        // The session this thread's own provider thread runs on, not just any
+        // session bound to the thread: a thread can stay bound to sessions
+        // opened elsewhere, whose cwd says nothing about where this agent is.
+        const providerContext = yield* projections.getThreadProviderContext(
+          threadId,
+          thread.providerInstanceId,
+        );
+        const providerSessionId = providerContext.providerThreads.find(
+          (providerThread) => providerThread.id === thread.activeProviderThreadId,
+        )?.providerSessionId;
+        if (providerSessionId == null) return;
+        const liveCwd = providerContext.providerSessions.find(
+          (session) => session.id === providerSessionId,
+        )?.cwd;
         if (liveCwd === undefined) return;
+        // A shared session has one cwd for every thread on it, so a move may
+        // have been another thread's. Leave the location alone rather than
+        // guess.
+        if (yield* projections.isProviderSessionShared(threadId, providerSessionId)) return;
         const project = yield* projects.getById(thread.projectId);
         if (Option.isNone(project)) return;
         const recordedCwd = thread.worktreePath ?? project.value.workspaceRoot;
@@ -313,10 +329,13 @@ export const layerObserver = Layer.effect(
           if (!thread) return;
           if (thread.activeRunId !== null && thread.activeRunId !== runId) return;
           if (thread.branch !== local.refName) {
-            yield* followBranchDrift(thread, local.refName, runId);
+            // After following, the cached PR still belongs to the previous
+            // branch. Re-resolve it below, default branch included, so the
+            // toolbar never pairs the new branch with the old branch's PR.
+            if (!(yield* followBranchDrift(thread, cwd, local.refName, runId))) return;
+          } else if (local.isDefaultRef) {
             return;
           }
-          if (local.isDefaultRef) return;
           yield* vcsStatus.refreshPullRequestStatus(cwd).pipe(
             Effect.catch((error) =>
               Effect.logWarning("failed to refresh pull request status after run completion", {

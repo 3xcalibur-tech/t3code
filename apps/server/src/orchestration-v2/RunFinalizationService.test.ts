@@ -6,7 +6,6 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -198,11 +197,22 @@ it.effect.each(
         checkedOut: "main",
         expectDispatch: true,
       },
+      {
+        // #11078 review: followWorktreeMove runs first and may have just
+        // moved the thread out of the checkpoint cwd. That cwd's branch is
+        // where the thread was, so it must not overwrite the new branch.
+        label: "does not follow drift in a checkout the thread already moved out of",
+        branch: "feature",
+        worktreePath: "/repo/.claude/worktrees/feature",
+        checkedOut: "main",
+        expectDispatch: false,
+      },
     ] as const
   ).map((scenario) => [scenario.label, scenario] as const),
 )("%s", ([, scenario]) => {
   const threadId = ThreadId.make("thread-branch-drift");
   const runId = RunId.make("completed-run");
+  const refreshedPullRequests: string[] = [];
   const dispatch = vi.fn(
     (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
       Effect.succeed({ sequence: 1, storedEvents: [] }),
@@ -224,8 +234,11 @@ it.effect.each(
               hasWorkingTreeChanges: false,
               workingTree: { files: [], insertions: 0, deletions: 0 },
             }),
-          refreshPullRequestStatus: () =>
-            Effect.die("a drifted branch must not refresh the stale branch's PR"),
+          refreshPullRequestStatus: (cwd) =>
+            Effect.sync(() => {
+              refreshedPullRequests.push(cwd);
+              return null;
+            }),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadShell: () =>
@@ -245,6 +258,9 @@ it.effect.each(
     const observer = yield* RunFinalization.RunFinalizationObserver;
     yield* observer.refresh({ cwd: "/repo", threadId, runId });
     assert.equal(dispatch.mock.calls.length, scenario.expectDispatch ? 1 : 0);
+    // A followed drift re-resolves the PR so the cache stops pairing the new
+    // branch with the previous branch's PR (#11078 review).
+    assert.deepEqual(refreshedPullRequests, scenario.expectDispatch ? ["/repo"] : []);
     const dispatched = dispatch.mock.calls[0]?.[0];
     if (scenario.expectDispatch && dispatched !== undefined) {
       assert.deepEqual(dispatched, {
@@ -280,6 +296,7 @@ it.effect("logs and continues when the branch-drift follow is rejected", () => {
               hasWorkingTreeChanges: false,
               workingTree: { files: [], insertions: 0, deletions: 0 },
             }),
+          refreshPullRequestStatus: () => Effect.succeed(null),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadShell: () =>
@@ -378,9 +395,11 @@ it.effect.each(
   // works — null keeps them closest to a fresh thread's starting point.
   const recordedWorktreePath =
     scenario.liveCwd === "/repo" ? "/repo/.claude/worktrees/feature" : null;
-  // providerSessions.at(-1).cwd is what the adapter's live cwd tracking
-  // reports; null simulates no session attached, so there is nothing to compare.
-  const providerSessions = scenario.liveCwd === null ? [] : [{ cwd: scenario.liveCwd } as never];
+  // The active provider thread's session cwd is what the adapter's live cwd
+  // tracking reports; null simulates no session attached, so there is
+  // nothing to compare.
+  const providerSessions =
+    scenario.liveCwd === null ? [] : [{ id: "session-own", cwd: scenario.liveCwd } as never];
   const dispatch = vi.fn(
     (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
       Effect.succeed({ sequence: 1, storedEvents: [] }),
@@ -414,9 +433,15 @@ it.effect.each(
               branch: "original",
               worktreePath: recordedWorktreePath,
               activeRunId: null,
-            } as OrchestrationV2ThreadShell),
+              activeProviderThreadId: "provider-thread-own",
+            } as unknown as OrchestrationV2ThreadShell),
           getThreadProviderContext: () =>
-            Effect.succeed({ thread: undefined, providerSessions, providerThreads: [] } as never),
+            Effect.succeed({
+              thread: undefined,
+              providerSessions,
+              providerThreads: [{ id: "provider-thread-own", providerSessionId: "session-own" }],
+            } as never),
+          isProviderSessionShared: () => Effect.succeed(false),
         }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({ dispatch }),
         Layer.mock(ProjectService.ProjectService)({
@@ -442,78 +467,104 @@ it.effect.each(
   }).pipe(Effect.provide(layer));
 });
 
-it.effect(
-  "picks the most recently updated provider session, not the last one in array order",
-  () => {
-    const threadId = ThreadId.make("thread-worktree-move-session-order");
-    const runId = RunId.make("completed-run");
-    const projectId = ProjectId.make("project-worktree-move-session-order");
-    // ProjectionStoreV2's SQL path orders providerSessions by updated_at, but
-    // layerMemory does not (#11078 review); this mock mirrors the unordered
-    // case deliberately, with the stale session listed last.
-    const providerSessions = [
-      {
-        cwd: "/repo/.claude/worktrees/current",
-        updatedAt: DateTime.makeUnsafe("2026-01-01T00:01:00Z"),
-      },
-      {
-        cwd: "/repo/.claude/worktrees/stale",
-        updatedAt: DateTime.makeUnsafe("2026-01-01T00:00:00Z"),
-      },
-    ] as never;
-    const dispatch = vi.fn(
-      (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
-        Effect.succeed({ sequence: 1, storedEvents: [] }),
-    );
-    const layer = RunFinalization.layerObserver.pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),
-          Layer.mock(PullRequestService.PullRequestService)({
-            refreshAfterTurn: () => Effect.void,
-          }),
-          Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
-            refreshLocalStatus: () =>
-              Effect.succeed({
-                isRepo: true,
-                hasPrimaryRemote: true,
-                isDefaultRef: false,
-                refName: "feature",
-                hasWorkingTreeChanges: false,
-                workingTree: { files: [], insertions: 0, deletions: 0 },
-              }),
-          }),
-          Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getThreadShell: () =>
-              Effect.succeed({
-                id: threadId,
-                projectId,
-                branch: "original",
-                worktreePath: null,
-                activeRunId: null,
-              } as OrchestrationV2ThreadShell),
-            getThreadProviderContext: () =>
-              Effect.succeed({ thread: undefined, providerSessions, providerThreads: [] } as never),
-          }),
-          Layer.mock(ThreadManagementService.ThreadManagementService)({ dispatch }),
-          Layer.mock(ProjectService.ProjectService)({
-            getById: () =>
-              Effect.succeed(Option.some({ projectId, workspaceRoot: "/repo" } as never)),
-          }),
-        ),
+const makeSessionSelectionLayer = (input: {
+  readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
+  readonly providerSessions: ReadonlyArray<unknown>;
+  readonly shared: boolean;
+  readonly dispatch: ThreadManagementService.ThreadManagementServiceShape["dispatch"];
+}) =>
+  RunFinalization.layerObserver.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(WorkspaceEntries.WorkspaceEntries)({ refresh: () => Effect.void }),
+        Layer.mock(PullRequestService.PullRequestService)({
+          refreshAfterTurn: () => Effect.void,
+        }),
+        Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
+          refreshLocalStatus: () =>
+            Effect.succeed({
+              isRepo: true,
+              hasPrimaryRemote: true,
+              isDefaultRef: false,
+              refName: "feature",
+              hasWorkingTreeChanges: false,
+              workingTree: { files: [], insertions: 0, deletions: 0 },
+            }),
+        }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadShell: () =>
+            Effect.succeed({
+              id: input.threadId,
+              projectId: input.projectId,
+              branch: "original",
+              worktreePath: null,
+              activeRunId: null,
+              activeProviderThreadId: "provider-thread-own",
+            } as unknown as OrchestrationV2ThreadShell),
+          getThreadProviderContext: () =>
+            Effect.succeed({
+              thread: undefined,
+              providerSessions: input.providerSessions,
+              providerThreads: [{ id: "provider-thread-own", providerSessionId: "session-own" }],
+            } as never),
+          isProviderSessionShared: () => Effect.succeed(input.shared),
+        }),
+        Layer.mock(ThreadManagementService.ThreadManagementService)({ dispatch: input.dispatch }),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () =>
+            Effect.succeed(
+              Option.some({ projectId: input.projectId, workspaceRoot: "/repo" } as never),
+            ),
+        }),
       ),
+    ),
+  );
+
+// #11078 review: a thread can stay bound to sessions opened elsewhere, so the
+// newest bound session is not necessarily where this thread's agent is.
+it.effect("follows the active provider thread's session, not another bound session", () => {
+  const threadId = ThreadId.make("thread-worktree-move-own-session");
+  const dispatch = vi.fn(
+    (_command: Parameters<ThreadManagementService.ThreadManagementServiceShape["dispatch"]>[0]) =>
+      Effect.succeed({ sequence: 1, storedEvents: [] }),
+  );
+  const layer = makeSessionSelectionLayer({
+    threadId,
+    projectId: ProjectId.make("project-worktree-move-own-session"),
+    providerSessions: [
+      { id: "session-own", cwd: "/repo/.claude/worktrees/current" },
+      { id: "session-elsewhere", cwd: "/repo/.claude/worktrees/elsewhere" },
+    ],
+    shared: false,
+    dispatch,
+  });
+  return Effect.gen(function* () {
+    const observer = yield* RunFinalization.RunFinalizationObserver;
+    yield* observer.followWorktreeMove({ threadId, runId: RunId.make("completed-run") });
+    assert.equal(
+      (dispatch.mock.calls[0]?.[0] as { readonly worktreePath?: string } | undefined)?.worktreePath,
+      "/repo/.claude/worktrees/current",
     );
-    return Effect.gen(function* () {
-      const observer = yield* RunFinalization.RunFinalizationObserver;
-      yield* observer.followWorktreeMove({ threadId, runId });
-      assert.equal(
-        (dispatch.mock.calls[0]?.[0] as { readonly worktreePath?: string } | undefined)
-          ?.worktreePath,
-        "/repo/.claude/worktrees/current",
-      );
-    }).pipe(Effect.provide(layer));
-  },
-);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("leaves the location alone when another thread shares the session", () => {
+  const threadId = ThreadId.make("thread-worktree-move-shared-session");
+  const dispatch = vi.fn(() => Effect.die("a shared session's cwd may be another thread's move"));
+  const layer = makeSessionSelectionLayer({
+    threadId,
+    projectId: ProjectId.make("project-worktree-move-shared-session"),
+    providerSessions: [{ id: "session-own", cwd: "/repo/.claude/worktrees/other-thread" }],
+    shared: true,
+    dispatch,
+  });
+  return Effect.gen(function* () {
+    const observer = yield* RunFinalization.RunFinalizationObserver;
+    yield* observer.followWorktreeMove({ threadId, runId: RunId.make("completed-run") });
+    assert.equal(dispatch.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("does not follow a worktree move for a stale, no-longer-active run", () => {
   const threadId = ThreadId.make("thread-worktree-move-stale-run");
