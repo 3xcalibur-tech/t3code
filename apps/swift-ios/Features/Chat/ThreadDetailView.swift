@@ -4347,7 +4347,7 @@ struct FeatureMessageView: View {
                item.source.itemType == "secret_request" {
                 FeatureSecretRequestCard(item: item, context: secretContext).id(item.id)
             } else if let items = message.v2WorkItems, items.count == 1, let item = items.first,
-                      FeatureEmbeddedContent.reference(raw: item.raw) != nil, let embeddedContext {
+                      item.hasEmbeddedContent, let embeddedContext {
                 FeatureEmbeddedContentView(item: item, context: embeddedContext).id(item.id)
             } else if let agent = transcriptAgent, let onOpenThread {
                 FeatureThreadAgentRow(agent: agent, onOpenThread: onOpenThread)
