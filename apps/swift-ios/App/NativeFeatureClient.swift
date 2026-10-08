@@ -12,15 +12,6 @@ extension FeatureInputAnswer {
     }
 }
 
-private struct T3ConnectManagedCleanupError: LocalizedError {
-    let failureCount: Int
-
-    var errorDescription: String? {
-        "Couldn’t remove \(failureCount) managed T3 Connect "
-            + (failureCount == 1 ? "environment." : "environments.")
-    }
-}
-
 /// Composes the transport-focused Core layer with the UI-focused Features layer.
 @MainActor
 final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
@@ -664,14 +655,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     func disconnect() async {
         await clearActiveEnvironment()
-    }
-
-    func usageSummaries(_ input: UsageSummaryInput, refreshPricing: Bool) async throws -> [FeatureEnvironmentUsage] {
-        var result: [FeatureEnvironmentUsage] = []
-        for try await update in usageSummaryUpdates(input, refreshPricing: refreshPricing) {
-            result = update
-        }
-        return result
     }
 
     func usageSummaryUpdates(
@@ -9866,7 +9849,6 @@ private enum NativeFeatureClientError: LocalizedError {
     case branchRequired
     case deviceSessionNotFound
     case currentDeviceUnknown
-    case missingScope(String)
     case tooManyAttachments
     case invalidAutomaticSettlementDays
     case remoteStatusUnavailable
@@ -9888,7 +9870,6 @@ private enum NativeFeatureClientError: LocalizedError {
         case .branchRequired: "Choose a base branch for the new worktree."
         case .deviceSessionNotFound: "That device session is no longer active."
         case .currentDeviceUnknown: "This installation has not registered for device access yet."
-        case .missingScope: "This connection does not have permission to manage devices."
         case .tooManyAttachments: "You can attach up to 100 files per message."
         case .invalidAutomaticSettlementDays: "Choose a value from 1 to 90 days."
         case .remoteStatusUnavailable:
