@@ -1542,12 +1542,6 @@ struct FeatureComposerView: View {
     }
 }
 
-enum FeatureComposerKeyboardDismissPolicy {
-    static func showsDismissControl(isFocused: Bool, isEnabled: Bool, canDismiss: Bool) -> Bool {
-        isFocused && isEnabled && canDismiss
-    }
-}
-
 private struct FeatureComposerTraitsMenu: View {
     let control: FeatureComposerTraitsControl
     let onSelect: (String, String) -> Void
