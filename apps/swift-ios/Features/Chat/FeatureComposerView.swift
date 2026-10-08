@@ -1240,8 +1240,7 @@ struct FeatureComposerView: View {
     private func performPrimaryAction() {
         if showsStop {
             onStop()
-        } else if FeatureComposerSubmissionPolicy.allowsSend(for: .explicitButton),
-                  canSend {
+        } else if canSend {
             if let onSendWithDelivery {
                 onSendWithDelivery(sendPresentation.delivery)
             } else {
@@ -1681,17 +1680,6 @@ enum FeatureComposerSubmissionEligibility {
             && (hasText || totalAttachmentCount > 0)
             && (!hasNewAttachments || !containsImages || imagesAllowed)
             && (!hasNewAttachments || !containsFiles || filesAllowed)
-    }
-}
-
-enum FeatureComposerSubmissionIntent: Equatable {
-    case explicitButton
-    case returnKey
-}
-
-enum FeatureComposerSubmissionPolicy {
-    static func allowsSend(for intent: FeatureComposerSubmissionIntent) -> Bool {
-        intent == .explicitButton
     }
 }
 
