@@ -1,6 +1,7 @@
 import { fileBasename, workspaceRelativeFilePath } from "@t3tools/shared/path";
 import {
   inlineCodeFilePathCandidate,
+  isRelativeFilePath,
   normalizeMarkdownLinkDestination,
   resolveMarkdownFileLinkTarget,
 } from "@t3tools/shared/markdownLinks";
