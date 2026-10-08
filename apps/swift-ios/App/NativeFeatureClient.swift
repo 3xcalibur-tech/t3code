@@ -4598,7 +4598,10 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             return snapshot
         }
 
-        var snapshot = terminalSnapshots[key]
+        // Take the snapshot out of the dictionary so the buffer append below
+        // mutates in place instead of copying the whole buffer. Every path
+        // stores it back before returning.
+        var snapshot = terminalSnapshots.removeValue(forKey: key)
             ?? FeatureTerminalSnapshot(threadID: threadID, terminalID: terminalID)
         switch event.type {
         case "started", "restarted":
@@ -4656,15 +4659,20 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
 
     /// A verbose command can stream megabytes; the viewer only ever shows the
     /// tail, so cap retained history to keep layout and memory bounded.
-    private static let terminalBufferLimit = 512 * 1024
+    nonisolated static let terminalBufferLimit = 512 * 1024
 
-    private static func cappedTerminalBuffer(_ buffer: String) -> String {
+    /// Bytes kept after a trim. Trimming well below the limit leaves room for
+    /// later output to grow the buffer as a plain append, so the terminal view
+    /// does not reset and replay the whole buffer on every chunk at the cap.
+    nonisolated static let terminalBufferTrimTarget = terminalBufferLimit * 3 / 4
+
+    nonisolated static func cappedTerminalBuffer(_ buffer: String) -> String {
         let utf8 = buffer.utf8
         guard utf8.count > terminalBufferLimit else { return buffer }
         // Slice in UTF-8 bytes (the unit the limit is defined in), then snap
         // forward to a character boundary so multibyte output cannot blow
         // past the cap or tear a scalar.
-        let byteStart = utf8.index(utf8.endIndex, offsetBy: -terminalBufferLimit)
+        let byteStart = utf8.index(utf8.endIndex, offsetBy: -terminalBufferTrimTarget)
         var start = byteStart.samePosition(in: buffer)
         if start == nil {
             var probe = byteStart
