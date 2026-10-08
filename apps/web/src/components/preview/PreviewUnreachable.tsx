@@ -33,7 +33,7 @@ export function PreviewFileNotShown({
 }) {
   const host = safeHost(url) ?? url;
   return (
-    <div className="relative flex h-full min-h-0 w-full overflow-y-auto bg-background">
+    <div className="scrollbar-gutter-both relative flex h-full min-h-0 w-full overflow-y-auto bg-background">
       <div className="mx-auto flex w-full max-w-xl flex-1 flex-col px-8 py-12 sm:py-16">
         <ErrorIcon className="mb-6 size-12 text-muted-foreground/70" />
         <h1 className="mb-3 text-2xl font-semibold leading-tight text-foreground">
