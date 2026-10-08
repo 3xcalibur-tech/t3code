@@ -137,15 +137,10 @@ export function AddProviderInstanceDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [createdInstanceId, setCreatedInstanceId] = useState<ProviderInstanceId | null>(null);
 
-  // Built-in default slots stay reserved even before they are configured.
+  // Codex and Claude run at their default slots before they are configured, so
+  // those ids stay reserved; other unconfigured default slots are free to take.
   const existingIds = useMemo(
-    () =>
-      new Set([
-        ...providerClients.definitions.flatMap((definition) =>
-          definition.hasDefaultInstance === false ? [] : [definition.driverKind],
-        ),
-        ...Object.keys(settings.providerInstances ?? {}),
-      ]),
+    () => new Set(["codex", "claudeAgent", ...Object.keys(settings.providerInstances ?? {})]),
     [settings.providerInstances],
   );
 
