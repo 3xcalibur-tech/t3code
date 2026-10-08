@@ -18,7 +18,7 @@ import {
   ProviderAdapterDriverCreateError,
   type AnyProviderAdapterDriver,
 } from "./ProviderAdapterDriver.ts";
-import * as ProviderAdapter from "./ProviderAdapter.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/adapter";
 
 const isProviderSetupError = Schema.is(ProviderSetupError);
 

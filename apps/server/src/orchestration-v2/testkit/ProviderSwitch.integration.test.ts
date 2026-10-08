@@ -59,7 +59,7 @@ import {
   ProviderAdapterTurnStartError,
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2SessionRuntime,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import {

@@ -12,7 +12,7 @@ import { limitTitleMessage } from "./ThreadTitleContext.ts";
 import type { BranchNamingOptions, ChatAttachment } from "@t3tools/contracts";
 
 import { limitSection } from "./TextGenerationUtils.ts";
-import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
+import type { TextGenerationPolicy } from "@t3tools/provider-core/server/textGenerationPolicy";
 
 const EARLIER_CONTENT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 

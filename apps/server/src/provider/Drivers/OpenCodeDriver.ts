@@ -30,7 +30,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
 import * as OpenCodeAdapterV2 from "../../orchestration-v2/Adapters/OpenCodeAdapterV2.ts";
 import * as OpenCode2AdapterV2 from "../../orchestration-v2/Adapters/OpenCode2AdapterV2.ts";
-import type { ProviderAdapterV2Shape } from "../../orchestration-v2/ProviderAdapter.ts";
+import type { ProviderAdapterV2Shape } from "@t3tools/provider-core/server/adapter";
 import * as ServerSettings from "../../serverSettings.ts";
 import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -59,7 +59,7 @@ import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
-} from "../ProviderDriver.ts";
+} from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {

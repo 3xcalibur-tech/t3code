@@ -19,7 +19,7 @@ import {
 } from "./ProviderFailure.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { ContextHandoffBudgetError } from "./ContextHandoffDelivery.ts";
-import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
+import { ProviderAdapterTurnStartError } from "@t3tools/provider-core/server/adapter";
 
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({

@@ -6,6 +6,42 @@
     "./client": {
       "types": "./src/client.ts",
       "import": "./src/client.ts"
+    },
+    "./server/adapter": {
+      "types": "./src/server/adapter.ts",
+      "import": "./src/server/adapter.ts"
+    },
+    "./server/auth": {
+      "types": "./src/server/auth.ts",
+      "import": "./src/server/auth.ts"
+    },
+    "./server/driver": {
+      "types": "./src/server/driver.ts",
+      "import": "./src/server/driver.ts"
+    },
+    "./server/errors": {
+      "types": "./src/server/errors.ts",
+      "import": "./src/server/errors.ts"
+    },
+    "./server/maintenance": {
+      "types": "./src/server/maintenance.ts",
+      "import": "./src/server/maintenance.ts"
+    },
+    "./server/selectionTransition": {
+      "types": "./src/server/selectionTransition.ts",
+      "import": "./src/server/selectionTransition.ts"
+    },
+    "./server/snapshot": {
+      "types": "./src/server/snapshot.ts",
+      "import": "./src/server/snapshot.ts"
+    },
+    "./server/textGeneration": {
+      "types": "./src/server/textGeneration.ts",
+      "import": "./src/server/textGeneration.ts"
+    },
+    "./server/textGenerationPolicy": {
+      "types": "./src/server/textGenerationPolicy.ts",
+      "import": "./src/server/textGenerationPolicy.ts"
     }
   },
   "scripts": {
@@ -17,6 +53,7 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "vite-plus": "catalog:"
   }
 }

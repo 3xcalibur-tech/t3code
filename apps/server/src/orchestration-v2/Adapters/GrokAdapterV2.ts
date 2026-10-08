@@ -59,7 +59,7 @@ import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
 import * as ProviderEventLoggers from "../../provider/ProviderEventLoggers.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
-import * as ProviderAdapter from "../ProviderAdapter.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/adapter";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,

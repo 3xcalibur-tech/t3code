@@ -32,7 +32,7 @@ import {
   cursorSdkModelSelection,
   makeCursorAgentOptions,
 } from "./CursorAdapterV2.ts";
-import type { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
+import type { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/adapter";
 import type { RuntimePolicyV2Override } from "../RuntimePolicy.ts";
 
 const CursorAgentSdkReplayTranscript = Schema.Struct({

@@ -46,8 +46,8 @@ import type {
   ProviderAdapterV2RuntimePolicy,
   ProviderAdapterV2SessionRuntime,
   ProviderAdapterV2TurnMessage,
-} from "./ProviderAdapter.ts";
-import { ProviderAdapterTurnStartError } from "./ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
+import { ProviderAdapterTurnStartError } from "@t3tools/provider-core/server/adapter";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import { makeProviderFailure, makeProviderFailureTurnItem } from "./ProviderFailure.ts";

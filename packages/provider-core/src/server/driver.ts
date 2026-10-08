@@ -19,7 +19,7 @@
  *     ChildProcessSpawner, …) on its `create` return type; the registry
  *     layer's R is the union of those, and the runtime layer satisfies it.
  *
- * @module provider/ProviderDriver
+ * @module provider-core/server/driver
  */
 import type {
   ProviderConsumeResetCreditOutcome,
@@ -37,11 +37,11 @@ import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
-import type { TextGeneration } from "../textGeneration/TextGeneration.ts";
-import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
-import type { ProviderDriverError } from "./Errors.ts";
-import type { ProviderAuthController } from "./ProviderAuthService.ts";
-import type { ServerProviderShape } from "./ServerProvider.ts";
+import type { ProviderAdapterV2Shape } from "./adapter.ts";
+import type { ProviderAuthController } from "./auth.ts";
+import type { ProviderDriverError } from "./errors.ts";
+import type { ServerProviderShape } from "./snapshot.ts";
+import type { ProviderTextGeneration } from "./textGeneration.ts";
 
 /**
  * Static metadata advertised by a driver. Used for default presentation
@@ -96,7 +96,7 @@ export interface ProviderInstance {
     ProviderDriverError
   >;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
-  readonly textGeneration: TextGeneration["Service"];
+  readonly textGeneration: ProviderTextGeneration;
   readonly auth?: ProviderAuthController;
   readonly acpSessionManagement?: {
     readonly listSessions: (input: {

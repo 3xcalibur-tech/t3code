@@ -13,7 +13,7 @@ import { claudeRuntimeQueryPolicyForRuntimePolicy } from "../src/orchestration-v
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2RuntimePolicy as ProviderAdapterV2RuntimePolicyType,
-} from "../src/orchestration-v2/ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import type { RuntimePolicyV2Override } from "../src/orchestration-v2/RuntimePolicy.ts";
 import { makeCheckpointWorkspace } from "../src/orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
 import { CLAUDE_MODEL_SELECTION } from "../src/orchestration-v2/testkit/fixtures/shared.ts";

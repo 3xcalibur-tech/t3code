@@ -41,6 +41,7 @@
     "@opencode/client": "2.0.23",
     "@opencode/protocol": "2.0.23",
     "@opencode/schema": "2.0.23",
+    "@t3tools/provider-core": "workspace:*",
     "diff": "8.0.3",
     "effect": "catalog:",
     "jose": "catalog:",

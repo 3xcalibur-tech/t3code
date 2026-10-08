@@ -1,7 +1,7 @@
 import * as NodeOS from "node:os";
 
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
-import type { ProviderAdapterV2HistoricalContext } from "../ProviderAdapter.ts";
+import type { ProviderAdapterV2HistoricalContext } from "@t3tools/provider-core/server/adapter";
 import {
   makeProviderTextDeltaCoalescer,
   type ProviderTextDeltaUpdate,
@@ -69,7 +69,7 @@ import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";

@@ -107,7 +107,7 @@ import {
   backgroundWorkNotification,
 } from "../Notification.ts";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "../ProviderFailure.ts";
-import { acpSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { acpSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import {
   isProviderNativeImageAttachment,
   providerMessageTextWithAttachmentPaths,
@@ -117,7 +117,7 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
-import * as ProviderAdapter from "../ProviderAdapter.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/adapter";
 
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 

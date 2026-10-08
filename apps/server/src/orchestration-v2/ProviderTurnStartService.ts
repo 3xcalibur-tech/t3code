@@ -42,7 +42,7 @@ import {
   type ProviderAdapterV2Error,
   type ProviderAdapterV2HistoricalContext,
   type ProviderAdapterV2SessionRuntime,
-} from "./ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";

@@ -25,7 +25,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as IdAllocator from "../IdAllocator.ts";
-import { ProviderAdapterV2RuntimePolicy } from "../ProviderAdapter.ts";
+import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/adapter";
 import {
   cursorMcpServers,
   cursorRuntimeAgentPolicy,

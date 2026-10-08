@@ -53,7 +53,7 @@ import {
   type ProviderAdapterV2Event,
   type ProviderAdapterV2EventSubscription,
   type ProviderAdapterV2SessionRuntime,
-} from "./ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 

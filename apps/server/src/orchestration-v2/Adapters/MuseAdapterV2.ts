@@ -94,11 +94,11 @@ import {
   type ProviderAdapterV2ThreadSnapshot,
   type ProviderAdapterV2TurnInput,
   type ProviderAdapterV2TurnMessage,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import { backgroundWorkNotification, type BackgroundWorkReport } from "../Notification.ts";
 import type * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
-import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { museItemStatus, museToolPresentation } from "./MuseItemPresentation.ts";
 
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");

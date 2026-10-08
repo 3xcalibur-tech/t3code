@@ -40,7 +40,7 @@ import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";
 import { makeMuseAdapterV2, type MuseAdapterV2Options } from "./MuseAdapterV2.ts";
 

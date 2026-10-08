@@ -42,7 +42,7 @@ import type * as Stream from "effect/Stream";
 import type {
   ProviderSelectionTransitionInput,
   ProviderSelectionTransitionPlan,
-} from "./ProviderSelectionTransition.ts";
+} from "./selectionTransition.ts";
 
 export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   runtimeMode: RuntimeMode,
@@ -641,5 +641,5 @@ export interface ProviderAdapterV2Shape {
 }
 
 export class ProviderAdapterV2 extends Context.Service<ProviderAdapterV2, ProviderAdapterV2Shape>()(
-  "t3/orchestration-v2/ProviderAdapter/ProviderAdapterV2",
+  "@t3tools/provider-core/server/adapter/ProviderAdapterV2",
 ) {}

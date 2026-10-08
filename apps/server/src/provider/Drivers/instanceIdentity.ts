@@ -1,6 +1,6 @@
 import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
 
-import type { ProviderInstance } from "../ProviderDriver.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 
 /**

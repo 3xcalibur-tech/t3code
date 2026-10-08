@@ -30,7 +30,7 @@ import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
-import { ProviderAdapterV2Event } from "./ProviderAdapter.ts";
+import { ProviderAdapterV2Event } from "@t3tools/provider-core/server/adapter";
 import { makeProviderFailureTurnItem } from "./ProviderFailure.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";

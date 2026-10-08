@@ -16,7 +16,10 @@ import {
 } from "../CodexProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { type ProviderDriverCreateInput, type ProviderInstance } from "../ProviderDriver.ts";
+import {
+  type ProviderDriverCreateInput,
+  type ProviderInstance,
+} from "@t3tools/provider-core/server/driver";
 import { codexContinuationIdentity } from "./CodexHomeLayout.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { HttpClient } from "effect/http";

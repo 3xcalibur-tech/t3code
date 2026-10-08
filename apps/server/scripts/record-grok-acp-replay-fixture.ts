@@ -33,7 +33,7 @@ import {
 } from "../src/orchestration-v2/Adapters/GrokAdapterV2.ts";
 import { ACP_PROTOCOL } from "../src/orchestration-v2/Adapters/AcpAdapterV2.ts";
 import * as IdAllocator from "../src/orchestration-v2/IdAllocator.ts";
-import type { ProviderAdapterV2SessionRuntime } from "../src/orchestration-v2/ProviderAdapter.ts";
+import type { ProviderAdapterV2SessionRuntime } from "@t3tools/provider-core/server/adapter";
 import * as ProviderContinuationRequests from "../src/orchestration-v2/ProviderContinuationRequests.ts";
 import * as ProviderAdapterRegistry from "../src/orchestration-v2/ProviderAdapterRegistry.ts";
 import { provideDeterministicTestRuntime } from "../src/orchestration-v2/testkit/DeterministicRuntime.ts";

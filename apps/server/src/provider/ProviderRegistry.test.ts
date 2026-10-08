@@ -57,7 +57,10 @@ import {
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
 import { COMPACT_SLASH_COMMAND } from "./providerSnapshot.ts";
-import type { ProviderInstance, ProviderWorkspaceSnapshot } from "./ProviderDriver.ts";
+import type {
+  ProviderInstance,
+  ProviderWorkspaceSnapshot,
+} from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./providerMaintenance.ts";

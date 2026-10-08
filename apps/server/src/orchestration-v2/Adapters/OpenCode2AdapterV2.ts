@@ -95,8 +95,8 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "../SubagentProjection.ts";
-import * as ProviderAdapter from "../ProviderAdapter.ts";
-import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/adapter";
+import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "./OpenCodeAdapterV2.ts";
 import { openCodeToolTurnItem } from "./OpenCodeToolItems.ts";
 

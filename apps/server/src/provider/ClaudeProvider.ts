@@ -37,7 +37,7 @@ import {
 import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "./Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "./Drivers/ClaudeSkills.ts";
-import type { ProviderWorkspaceSnapshot } from "./ProviderDriver.ts";
+import type { ProviderWorkspaceSnapshot } from "@t3tools/provider-core/server/driver";
 import { makeUnavailableUsageLimits } from "./providerUsageLimits.ts";
 import {
   type ClaudeScopedLimitNames,

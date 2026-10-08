@@ -41,7 +41,7 @@ import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2SessionRuntime,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import { handoffBudget } from "../ContextHandoffBudget.ts";
 import {
   makePiAdapterV2,

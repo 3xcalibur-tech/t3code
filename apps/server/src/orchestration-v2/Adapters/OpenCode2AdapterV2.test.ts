@@ -41,7 +41,7 @@ import { describe } from "vite-plus/test";
 import type {
   ProviderAdapterV2Event,
   ProviderAdapterV2SessionRuntime,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as IdAllocator from "../IdAllocator.ts";
 import type { ProviderContinuationRequest } from "../ProviderContinuationRequests.ts";

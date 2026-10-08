@@ -12,7 +12,7 @@ import {
   completeCodexTurnTokenUsage,
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
-import type { ServerProviderShape } from "../../provider/ServerProvider.ts";
+import type { ServerProviderShape } from "@t3tools/provider-core/server/snapshot";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { buildCodexInitializeParams } from "../../provider/CodexProvider.ts";
 import {
@@ -132,7 +132,7 @@ import {
   makeProviderFailureTurnItem,
   makeProviderRetryTurnItem,
 } from "../ProviderFailure.ts";
-import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import {
   isProviderNativeImageAttachment,
   providerMessageTextWithAttachmentPaths,
@@ -160,7 +160,7 @@ import {
   type ProviderAdapterV2InterruptInput,
   type ProviderAdapterV2SteerInput,
   type ProviderAdapterV2TurnInput,
-} from "../ProviderAdapter.ts";
+} from "@t3tools/provider-core/server/adapter";
 import {
   makeSubagentChildThread,
   makeSubagentConversationArtifacts,

@@ -15,7 +15,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../../config.ts";
 import * as IdAllocator from "../IdAllocator.ts";
-import { ProviderAdapterOpenSessionError } from "../ProviderAdapter.ts";
+import { ProviderAdapterOpenSessionError } from "@t3tools/provider-core/server/adapter";
 import { ProviderAdapterDriverCreateError } from "../ProviderAdapterDriver.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import type { OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
