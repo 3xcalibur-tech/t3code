@@ -6955,7 +6955,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentID: environment.id,
             environmentName: environment.label,
             title: thread.title,
-            preview: previewText(thread.messages.last?.text),
+            preview: Self.previewText(thread.messages.last?.text),
             branch: thread.branch,
             worktreePath: thread.worktreePath,
             linkedPullRequest: thread.linkedPullRequest,
@@ -7462,7 +7462,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         var accumulator = cache.workLogsByGroupID[groupID] ?? NativeWorkLogAccumulator()
         accumulator.append(
             activity,
-            preview: previewText(activity.payload["detail"]?.stringValue),
+            preview: Self.previewText(activity.payload["detail"]?.stringValue),
             createdAt: parseDate(activity.createdAt)
         )
         cache.workLogsByGroupID[groupID] = accumulator
@@ -7508,7 +7508,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             var accumulator = cache.workLogsByGroupID[groupID] ?? NativeWorkLogAccumulator()
             accumulator.append(
                 activity,
-                preview: previewText(activity.payload["detail"]?.stringValue),
+                preview: Self.previewText(activity.payload["detail"]?.stringValue),
                 createdAt: parseDate(activity.createdAt)
             )
             cache.workLogsByGroupID[groupID] = accumulator
@@ -7664,7 +7664,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             for activity in group {
                 accumulator.append(
                     activity,
-                    preview: previewText(activity.payload["detail"]?.stringValue),
+                    preview: Self.previewText(activity.payload["detail"]?.stringValue),
                     createdAt: parseDate(activity.createdAt)
                 )
             }
@@ -8633,11 +8633,29 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return "t3code/\(suffix.prefix(8).lowercased())"
     }
 
-    private func previewText(_ text: String?) -> String? {
+    /// Collapses whitespace runs and caps the result at 160 characters. It stops
+    /// reading early, so a long streaming reply costs the same as a short one.
+    nonisolated static func previewText(_ text: String?) -> String? {
         guard let text else { return nil }
-        let compact = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !compact.isEmpty else { return nil }
-        return compact.count > 160 ? "\(compact.prefix(157))..." : compact
+        var compact = ""
+        var count = 0
+        var needsSpace = false
+        for character in text {
+            if character.isWhitespace {
+                needsSpace = count > 0
+                continue
+            }
+            if needsSpace {
+                compact.append(" ")
+                count += 1
+                needsSpace = false
+            }
+            compact.append(character)
+            count += 1
+            if count > 160 { break }
+        }
+        guard count > 0 else { return nil }
+        return count > 160 ? "\(compact.prefix(157))..." : compact
     }
 
     /// Decoded once per process and on every `saveSettings`. `makeSnapshot`
