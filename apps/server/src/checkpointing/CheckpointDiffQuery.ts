@@ -33,6 +33,9 @@ import {
 import * as CheckpointStore from "./CheckpointStore.ts";
 import { isGitImport, parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 
+// Windows limits a command line to 32,767 characters. Leave room for the rest of git's arguments.
+const MAX_PATHSPEC_CHARS = 24_000;
+
 /** Service tag for checkpoint diff queries. */
 export class CheckpointDiffQuery extends Context.Service<
   CheckpointDiffQuery,
@@ -197,21 +200,24 @@ export const make = Effect.gen(function* () {
           : yield* checkpointStore
               .listAuthoredPaths(comparison)
               .pipe(Effect.orElseSucceed(() => null));
+      // Grouping is optional. When the summary fails, the complete diff still loads.
       const files =
         authoredPaths === null
           ? []
-          : parseTurnDiffFilesFromNumstat(
-              yield* checkpointStore.diffCheckpoints({ ...comparison, format: "numstat" }),
+          : yield* checkpointStore.diffCheckpoints({ ...comparison, format: "numstat" }).pipe(
+              Effect.map(parseTurnDiffFilesFromNumstat),
+              Effect.orElseSucceed(() => []),
             );
-      const gitFileCount = files.filter((file) => isGitImport(file, authoredPaths)).length;
+      const retainedFiles = files.filter((file) => !isGitImport(file, authoredPaths));
+      const retainedPaths = retainedFiles.flatMap((file) =>
+        file.previousPath === undefined ? [file.path] : [file.previousPath, file.path],
+      );
+      // Retained paths become pathspecs. Skip grouping when they would not fit on a command line.
+      const fitsCommandLine =
+        retainedPaths.reduce((length, path) => length + path.length + 16, 0) <= MAX_PATHSPEC_CHARS;
+      const gitFileCount = fitsCommandLine ? files.length - retainedFiles.length : 0;
       const filePaths =
-        input.includeGitChanges === false && gitFileCount > 0
-          ? files
-              .filter((file) => !isGitImport(file, authoredPaths))
-              .flatMap((file) =>
-                file.previousPath === undefined ? [file.path] : [file.previousPath, file.path],
-              )
-          : undefined;
+        input.includeGitChanges === false && gitFileCount > 0 ? retainedPaths : undefined;
       // Select retained paths before generating a patch, so imported bulk cannot exhaust its output limit.
       const diff = yield* checkpointStore
         .diffCheckpoints({
