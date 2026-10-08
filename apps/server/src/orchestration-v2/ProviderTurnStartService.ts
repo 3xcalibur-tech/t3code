@@ -466,6 +466,9 @@ export const layer: Layer.Layer<
             // An answer or approval that lands while the failure is written wins
             // over cancelling the request it resolved.
             guardPendingRequestCancellations: true,
+            // A provider-native child the earlier attempt still reports on can
+            // finish between the inherited-work read and this commit.
+            guardSettledWork: true,
             events:
               status === "failed"
                 ? [

@@ -21,6 +21,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
+  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
   OrchestrationV2DomainEvent,
@@ -1082,6 +1083,8 @@ function makePersistedStartFailureHarness() {
   // `beforeFailureWrite` runs once the start has read its projection and
   // given up on the provider, right before the failure is committed.
   const run_ = (options: {
+    /** Rows the run inherited besides the approval. */
+    readonly seed?: ReadonlyArray<OrchestrationV2DomainEvent>;
     readonly beforeFailureWrite?: Effect.Effect<
       void,
       EventSink.EventSinkV2Error,
@@ -1108,6 +1111,7 @@ function makePersistedStartFailureHarness() {
           }),
         ),
       });
+      if (options.seed !== undefined) yield* eventSink.write({ events: options.seed });
       const gatedSink = EventSink.EventSinkV2.of({
         ...eventSink,
         writeIfRunCurrent: (input) =>
@@ -1161,8 +1165,12 @@ function makePersistedStartFailureHarness() {
     }).pipe(Effect.provide(Layer.fresh(layerPersistence)));
   return {
     now,
+    driver,
+    instanceId,
     threadId,
     runId,
+    rootNodeId,
+    providerThreadId,
     approvalRequest,
     approvalNode,
     approvalItem,
@@ -1306,5 +1314,111 @@ effectIt.effect("fails the run when the work it inherited cannot be read", () =>
       { type: "approval_request", status: "waiting" },
       { type: "error", title: "Provider session failed to open" },
     ]);
+  }),
+);
+
+effectIt.effect("keeps a native subagent that completed while a failed start is written", () =>
+  Effect.gen(function* () {
+    const harness = makePersistedStartFailureHarness();
+    const subagentNode: OrchestrationV2ExecutionNode = {
+      ...harness.approvalNode,
+      id: NodeId.make("node-subagent-start-failure"),
+      kind: "subagent",
+      status: "running",
+      runtimeRequestId: null,
+    };
+    const subagent: OrchestrationV2Subagent = {
+      id: subagentNode.id,
+      threadId: harness.threadId,
+      runId: harness.runId,
+      parentNodeId: harness.rootNodeId,
+      origin: "provider_native",
+      createdBy: "agent",
+      driver: harness.driver,
+      providerInstanceId: harness.instanceId,
+      providerThreadId: harness.providerThreadId,
+      childThreadId: null,
+      nativeTaskRef: null,
+      prompt: "Explore the repo",
+      title: "Explorer",
+      model: null,
+      status: "running",
+      result: null,
+      startedAt: harness.now,
+      completedAt: null,
+      updatedAt: harness.now,
+    };
+    const subagentItem: OrchestrationV2TurnItem = {
+      id: TurnItemId.make("item-subagent-start-failure"),
+      threadId: harness.threadId,
+      runId: harness.runId,
+      nodeId: subagentNode.id,
+      providerThreadId: harness.providerThreadId,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 2,
+      status: "running",
+      title: "Explorer",
+      startedAt: harness.now,
+      completedAt: null,
+      updatedAt: harness.now,
+      type: "subagent",
+      subagentId: subagent.id,
+      origin: "provider_native",
+      driver: harness.driver,
+      providerInstanceId: harness.instanceId,
+      childThreadId: null,
+      prompt: subagent.prompt,
+      result: null,
+    };
+    const base = { threadId: harness.threadId, runId: harness.runId, occurredAt: harness.now };
+    const subagentEvents = (
+      label: string,
+      update: { readonly status: "running" | "completed"; readonly result: string | null },
+    ): ReadonlyArray<OrchestrationV2DomainEvent> => {
+      const completedAt = update.status === "completed" ? harness.now : null;
+      return [
+        {
+          ...base,
+          id: EventId.make(`event-subagent-node-${label}`),
+          type: "node.updated",
+          nodeId: subagentNode.id,
+          payload: { ...subagentNode, status: update.status, completedAt },
+        },
+        {
+          ...base,
+          id: EventId.make(`event-subagent-${label}`),
+          type: "subagent.updated",
+          nodeId: subagent.id,
+          payload: { ...subagent, ...update, completedAt },
+        },
+        {
+          ...base,
+          id: EventId.make(`event-subagent-item-${label}`),
+          type: "turn-item.updated",
+          nodeId: subagentNode.id,
+          payload: { ...subagentItem, ...update, completedAt },
+        },
+      ];
+    };
+    const projection = yield* harness.run({
+      seed: subagentEvents("running", { status: "running", result: null }),
+      // The earlier attempt's session still reports on its native subagent;
+      // it finishes after the failure read it as running.
+      beforeFailureWrite: Effect.gen(function* () {
+        yield* (yield* EventSink.EventSinkV2).write({
+          events: subagentEvents("completed", { status: "completed", result: "Found it" }),
+        });
+      }),
+    });
+
+    expect(projection.runs.map((run) => run.status)).toEqual(["failed"]);
+    expect(projection.subagents).toMatchObject([{ status: "completed", result: "Found it" }]);
+    expect(projection.nodes.find((node) => node.id === subagentNode.id)?.status).toBe("completed");
+    expect(projection.turnItems.find((item) => item.id === subagentItem.id)).toMatchObject({
+      status: "completed",
+      result: "Found it",
+    });
   }),
 );

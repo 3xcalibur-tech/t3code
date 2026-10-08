@@ -90,6 +90,12 @@ export interface EventSinkV2Shape {
      * provider's own approval cancellation stays authoritative.
      */
     readonly guardPendingRequestCancellations?: boolean;
+    /**
+     * Drops subagent, node and turn-item updates for rows that ended after an
+     * earlier projection read showed them open. For a writer that settles
+     * work it no longer receives events for.
+     */
+    readonly guardSettledWork?: boolean;
     readonly commandId?: CommandId;
     readonly threadId: ThreadId;
     readonly runId: RunId;
@@ -363,16 +369,68 @@ const layerBase: Layer.Layer<
           }
         });
       });
+    // A cleanup settles subagents, nodes and items it read as open. One that
+    // ended on its own before the commit keeps its own outcome and result.
+    const guardSettledWork = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
+      Effect.gen(function* () {
+        const ended = (status: string) =>
+          status === "completed" ||
+          status === "failed" ||
+          status === "cancelled" ||
+          status === "interrupted";
+        const threads = new Map<
+          ThreadId,
+          ProjectionStore.ProjectionRecords<"nodes" | "subagents"> | undefined
+        >();
+        const records = (threadId: ThreadId) =>
+          Effect.gen(function* () {
+            if (threads.has(threadId)) return threads.get(threadId);
+            const read = yield* projectionStore
+              .getThreadRecords(threadId, ["nodes", "subagents"])
+              .pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(undefined),
+                }),
+              );
+            threads.set(threadId, read);
+            return read;
+          });
+        const kept: Array<OrchestrationV2DomainEvent> = [];
+        for (const event of events) {
+          const current =
+            event.type === "subagent.updated"
+              ? (yield* records(event.payload.threadId))?.subagents.find(
+                  (row) => row.id === event.payload.id,
+                )
+              : event.type === "node.updated"
+                ? (yield* records(event.payload.threadId))?.nodes.find(
+                    (row) => row.id === event.payload.id,
+                  )
+                : event.type === "turn-item.updated"
+                  ? yield* projectionStore.getTurnItem({
+                      threadId: event.payload.threadId,
+                      itemId: event.payload.id,
+                    })
+                  : undefined;
+          if (current == null || !ended(current.status)) kept.push(event);
+        }
+        return kept;
+      });
     const guardCancellations = (input: {
       readonly guardPendingUserInputCancellations?: boolean;
       readonly guardPendingRequestCancellations?: boolean;
+      readonly guardSettledWork?: boolean;
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
     }) =>
-      input.guardPendingRequestCancellations === true
-        ? guardRequestCancellations(input.events, true)
-        : input.guardPendingUserInputCancellations === true
-          ? guardRequestCancellations(input.events, false)
-          : Effect.succeed(input.events);
+      Effect.gen(function* () {
+        const events: ReadonlyArray<OrchestrationV2DomainEvent> =
+          input.guardPendingRequestCancellations === true
+            ? yield* guardRequestCancellations(input.events, true)
+            : input.guardPendingUserInputCancellations === true
+              ? yield* guardRequestCancellations(input.events, false)
+              : input.events;
+        return input.guardSettledWork === true ? yield* guardSettledWork(events) : events;
+      });
 
     const normalizeEvents = (events: ReadonlyArray<OrchestrationV2DomainEvent>) => {
       const runOrdinals = new Map(
