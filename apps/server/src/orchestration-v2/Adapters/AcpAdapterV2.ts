@@ -28,6 +28,8 @@ import {
   type ProviderRequestKind,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
+  mcpServerVariableRecord,
+  type ResolvedMcpServer,
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
@@ -680,12 +682,45 @@ interface AcpMcpContext {
   readonly authorization?: string;
 }
 
+/**
+ * The user's servers from Settings → Tools, passed through as plain ACP
+ * entries. A bare command name is left to the agent's PATH lookup. Http
+ * entries are dropped later for agents that do not advertise http support.
+ */
+function acpUserMcpServers(
+  servers: ReadonlyArray<ResolvedMcpServer>,
+): ReadonlyArray<EffectAcpSchema.McpServer> {
+  return servers.map((server) =>
+    server.transport.type === "stdio"
+      ? {
+          // Untyped like T3's own entry: the shape every ACP version accepts.
+          name: server.name,
+          command: server.transport.command,
+          args: [...server.transport.args],
+          env: Object.entries(mcpServerVariableRecord(server.transport.env)).map(
+            ([name, value]) => ({ name, value }),
+          ),
+        }
+      : {
+          type: "http" as const,
+          name: server.name,
+          url: server.transport.url,
+          headers: Object.entries(mcpServerVariableRecord(server.transport.headers)).map(
+            ([name, value]) => ({ name, value }),
+          ),
+        },
+  );
+}
+
 function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpContext {
   if (threadId === null) return { servers: [], acpServers: [] };
   const session = McpProviderSession.readMcpProviderSession(threadId);
   if (session === undefined) {
     return { servers: [], acpServers: [] };
   }
+  // Both lists carry them: an agent that takes T3's server over ACP gets
+  // only `acpServers`, so the user's servers would otherwise be lost.
+  const userServers = acpUserMcpServers(session.tools?.servers ?? []);
   // Stdio is ACP's required baseline MCP transport. Agents that advertise
   // optional http support still routinely fail to wire injected http servers
   // through to their backend (codex-acp 1.2.0 and pi-acp both drop them), so
@@ -704,8 +739,9 @@ function acpMcpContext(threadId: ThreadId | null, self: SelfInvocation): AcpMcpC
           { name: "T3_ACP_MCP_AUTHORIZATION", value: session.authorizationHeader },
         ],
       },
+      ...userServers,
     ],
-    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
+    acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }, ...userServers],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {

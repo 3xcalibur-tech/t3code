@@ -62,6 +62,12 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import {
+  materializeMcpServerSecrets,
+  mcpServerSecretNames,
+  planMcpServerSecrets,
+  redactMcpServerSecrets,
+} from "./mcpServerSecrets.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -215,7 +221,13 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       Object.entries(settings.github.tokens).map(([host, token]) => [host, redactSecret(token)]),
     ),
   };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket, github };
+  return redactMcpServerSecrets({
+    ...settings,
+    providerInstances,
+    usageLimitSources,
+    bitbucket,
+    github,
+  });
 }
 
 export function applyProviderInstanceMutation(
@@ -925,13 +937,27 @@ const make = Effect.gen(function* () {
           );
         tokens[host] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
-      return {
-        ...settings,
-        providerInstances: providerInstances as ServerSettings["providerInstances"],
-        usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-        bitbucket,
-        github: { ...settings.github, tokens },
-      };
+      const mcpSecrets = new Map<string, string>();
+      for (const secretName of mcpServerSecretNames(settings)) {
+        const secret = yield* secretStore
+          .get(secretName)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        if (Option.isSome(secret)) mcpSecrets.set(secretName, textDecoder.decode(secret.value));
+      }
+      return materializeMcpServerSecrets(
+        {
+          ...settings,
+          providerInstances: providerInstances as ServerSettings["providerInstances"],
+          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+          bitbucket,
+          github: { ...settings.github, tokens },
+        },
+        mcpSecrets,
+      );
     });
 
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
@@ -1124,9 +1150,22 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const mcp = planMcpServerSecrets(current, next);
+      for (const change of mcp.changes) {
+        changes.push(
+          change.kind === "write"
+            ? {
+                kind: "write",
+                secretName: change.secretName,
+                value: textEncoder.encode(change.value),
+              }
+            : { kind: "remove", secretName: change.secretName, operation: "remove-secret" },
+        );
+      }
+
       return {
         settings: {
-          ...next,
+          ...mcp.settings,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,

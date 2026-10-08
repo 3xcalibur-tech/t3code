@@ -650,6 +650,81 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
   });
 
+  it("adds the user's servers and skill switches next to t3-code, and reopens when they change", () => {
+    const threadId = ThreadId.make("thread-claude-user-tools");
+    const session = {
+      environmentId: EnvironmentId.make(`environment-${threadId}`),
+      threadId,
+      providerSessionId: `mcp-session-${threadId}`,
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-claude-token",
+      browserToolsAvailable: true,
+    };
+    McpProviderSession.setMcpProviderSession({
+      ...session,
+      tools: {
+        servers: [
+          {
+            name: "supabase",
+            transport: {
+              type: "stdio",
+              command: "npx",
+              args: ["-y", "@supabase/mcp-server-supabase"],
+              env: [{ name: "SUPABASE_ACCESS_TOKEN", value: "token", sensitive: true }],
+            },
+          },
+        ],
+        disabledSkills: ["grill-me"],
+        fingerprint: "a",
+      },
+    });
+    try {
+      const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace",
+        }),
+      );
+      const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+        threadId,
+        readOnlySandbox: false,
+      });
+      assert.deepEqual(overrides, {
+        allowedTools: [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD, "mcp__supabase__*"],
+        mcpServers: {
+          supabase: {
+            type: "stdio",
+            command: "npx",
+            args: ["-y", "@supabase/mcp-server-supabase"],
+            env: { SUPABASE_ACCESS_TOKEN: "token" },
+          },
+          ...T3_MCP_SERVERS,
+        },
+        sdkSettings: { skillOverrides: { "grill-me": "off" } },
+      });
+      // Read-only sandboxes keep the user's servers behind the permission prompt.
+      assert.deepEqual(
+        ClaudeAdapterV2.claudeMcpQueryOverrides({ threadId, readOnlySandbox: true }).allowedTools,
+        ClaudeAdapterV2.CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS,
+      );
+
+      const initialKey = ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, overrides);
+      McpProviderSession.setMcpProviderSession({
+        ...session,
+        tools: { servers: [], disabledSkills: [], fingerprint: "" },
+      });
+      const clearedKey = ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(
+        queryPolicy,
+        ClaudeAdapterV2.claudeMcpQueryOverrides({ threadId, readOnlySandbox: false }),
+      );
+      assert.notEqual(clearedKey, initialKey);
+    } finally {
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }
+  });
+
   it("matches the read-only allowlist to the orchestrator toolkit annotations", () => {
     const readOnlyToolNames = [
       ...Object.values(OrchestratorToolkit.tools),

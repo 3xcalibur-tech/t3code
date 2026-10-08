@@ -25,6 +25,7 @@ import {
   CodexSettings,
   defaultInstanceIdForDriver,
   isOrchestrationV2WorkActive,
+  mcpServerVariableRecord,
   OrchestrationV2ProviderGoal,
   ProviderDriverKind,
   type ProviderSetupError,
@@ -58,6 +59,7 @@ import type {
   ProviderThreadId,
   ProviderTurnId,
   ProviderInstanceId,
+  ResolvedMcpServer,
   RuntimeMode,
   RuntimeRequestId,
   ThreadId,
@@ -1327,6 +1329,7 @@ export function codexThreadRuntimeParams(input: {
 } {
   const mcpSession =
     input.threadId === null ? undefined : McpProviderSession.readMcpProviderSession(input.threadId);
+  const tools = mcpSession?.tools ?? McpProviderSession.EMPTY_MCP_PROVIDER_SESSION_TOOLS;
   return {
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
@@ -1336,6 +1339,7 @@ export function codexThreadRuntimeParams(input: {
         ? {}
         : {
             mcp_servers: {
+              ...codexUserMcpServers(tools.servers),
               "t3-code": {
                 url: mcpSession.endpoint,
                 http_headers: {
@@ -1344,8 +1348,37 @@ export function codexThreadRuntimeParams(input: {
               },
             },
           }),
+      // Thread config is Codex's session-flags layer, which its skill rules
+      // read alongside the user's config.toml; a later name rule wins.
+      ...(tools.disabledSkills.length === 0
+        ? {}
+        : {
+            skills: {
+              config: tools.disabledSkills.map((name) => ({ name, enabled: false })),
+            },
+          }),
     },
   };
+}
+
+function codexUserMcpServers(
+  servers: ReadonlyArray<ResolvedMcpServer>,
+): Record<string, Schema.Json> {
+  return Object.fromEntries(
+    servers.map((server) => [
+      server.name,
+      server.transport.type === "stdio"
+        ? {
+            command: server.transport.command,
+            args: [...server.transport.args],
+            env: mcpServerVariableRecord(server.transport.env),
+          }
+        : {
+            url: server.transport.url,
+            http_headers: mcpServerVariableRecord(server.transport.headers),
+          },
+    ]),
+  );
 }
 
 const decodeCodexResumeMetadata = Schema.decodeUnknownEffect(
