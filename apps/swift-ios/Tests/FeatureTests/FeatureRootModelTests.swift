@@ -3467,42 +3467,6 @@ struct FeatureRootModelTests {
     }
 
     @Test
-    func stalePullRequestResponseCannotReplaceANewBranchIdentity() async throws {
-        let client = FeatureClientStub()
-        var thread = FeatureThread(
-            id: "thread",
-            projectID: "project",
-            environmentID: "studio",
-            title: "Task",
-            branch: "feature/old",
-            worktreePath: "/repo"
-        )
-        client.snapshot = FeatureSnapshot(threads: [thread])
-        let model = testRootModel(client: client)
-        await model.reload()
-
-        let oldIdentity = try #require(thread.pullRequestObservationIdentity)
-        model.updatePullRequest(
-            HomeThreadPullRequestPresentation(number: 1, state: .merged, updatedAt: .now),
-            threadID: thread.id,
-            observationIdentity: oldIdentity
-        )
-        #expect(model.pullRequestsByThreadID[thread.id]?.number == 1)
-
-        thread.branch = "feature/new"
-        client.snapshot.threads = [thread]
-        await model.reload()
-        #expect(model.pullRequestsByThreadID[thread.id] == nil)
-
-        model.updatePullRequest(
-            HomeThreadPullRequestPresentation(number: 1, state: .closed, updatedAt: .now),
-            threadID: thread.id,
-            observationIdentity: oldIdentity
-        )
-        #expect(model.pullRequestsByThreadID[thread.id] == nil)
-    }
-
-    @Test
     func responseTimeoutKeepsDurableSubmissionQueued() {
         let snapshot = FeatureSnapshot(
             connection: .init(state: .connected),

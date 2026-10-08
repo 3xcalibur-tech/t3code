@@ -1056,52 +1056,16 @@ public struct ThreadDetailView: View {
         currentThread.pullRequestObservationIdentity
     }
 
+    /// Follows the branch pull request for a thread with no linked one.
+    /// Linked pull requests resolve from the thread itself.
     @MainActor
     private func observeThreadPullRequest() async {
         branchPullRequest = nil
-        guard let observationIdentity = pullRequestObservationID else {
-            branchPullRequest = nil
+        guard pullRequestObservationID != nil,
+              currentThread.pullRequests?.isEmpty ?? true else {
             return
         }
-
-        if let links = currentThread.pullRequests, !links.isEmpty {
-            model.updatePullRequest(
-                HomeThreadPullRequestPresentation.resolve(links: links),
-                threadID: currentThread.id, observationIdentity: observationIdentity
-            )
-            return
-        }
-
-        if let linked = currentThread.effectivePullRequest,
-           let environmentID = currentThread.environmentID {
-            let target = FeaturePullRequestTarget(
-                environmentID: environmentID,
-                environmentName: currentThread.environmentName ?? environmentID,
-                reference: PullRequestRef(
-                    projectId: linked.projectId,
-                    repository: linked.repository,
-                    number: linked.number,
-                    host: ThreadPullRequests.authority(of: linked.url)
-                )
-            )
-            while !Task.isCancelled {
-                if let detail = try? await model.client.pullRequestDetail(target),
-                   let presentation = HomeThreadPullRequestPresentation.resolve(
-                       linkedPullRequest: linked,
-                       detail: detail
-                   ) {
-                    model.updatePullRequest(
-                        presentation,
-                        threadID: currentThread.id,
-                        observationIdentity: observationIdentity
-                    )
-                }
-                do {
-                    try await Task.sleep(for: .seconds(30))
-                } catch {
-                    return
-                }
-            }
+        if currentThread.effectivePullRequest != nil, currentThread.environmentID != nil {
             return
         }
 
@@ -1111,11 +1075,6 @@ public struct ThreadDetailView: View {
             if next != branchPullRequest {
                 branchPullRequest = next
             }
-            model.updatePullRequest(
-                HomeThreadPullRequestPresentation.resolve(thread: currentThread, status: status),
-                threadID: currentThread.id,
-                observationIdentity: observationIdentity
-            )
         }
     }
 

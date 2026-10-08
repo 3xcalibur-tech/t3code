@@ -242,18 +242,12 @@ struct DailyUXSidebarTests {
     }
 
     @Test
-    func mergedPullRequestsAndAgeCannotHideUnsettledThreads() {
+    func ageCannotHideUnsettledThreads() {
         let oldThread = thread(id: "old", created: -400_000, updated: -300_000)
-        let merged = HomeThreadPullRequestPresentation(
-            number: 42,
-            state: .merged,
-            updatedAt: now.addingTimeInterval(-400)
-        )
         let index = DailyUXSidebarIndex(
             snapshot: FeatureSnapshot(threads: [oldThread]),
             query: "",
-            now: now,
-            pullRequestsByThreadID: [oldThread.id: merged]
+            now: now
         )
 
         #expect(!oldThread.isEffectivelySettled())

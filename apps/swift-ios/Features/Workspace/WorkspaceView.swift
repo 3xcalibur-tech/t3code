@@ -356,8 +356,7 @@ public struct WorkspaceView: View {
             now: sidebarBoundaryNow,
             inboxReturns: model.inboxReturns,
             contentMatches: contentSearch.matches(for: searchRequest),
-            searchEnvironmentIDs: searchRequest.environmentIDs,
-            pullRequestsByThreadID: model.pullRequestsByThreadID
+            searchEnvironmentIDs: searchRequest.environmentIDs
         )
 
     }
@@ -422,13 +421,6 @@ public struct WorkspaceView: View {
                 onArrange: { showingThreadArrangement = true },
                 onDelete: { thread in
                     deletingThread = thread
-                },
-                onPullRequestChange: { threadID, observationIdentity, pullRequest in
-                    model.updatePullRequest(
-                        pullRequest,
-                        threadID: threadID,
-                        observationIdentity: observationIdentity
-                    )
                 }
             )
         }
@@ -1100,16 +1092,14 @@ struct HomePresentation {
         now: Date,
         inboxReturns: FeatureInboxReturnTracker = .init(),
         contentMatches: [FeatureThreadContentMatch] = [],
-        searchEnvironmentIDs: [String]? = nil,
-        pullRequestsByThreadID: [String: HomeThreadPullRequestPresentation] = [:]
+        searchEnvironmentIDs: [String]? = nil
     ) {
         let index = DailyUXSidebarIndex(
             snapshot: snapshot,
             query: "",
             projectID: projectID,
             now: now,
-            inboxReturns: inboxReturns,
-            pullRequestsByThreadID: pullRequestsByThreadID
+            inboxReturns: inboxReturns
         )
         let archived = snapshot.threads
             .filter { thread in
@@ -1186,8 +1176,7 @@ final class HomePresentationCache {
         now: Date,
         inboxReturns: FeatureInboxReturnTracker = .init(),
         contentMatches: [FeatureThreadContentMatch] = [],
-        searchEnvironmentIDs: [String]? = nil,
-        pullRequestsByThreadID: [String: HomeThreadPullRequestPresentation]
+        searchEnvironmentIDs: [String]? = nil
     ) -> HomePresentation {
         let key = Key(
             revision: revision,
@@ -1219,8 +1208,7 @@ final class HomePresentationCache {
             now: max(now, .now),
             inboxReturns: inboxReturns,
             contentMatches: contentMatches,
-            searchEnvironmentIDs: searchEnvironmentIDs,
-            pullRequestsByThreadID: pullRequestsByThreadID
+            searchEnvironmentIDs: searchEnvironmentIDs
         )
         cachedKey = key
         cachedRowRevision = rowRevision
@@ -1383,7 +1371,6 @@ struct HomeThreadPullRequestPresentation: Equatable {
 
     let number: Int
     let state: State
-    let updatedAt: Date?
     var count = 1
     var isStack = false
 
@@ -1401,8 +1388,7 @@ struct HomeThreadPullRequestPresentation: Equatable {
         let state: State = visible.allSatisfy { $0.snapshot?.state == .open && $0.snapshot?.isDraft == true }
             ? .draft : visible.contains(where: \.isOpen) ? .open
             : visible.allSatisfy { $0.snapshot?.state == .merged } ? .merged : .closed
-        return Self(number: current.number, state: state,
-                    updatedAt: parseDate(current.snapshot?.updatedAt), count: visible.count,
+        return Self(number: current.number, state: state, count: visible.count,
                     isStack: visible.count > 1 && ThreadPullRequests.chains(visible).count == 1)
     }
 
@@ -1418,11 +1404,7 @@ struct HomeThreadPullRequestPresentation: Equatable {
               let state = State(rawValue: pullRequest.state.lowercased()) else {
             return nil
         }
-        return Self(
-            number: pullRequest.number,
-            state: state,
-            updatedAt: parseDate(pullRequest.updatedAt)
-        )
+        return Self(number: pullRequest.number, state: state)
     }
 
     static func resolve(
@@ -1436,18 +1418,7 @@ struct HomeThreadPullRequestPresentation: Equatable {
               let state = State(rawValue: detail.state.rawValue) else {
             return nil
         }
-        return Self(
-            number: detail.number,
-            state: state,
-            updatedAt: parseDate(detail.updatedAt)
-        )
-    }
-
-    private static func parseDate(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        return Self(number: detail.number, state: state)
     }
 }
 

@@ -814,8 +814,7 @@ struct DailyUXSidebarIndex {
         query: String,
         projectID: String? = nil,
         now: Date = .now,
-        inboxReturns: FeatureInboxReturnTracker = .init(),
-        pullRequestsByThreadID: [String: HomeThreadPullRequestPresentation] = [:]
+        inboxReturns: FeatureInboxReturnTracker = .init()
     ) {
         // Delegate children remain addressable through their parent, but do not
         // become independent inbox tasks (the same rule as the web sidebar).

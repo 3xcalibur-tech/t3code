@@ -32,7 +32,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
     let onPin: (FeatureThread, Bool) -> Void
     let onArrange: () -> Void
     let onDelete: (FeatureThread) -> Void
-    let onPullRequestChange: (String, String, HomeThreadPullRequestPresentation?) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -392,12 +391,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
         ) {
             guard let item = itemsByID[identifier] else { return }
             cell.contentView.isHidden = false
-            let pullRequestObservationIdentity: String?
-            if case let .thread(thread, _, _, _, _, _) = item {
-                pullRequestObservationIdentity = thread.pullRequestObservationIdentity
-            } else {
-                pullRequestObservationIdentity = nil
-            }
             cell.contentConfiguration = UIHostingConfiguration {
                 HomeCollectionCellContent(
                     item: item,
@@ -415,13 +408,6 @@ struct HomeThreadCollectionView: UIViewRepresentable {
                             threadID: threadID,
                             cell: cell
                         )
-                        if let observationIdentity = pullRequestObservationIdentity {
-                            self.parent.onPullRequestChange(
-                                threadID,
-                                observationIdentity,
-                                pullRequest
-                            )
-                        }
                     }
                 )
             }

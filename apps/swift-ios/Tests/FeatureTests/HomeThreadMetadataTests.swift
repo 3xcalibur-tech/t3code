@@ -541,23 +541,8 @@ struct HomeThreadMetadataTests {
 
             #expect(presentation?.label == "#42")
             #expect(presentation?.state.rawValue == state)
-            #expect(presentation?.updatedAt != nil)
             #expect(presentation?.accessibilityLabel == "Pull request #42, \(state)")
         }
-
-        let wholeSecond = FeatureSourceControlStatus(
-            branch: thread.branch,
-            pullRequest: FeaturePullRequest(
-                number: 42,
-                title: "Add native PR indicators",
-                state: "merged",
-                updatedAt: "2026-08-28T12:30:45Z"
-            )
-        )
-        #expect(HomeThreadPullRequestPresentation.resolve(
-            thread: thread,
-            status: wholeSecond
-        )?.updatedAt != nil)
     }
 
     @Test

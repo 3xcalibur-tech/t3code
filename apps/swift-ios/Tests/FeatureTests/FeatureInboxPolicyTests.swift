@@ -235,7 +235,7 @@ struct FeatureInboxPolicyTests {
         func presentation(query: String = "", rowRevision: UInt64 = 1) -> HomePresentation {
             cache.presentation(
                 snapshot: snapshot, revision: 1, rowRevision: rowRevision, query: query,
-                projectID: nil, now: now, inboxReturns: returns, pullRequestsByThreadID: [:]
+                projectID: nil, now: now, inboxReturns: returns
             )
         }
         #expect(presentation().working.isEmpty)

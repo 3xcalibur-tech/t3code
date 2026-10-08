@@ -50,8 +50,6 @@ public final class FeatureRootModel {
     @ObservationIgnored private(set) var inboxReturns = FeatureInboxReturnTracker()
     /// Why the last `startTask` returned nil, for the sheet that made the request.
     public private(set) var lastTaskStartError: String?
-    private(set) var pullRequestsByThreadID: [String: HomeThreadPullRequestPresentation] = [:]
-    private var pullRequestObservationIdentities: [String: String] = [:]
     public private(set) var details: [String: FeatureThreadDetail] = [:]
     private(set) var detailLoadStates: [String: FeatureThreadLoadState] = [:]
     private(set) var threadSyncStates: [String: FeatureThreadSyncState] = [:]
@@ -721,30 +719,6 @@ public final class FeatureRootModel {
                 }
             }
         }
-    }
-
-    func updatePullRequest(
-        _ pullRequest: HomeThreadPullRequestPresentation?,
-        threadID: String,
-        observationIdentity: String
-    ) {
-        guard snapshot.threads.first(where: { $0.id == threadID })?
-            .pullRequestObservationIdentity == observationIdentity else {
-            return
-        }
-        if pullRequest == nil, pullRequestsByThreadID[threadID] == nil { return }
-        if pullRequestsByThreadID[threadID] == pullRequest,
-           pullRequestObservationIdentities[threadID] == observationIdentity {
-            return
-        }
-        if let pullRequest {
-            pullRequestsByThreadID[threadID] = pullRequest
-            pullRequestObservationIdentities[threadID] = observationIdentity
-        } else {
-            pullRequestsByThreadID.removeValue(forKey: threadID)
-            pullRequestObservationIdentities.removeValue(forKey: threadID)
-        }
-        homePresentationRevision &+= 1
     }
 
     func isEffectivelySettled(_ thread: FeatureThread) -> Bool {
@@ -1477,7 +1451,6 @@ public final class FeatureRootModel {
 
     private func upsert(_ thread: FeatureThread) {
         let thread = applyingLocalMessageVisibility(retainingPendingSettlement(in: thread))
-        discardStalePullRequest(for: thread)
         var metadataChanged = false
         var orderChanged = false
         if let index = snapshot.threads.firstIndex(where: { $0.id == thread.id }) {
@@ -1521,8 +1494,6 @@ public final class FeatureRootModel {
         let projectID = snapshot.threads[index].projectID
         snapshot.threads.remove(at: index)
         observeInboxReturns()
-        pullRequestsByThreadID.removeValue(forKey: id)
-        pullRequestObservationIdentities.removeValue(forKey: id)
         adjustProjectCount(id: projectID, by: -1)
         threadRowRevision &+= 1
         homePresentationRevision &+= 1
@@ -1567,13 +1538,6 @@ public final class FeatureRootModel {
         }
         let nextThreads = value.threads.reduce(into: [String: FeatureThread]()) {
             $0[$1.id] = $1
-        }
-        for thread in value.threads {
-            discardStalePullRequest(for: thread)
-        }
-        for id in Array(pullRequestsByThreadID.keys) where nextThreads[id] == nil {
-            pullRequestsByThreadID.removeValue(forKey: id)
-            pullRequestObservationIdentities.removeValue(forKey: id)
         }
         for id in previousThreads.keys where nextThreads[id] == nil {
             removeDetail(id: id)
@@ -1620,15 +1584,6 @@ public final class FeatureRootModel {
         if inboxReturns.observe(snapshot.settings.workingShelfEnabled ? snapshot.threads : nil) {
             homePresentationRevision &+= 1
         }
-    }
-
-    private func discardStalePullRequest(for thread: FeatureThread) {
-        guard let cachedIdentity = pullRequestObservationIdentities[thread.id],
-              cachedIdentity != thread.pullRequestObservationIdentity else {
-            return
-        }
-        pullRequestsByThreadID.removeValue(forKey: thread.id)
-        pullRequestObservationIdentities.removeValue(forKey: thread.id)
     }
 
     private func mutateThread(
