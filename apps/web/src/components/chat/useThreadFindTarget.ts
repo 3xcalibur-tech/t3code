@@ -1,6 +1,6 @@
 import type { LegendListRef } from "@legendapp/list/react";
 import type { MessageId, RunAttemptId, RunId } from "@t3tools/contracts";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { findTextRanges } from "~/lib/assistantTextSelection";
 import type { TimelineEntry } from "../../session-logic";
 import { timelineMessageFolds, type MessagesTimelineRow } from "./MessagesTimeline.logic";
@@ -54,6 +54,12 @@ export function useThreadFindTarget({
   onManualNavigation: () => void;
 }) {
   const [settledKey, setSettledKey] = useState<string | null>(null);
+  // Effects read the ref; the state re-renders the list's scroll props.
+  const settledKeyRef = useRef<string | null>(null);
+  const settle = useCallback((key: string) => {
+    settledKeyRef.current = key;
+    setSettledKey(key);
+  }, []);
   const requestedPagesRef = useRef<{ key: string; cursors: Set<string> } | null>(null);
 
   // Reveal: load and unfold until the message has a row.
@@ -63,6 +69,7 @@ export function useThreadFindTarget({
       requestedPagesRef.current = { key: target.key, cursors: new Set() };
       onManualNavigation();
     }
+    if (settledKeyRef.current === target.key) return;
     const loaded = entries.some(
       (entry) => entry.kind === "message" && entry.message.id === target.messageId,
     );
@@ -72,7 +79,7 @@ export function useThreadFindTarget({
       // No more pages, or a page that did not move: the message is not reachable.
       const cursors = requestedPagesRef.current.cursors;
       if (!loadEarlier || cursors.has(cursor)) {
-        setSettledKey(target.key);
+        settle(target.key);
         return;
       }
       cursors.add(cursor);
@@ -83,7 +90,40 @@ export function useThreadFindTarget({
     const folds = timelineMessageFolds(entries, target.messageId);
     if (folds.runId) onExpandRun(folds.runId);
     if (folds.attemptId) onExpandAttempt(folds.attemptId);
-  }, [entries, loadEarlier, onExpandAttempt, onExpandRun, onManualNavigation, rows, target]);
+  }, [
+    entries,
+    loadEarlier,
+    onExpandAttempt,
+    onExpandRun,
+    onManualNavigation,
+    rows,
+    settle,
+    target,
+  ]);
+
+  // A user scroll at any point, even while older pages load, ends find's navigation.
+  // The match stays highlighted.
+  useEffect(() => {
+    if (!target || !viewport) return;
+    const stop = () => {
+      if (settledKeyRef.current === target.key) return;
+      settle(target.key);
+      const list = listRef.current;
+      const scrollNode = list?.getScrollableNode();
+      // Supersede a pending list scroll before the gesture applies.
+      if (list && scrollNode instanceof HTMLElement) {
+        void list.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
+      }
+    };
+    viewport.addEventListener("wheel", stop, { passive: true });
+    viewport.addEventListener("touchmove", stop, { passive: true });
+    viewport.addEventListener("pointerdown", stop, { passive: true });
+    return () => {
+      viewport.removeEventListener("wheel", stop);
+      viewport.removeEventListener("touchmove", stop);
+      viewport.removeEventListener("pointerdown", stop);
+    };
+  }, [listRef, settle, target, viewport]);
 
   const rowId = target
     ? rows.find((row) => row.kind === "message" && row.message.id === target.messageId)?.id
@@ -96,15 +136,10 @@ export function useThreadFindTarget({
     if (!target || rowId === undefined || !list || !viewport) return;
     if (!(scrollNode instanceof HTMLElement)) return;
     let disposed = false;
-    let settled = false;
     let scrolling = false;
     let attempts = 0;
     let frame: number | null = null;
-    const settle = () => {
-      if (settled) return;
-      settled = true;
-      setSettledKey(target.key);
-    };
+    const settled = () => settledKeyRef.current === target.key;
     const paint = () => {
       frame = null;
       const state = list.getState();
@@ -115,7 +150,7 @@ export function useThreadFindTarget({
       );
       if (!row || !(state.sizeAtIndex(index) > 0)) {
         // Off-screen virtual rows have no DOM yet. Bring the row in first.
-        if (settled || scrolling) return;
+        if (settled() || scrolling) return;
         scrolling = true;
         void Promise.resolve(
           list.scrollToIndex({ index, animated: false, viewPosition: 0.3 }),
@@ -135,13 +170,13 @@ export function useThreadFindTarget({
         if (active) CSS.highlights.set(ACTIVE_MATCH_HIGHLIGHT, new Highlight(active));
         else CSS.highlights.delete(ACTIVE_MATCH_HIGHLIGHT);
       }
-      if (settled || scrolling) return;
+      if (settled() || scrolling) return;
       const rect = (active ?? row).getBoundingClientRect();
       const bounds = scrollNode.getBoundingClientRect();
       // The composer can cover the bottom of the list, so only the top two thirds count.
       const visible = rect.top >= bounds.top && rect.bottom <= bounds.top + bounds.height * (2 / 3);
       if (visible || attempts >= MAX_SCROLL_ATTEMPTS) {
-        settle();
+        settle(target.key);
         return;
       }
       attempts += 1;
@@ -162,18 +197,9 @@ export function useThreadFindTarget({
     const schedule = () => {
       if (!disposed && frame === null) frame = requestAnimationFrame(paint);
     };
-    // A user scroll takes over from find, which then only highlights.
-    const stopScrolling = () => {
-      if (settled) return;
-      settle();
-      void list.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
-    };
     const observer = new MutationObserver(schedule);
     observer.observe(scrollNode, { childList: true, subtree: true, characterData: true });
     const stopListening = list.getState().listenToPosition(rowId, schedule);
-    scrollNode.addEventListener("wheel", stopScrolling, { passive: true });
-    scrollNode.addEventListener("touchmove", stopScrolling, { passive: true });
-    scrollNode.addEventListener("pointerdown", stopScrolling, { passive: true });
     schedule();
     return () => {
       disposed = true;
@@ -181,12 +207,9 @@ export function useThreadFindTarget({
       if (scrolling) void list.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
       observer.disconnect();
       stopListening();
-      scrollNode.removeEventListener("wheel", stopScrolling);
-      scrollNode.removeEventListener("touchmove", stopScrolling);
-      scrollNode.removeEventListener("pointerdown", stopScrolling);
       clearHighlights();
     };
-  }, [listRef, rowId, target, viewport]);
+  }, [listRef, rowId, settle, target, viewport]);
 
   const positioning = target !== null && settledKey !== target.key;
   return {
