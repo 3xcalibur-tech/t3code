@@ -60,8 +60,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
-import * as ServerConfig from "../../config.ts";
+import { ProviderHost, type ProviderHostShape } from "@t3tools/provider-core/server/host";
 import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import {
@@ -232,7 +231,7 @@ export interface PiAdapterV2Options {
   readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly serverConfig: ServerConfig.ServerConfig["Service"];
+  readonly host: ProviderHostShape;
   readonly continuationRequests?: {
     readonly offer: (
       request: ProviderContinuationRequests.ProviderContinuationRequest,
@@ -408,7 +407,7 @@ export function makePiAdapterV2(
       input: ProviderAdapter.ProviderAdapterV2OpenSessionInput,
     ) {
       const scope = yield* Effect.scope;
-      const cwd = input.runtimePolicy.cwd ?? options.serverConfig.cwd;
+      const cwd = input.runtimePolicy.cwd ?? options.host.paths.cwd;
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
       const provideCacheFs = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
         effect.pipe(
@@ -426,7 +425,7 @@ export function makePiAdapterV2(
       // hook. Materialize it even when this session has no MCP credential so
       // Supervised never silently degrades to unrestricted tool execution.
       const extensionPath = yield* provideCacheFs(
-        materializePiT3McpExtension(options.serverConfig.providerStatusCacheDir),
+        materializePiT3McpExtension(options.host.paths.providerStatusCacheDir),
       );
       const resolvedLaunchArgs = resolvePiLaunchArgs(options.settings.launchArgs);
       if (!resolvedLaunchArgs.ok) {
@@ -2338,10 +2337,7 @@ export function makePiAdapterV2(
         const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
         const extraLines: Array<string> = [];
         for (const attachment of attachments) {
-          const path = resolveAttachmentPath({
-            attachmentsDir: options.serverConfig.attachmentsDir,
-            attachment,
-          });
+          const path = options.host.resolveAttachmentPath(attachment);
           if (path === null) continue;
           if (attachment.mimeType.startsWith("image/")) {
             const bytes = yield* options.fileSystem.readFile(path);
@@ -3205,7 +3201,7 @@ export type PiAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
-  | ServerConfig.ServerConfig;
+  | ProviderHost;
 
 export const PiAdapterV2Driver: ProviderAdapterDriver<PiSettings, PiAdapterV2DriverEnv> = {
   driverKind: PI_DRIVER_KIND,
@@ -3217,7 +3213,7 @@ export const PiAdapterV2Driver: ProviderAdapterDriver<PiSettings, PiAdapterV2Dri
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const serverConfig = yield* ServerConfig.ServerConfig;
+      const host = yield* ProviderHost;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       return makePiAdapterV2({
         instanceId: input.instanceId,
@@ -3226,7 +3222,7 @@ export const PiAdapterV2Driver: ProviderAdapterDriver<PiSettings, PiAdapterV2Dri
         spawner,
         fileSystem,
         idAllocator,
-        serverConfig,
+        host,
         continuationRequests,
       });
     },
@@ -3253,7 +3249,7 @@ const layer: Layer.Layer<ProviderAdapter.ProviderAdapterV2, never, PiAdapterV2Dr
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const serverConfig = yield* ServerConfig.ServerConfig;
+      const host = yield* ProviderHost;
       const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
       return makePiAdapterV2({
         instanceId: PI_DEFAULT_INSTANCE_ID,
@@ -3262,7 +3258,7 @@ const layer: Layer.Layer<ProviderAdapter.ProviderAdapterV2, never, PiAdapterV2Dr
         spawner,
         fileSystem,
         idAllocator,
-        serverConfig,
+        host,
         continuationRequests,
       });
     }),

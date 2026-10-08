@@ -35,6 +35,10 @@
       "types": "./src/server/failure.ts",
       "import": "./src/server/failure.ts"
     },
+    "./server/host": {
+      "types": "./src/server/host.ts",
+      "import": "./src/server/host.ts"
+    },
     "./server/ids": {
       "types": "./src/server/ids.ts",
       "import": "./src/server/ids.ts"

@@ -20,8 +20,9 @@ import * as CursorAgentSdk from "../../orchestration-v2/Adapters/CursorAgentSdk.
 import * as IdAllocator from "@t3tools/provider-core/server/ids";
 import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/adapter";
 import { Cursor } from "../cursorSdk.ts";
+import * as ProviderHostLive from "../ProviderHostLive.ts";
 
-const layerTest = ServerSecretStore.layer.pipe(
+const layerDeps = ServerSecretStore.layer.pipe(
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), {
       prefix: "t3-cursor-driver-copy-command-",
@@ -53,6 +54,7 @@ const layerTest = ServerSecretStore.layer.pipe(
     ),
   ),
 );
+const layerTest = ProviderHostLive.layer.pipe(Layer.provideMerge(layerDeps));
 
 it.layer(layerTest)("CursorDriver", (it) => {
   it.effect(

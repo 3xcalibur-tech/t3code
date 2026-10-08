@@ -21,13 +21,12 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/process";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ProviderHost } from "@t3tools/provider-core/server/host";
 import * as ServerConfig from "../../config.ts";
 import {
   AcpRegistryAdapterV2Driver,
   type AcpRegistryAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/AcpRegistryAdapterV2.ts";
-import * as ServerSettings from "../../serverSettings.ts";
 import type { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -460,10 +459,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
     : snapshot;
 });
 
-export type AcpRegistryDriverEnv =
-  | AcpRegistryAdapterV2DriverEnv
-  | BackgroundPolicy.BackgroundPolicy
-  | ServerSettings.ServerSettingsService;
+export type AcpRegistryDriverEnv = AcpRegistryAdapterV2DriverEnv | ProviderHost;
 
 /** Canonical provider-instance wrapper for ACP Registry orchestration adapters. */
 export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
@@ -494,7 +490,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const hostEnvironment = yield* HostProcessEnvironment;
       const serverConfig = yield* ServerConfig.ServerConfig;
-      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const host = yield* ProviderHost;
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -628,7 +624,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           }
           return { provider: enriched, generation: cacheState.generation };
         });
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
+      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, host.settings);
       const snapshot = yield* makeManagedServerProvider<
         ProviderSnapshotSettings<AcpRegistrySettings>
       >({

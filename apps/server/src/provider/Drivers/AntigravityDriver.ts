@@ -18,9 +18,8 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type { AcpError } from "effect-acp/errors";
 
-import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ProviderHost } from "@t3tools/provider-core/server/host";
 import * as ServerConfig from "../../config.ts";
-import * as ServerSettings from "../../serverSettings.ts";
 import {
   isAntigravityTextGenerationAvailable,
   makeAntigravityTextGeneration,
@@ -70,7 +69,7 @@ const isNodeRuntimeUnavailableError = Schema.is(NodeRuntimeUnavailableError);
 
 export type AntigravityDriverEnv =
   | AntigravityInstallation.AntigravityInstallation
-  | BackgroundPolicy.BackgroundPolicy
+  | ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
@@ -78,8 +77,7 @@ export type AntigravityDriverEnv =
   | ModelManifest.ModelManifest
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers
-  | ServerConfig.ServerConfig
-  | ServerSettings.ServerSettingsService;
+  | ServerConfig.ServerConfig;
 
 /** Each instance owns its Google profile. Executable releases are shared by the environment. */
 export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityDriverEnv> = {

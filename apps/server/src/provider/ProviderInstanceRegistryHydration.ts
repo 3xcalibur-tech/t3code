@@ -40,14 +40,22 @@ import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMuta
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
 import * as AcpRegistrySupport from "./acp/AcpRegistrySupport.ts";
 import * as AcpRegistryCatalog from "./AcpRegistryCatalog.ts";
+import * as ProviderHostLive from "./ProviderHostLive.ts";
+import type { ProviderHost } from "@t3tools/provider-core/server/host";
+import type * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import type * as ServerConfig from "../config.ts";
 
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
       BuiltInDriversEnv,
       | ProviderOrchestrationAdapterInfrastructure.ProviderOrchestrationAdapterInfrastructure
       | AcpRegistrySupport.AcpRegistryCatalog
+      | ProviderHost
     >
-  | Settings.ServerSettingsService;
+  | Settings.ServerSettingsService
+  // Requirements of the `ProviderHost` the drivers receive.
+  | BackgroundPolicy.BackgroundPolicy
+  | ServerConfig.ServerConfig;
 
 /**
  * Explicit `providerInstances` entries plus an implicit default instance for
@@ -137,6 +145,7 @@ export const layer: Layer.Layer<
     }).pipe(
       Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
       Layer.provide(AcpRegistryCatalog.layer),
+      Layer.provide(ProviderHostLive.layer),
     );
 
     return layerSettingsWatcher.pipe(Layer.provideMerge(layerMutable));
