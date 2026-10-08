@@ -1211,7 +1211,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,
           `${input.toCheckpointRef}^{commit}`,
-          ...(input.filePaths ? ["--", ...input.filePaths.map((file) => `:(literal)${file}`)] : []),
+          // Paths are repository-relative, while cwd can be a subdirectory.
+          ...(input.filePaths
+            ? ["--", ...input.filePaths.map((file) => `:(top,literal)${file}`)]
+            : []),
         ],
         allowNonZeroExit: true,
         maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
@@ -1245,7 +1248,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         ],
       });
       // Each line is "<parent> <committer time>". The parent is the HEAD at capture.
-      const [fromLine = "", toLine = ""] = heads.stdout.trim().split("\n");
+      const [fromLine = "", toLine = ""] = heads.stdout.trimEnd().split("\n");
       const [startHead = "", capturedAt = ""] = fromLine.split(" ");
       const [endHead = ""] = toLine.split(" ");
       if (startHead === "" || endHead === "" || startHead === endHead) {
@@ -1260,17 +1263,17 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
           outputMode: "error",
         }).pipe(Effect.map((result) => result.stdout.split("\0")));
-      // --cc lists a merge's paths only where the result differs from every parent,
-      // so a merge keeps its conflict fixes and drops the clean upstream changes.
+      // Remerge diff lists a merge's paths only where the result differs from Git's
+      // automatic merge, so a merge keeps its conflict fixes and drops clean upstream changes.
       const pathLists = yield* Effect.all(
         [
           listPaths(["diff", startHead, `${input.fromCheckpointRef}^{commit}`]),
           listPaths(["diff", endHead, `${input.toCheckpointRef}^{commit}`]),
-          listPaths(["log", "--format=", "--cc", `${endHead}..${startHead}`]),
+          listPaths(["log", "--format=", "--diff-merges=remerge", `${endHead}..${startHead}`]),
           listPaths([
             "log",
             "--format=",
-            "--cc",
+            "--diff-merges=remerge",
             `--since=@${capturedAt}`,
             `${startHead}..${endHead}`,
           ]),

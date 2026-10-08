@@ -448,6 +448,34 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         ]);
       }),
     );
+    it.effect("limits a diff to repository paths from a subdirectory workspace", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const cwd = NodePath.join(tmp, "app");
+        yield* fileSystem.makeDirectory(cwd);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("checkpoint-file-paths-subdirectory");
+        const refs = {
+          cwd,
+          fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+          toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+        };
+        yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.fromCheckpointRef });
+        yield* writeTextFile(NodePath.join(cwd, "kept.txt"), "kept\n");
+        yield* writeTextFile(NodePath.join(tmp, "README.md"), "# hidden\n");
+        yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.toCheckpointRef });
+
+        const patch = yield* checkpointStore.diffCheckpoints({
+          ...refs,
+          ignoreWhitespace: false,
+          filePaths: ["app/kept.txt"],
+        });
+        expect(patch).toContain("+kept");
+        expect(patch).not.toContain("hidden");
+      }),
+    );
   });
 
   describe("listAuthoredPaths", () => {
@@ -482,9 +510,9 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: refs.toCheckpointRef });
         expect(yield* checkpointStore.listAuthoredPaths(refs)).toBeNull();
 
-        // The turn merges upstream, fixes the conflict, and edits one more file.
+        // The turn merges upstream, fixes the conflict by taking upstream, and edits one more file.
         yield* git(tmp, ["merge", "upstream", "--no-edit"], { allowNonZeroExit: true });
-        yield* writeTextFile(NodePath.join(tmp, "shared.txt"), "resolved\n");
+        yield* writeTextFile(NodePath.join(tmp, "shared.txt"), "upstream\n");
         yield* git(tmp, ["commit", "-am", "merge upstream"]);
         yield* writeTextFile(NodePath.join(tmp, "README.md"), "# edited\n");
         yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: refs.toCheckpointRef });
