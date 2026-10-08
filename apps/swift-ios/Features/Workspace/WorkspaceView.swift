@@ -734,7 +734,7 @@ public struct WorkspaceView: View {
     private var keyboardContext: FeatureKeyboardContext {
         var enabled: Set<FeatureKeyboardCommand> = [.commandPalette, .newTask, .focusSearch, .toggleSidebar]
         if selectedThreadID != nil || isSearching { enabled.insert(.back) }
-        for number in 1...min(9, max(1, renderedThreads.count)) where number <= renderedThreads.count {
+        for number in stride(from: 1, through: min(9, renderedThreads.count), by: 1) {
             enabled.insert(.threadJump(number))
         }
         // Thread and tool scopes provide their actions through this same dispatcher.
@@ -1062,7 +1062,7 @@ struct HomePresentation {
     /// instead of the grouping and sorting passes in `init(snapshot:)`.
     func refreshingRows(from snapshot: FeatureSnapshot) -> HomePresentation {
         let byID = snapshot.threads.reduce(into: [String: FeatureThread]()) { $0[$1.id] = $1 }
-        let contextChanged = (pinned + active + working + snoozed + settled + archived).contains { previous in
+        let contextChanged = [pinned, active, working, snoozed, settled, archived].joined().contains { previous in
             guard let next = byID[previous.id] else { return false }
             return previous.providerID != next.providerID
                 || previous.sessionProviderID != next.sessionProviderID

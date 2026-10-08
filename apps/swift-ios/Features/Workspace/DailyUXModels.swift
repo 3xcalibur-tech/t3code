@@ -1075,20 +1075,16 @@ enum DailyUXSidebarRefresh {
         for threads: [FeatureThread],
         after now: Date
     ) -> Date? {
-        threads.reduce(nil as Date?) { earliest, thread in
-            let snoozeBoundary = thread.isEffectivelySnoozed(at: now)
-                ? thread.snoozedUntil
-                : nil
-            let queuedBoundary = thread.isArchived
-                ? nil
-                : thread.queuedSettlementBoundary(after: now)
-            let threadBoundary = [snoozeBoundary, queuedBoundary]
-                .compactMap { $0 }
-                .min()
-
-            guard let threadBoundary else { return earliest }
-            return min(earliest ?? threadBoundary, threadBoundary)
+        var earliest: Date?
+        for thread in threads {
+            if thread.isEffectivelySnoozed(at: now), let until = thread.snoozedUntil {
+                earliest = min(earliest ?? until, until)
+            }
+            if !thread.isArchived, let queued = thread.queuedSettlementBoundary(after: now) {
+                earliest = min(earliest ?? queued, queued)
+            }
         }
+        return earliest
     }
 }
 
