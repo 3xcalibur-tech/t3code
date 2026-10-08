@@ -49,6 +49,7 @@ public struct ThreadDetailView: View {
     @State private var sendFailed = false
     @State private var feedbackMessages: [FeatureMessage] = []
     @State private var feedbackRevision: UInt64 = 0
+    @State private var timelineMessagesCache = FeatureTimelineMessagesCache()
     @State private var feedbackAlertMessage: String?
     @State private var feedbackIdentifier: String?
     @State private var didRestoreDraft = false
@@ -1609,7 +1610,26 @@ public struct ThreadDetailView: View {
         return Set(v2TimelineState.expandedIDs.filter { $0.hasPrefix("v2-fold:") })
     }
 
+    /// Body runs for many reasons that do not change the transcript, so reuse
+    /// the last result until the detail revision, folds, or feedback change.
     private func timelineMessages(_ messages: [FeatureMessage]) -> [FeatureMessage] {
+        let key = FeatureTimelineMessagesCache.Key(
+            threadID: thread.id,
+            detailRevision: model.detailRevisions[thread.id] ?? 0,
+            expandedTurnFoldIDs: expandedTurnFoldIDs,
+            feedbackRevision: feedbackRevision
+        )
+        if timelineMessagesCache.key == key { return timelineMessagesCache.messages }
+        let result = uncachedTimelineMessages(messages, expandedTurnFoldIDs: key.expandedTurnFoldIDs)
+        timelineMessagesCache.key = key
+        timelineMessagesCache.messages = result
+        return result
+    }
+
+    private func uncachedTimelineMessages(
+        _ messages: [FeatureMessage],
+        expandedTurnFoldIDs: Set<String>?
+    ) -> [FeatureMessage] {
         if let expandedTurnFoldIDs {
             // Folds are display-only. The model retains source order and original action targets.
             return FeatureV2TurnFolding.messages(messages, expandedIDs: expandedTurnFoldIDs) + feedbackMessages
@@ -2541,6 +2561,21 @@ enum ThreadRefreshPresentation: Equatable {
         case .connected, nil: return nil
         }
     }
+}
+
+/// Last `timelineMessages` result. A plain class, so filling it during body
+/// does not invalidate the view.
+@MainActor
+private final class FeatureTimelineMessagesCache {
+    struct Key: Equatable {
+        let threadID: String
+        let detailRevision: UInt64
+        let expandedTurnFoldIDs: Set<String>?
+        let feedbackRevision: UInt64
+    }
+
+    var key: Key?
+    var messages: [FeatureMessage] = []
 }
 
 /// Runs `onChange` when the draft text changes. Only this view depends on
