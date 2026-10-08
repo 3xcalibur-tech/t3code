@@ -1694,7 +1694,7 @@ struct FeatureThreadRow: View {
         }
         if let worktreePath = thread.worktreePath,
            !worktreePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return URL(fileURLWithPath: worktreePath).lastPathComponent
+            return (worktreePath as NSString).lastPathComponent
         }
         return "workspace"
     }
@@ -1841,6 +1841,8 @@ private struct ProjectBadge: View {
     let environmentID: String?
     let workspaceRoot: String?
     let client: (any FeatureClient)?
+    /// In-memory image cache and `.task` key. The disk store normalizes paths on its own.
+    private let faviconKey: String?
     @State private var favicon: UIImage?
 
     init(
@@ -1857,15 +1859,11 @@ private struct ProjectBadge: View {
         self.environmentID = environmentID
         self.workspaceRoot = workspaceRoot
         self.client = client
-        let initialKey = environmentID.flatMap { environmentID in
-            workspaceRoot.map { workspaceRoot in
-                FeatureProjectFaviconCacheKey(
-                    environmentID: environmentID,
-                    workspaceRoot: workspaceRoot
-                ).fingerprint
-            }
+        let faviconKey = environmentID.flatMap { environmentID in
+            workspaceRoot.map { "\(environmentID)\u{0}\($0)" }
         }
-        _favicon = State(initialValue: initialKey.flatMap {
+        self.faviconKey = faviconKey
+        _favicon = State(initialValue: faviconKey.flatMap {
             FeatureProjectFaviconImageCache.shared.image(for: $0)
         })
     }
@@ -1902,14 +1900,6 @@ private struct ProjectBadge: View {
             .task(id: [faviconKey, revision]) {
                 await loadFavicon()
             }
-    }
-
-    private var faviconKey: String? {
-        guard let environmentID, let workspaceRoot else { return nil }
-        return FeatureProjectFaviconCacheKey(
-            environmentID: environmentID,
-            workspaceRoot: workspaceRoot
-        ).fingerprint
     }
 
     private func loadFavicon() async {
