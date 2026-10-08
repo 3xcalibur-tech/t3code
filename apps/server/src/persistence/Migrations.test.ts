@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 
@@ -62,6 +62,9 @@ describe("runMigrations", () => {
       assert.isTrue(Exit.isFailure(exit));
       assert.include(String(exit), "55_OrchestrationV2 (recorded: nothing)");
       assert.include(String(exit), "56_RemoveRedundantProjectionIndexes (recorded: nothing)");
+      assert.include(String(exit), "57_ScheduledTaskWebhooks (recorded: nothing)");
+      assert.include(String(exit), "58_WebhookRelayDeliveries (recorded: nothing)");
+      assert.include(String(exit), "59_McpAppModelContext (recorded: nothing)");
       assert.strictEqual(yield* v2TableCount, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -75,6 +78,9 @@ describe("runMigrations", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [55, "OrchestrationV2"],
         [56, "RemoveRedundantProjectionIndexes"],
+        [57, "ScheduledTaskWebhooks"],
+        [58, "WebhookRelayDeliveries"],
+        [59, "McpAppModelContext"],
       ]);
       assert.isAbove(yield* v2TableCount, 0);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -85,7 +91,7 @@ describe("runMigrations", () => {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations();
       yield* sql`
-        INSERT INTO effect_sql_migrations (migration_id, name) VALUES (57, 'NewerV2Migration')
+        INSERT INTO effect_sql_migrations (migration_id, name) VALUES (60, 'NewerV2Migration')
       `;
 
       assert.deepStrictEqual(yield* runMigrations(), []);
