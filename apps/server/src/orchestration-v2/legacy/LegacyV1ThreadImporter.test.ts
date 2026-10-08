@@ -536,7 +536,7 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
 });
 
 // Own layer: importPendingTranscripts counts every pending thread in the database.
-it.layer(TestLayer)("LegacyV1ThreadImporter unreadable message context", (it) => {
+it.layer(layerTest)("LegacyV1ThreadImporter unreadable message context", (it) => {
   it.effect("drops an unreadable context and keeps the message and readable contexts", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
