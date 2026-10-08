@@ -31,6 +31,7 @@ import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import {
   BrowserWindow,
   ClipboardItem,
+  app,
   type Session,
   clipboard,
   nativeImage,
@@ -3686,13 +3687,48 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const browserSession = yield* BrowserSession.BrowserSession;
   const browserHost = yield* DesktopBrowserHost.DesktopBrowserHost;
   const downloadSessions = new WeakSet<Electron.Session>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const runForkDownload = Effect.runForkWith(yield* Effect.context<never>());
+  /** Puts a copy in Downloads under a name that never replaces a file already there. */
+  const copyToDownloads = Effect.fn("PreviewManager.copyToDownloads")(function* (
+    source: string,
+    fileName: string,
+  ) {
+    const directory = app.getPath("downloads");
+    const extension = path.extname(fileName);
+    const stem = path.basename(fileName, extension) || "download";
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const target = path.join(
+        directory,
+        attempt === 0 ? `${stem}${extension}` : `${stem} (${attempt})${extension}`,
+      );
+      if (yield* fileSystem.exists(target)) continue;
+      yield* fileSystem.copyFile(source, target);
+      shell.showItemInFolder(target);
+      return;
+    }
+  });
   // Server tabs save downloads where the server's engine reads them. Downloads
   // the person starts in a tab the server is not driving keep Electron's dialog.
   const placeServerDownloads = (session: Electron.Session) => {
     if (downloadSessions.has(session)) return;
     downloadSessions.add(session);
     session.on("will-download", (_event, item, source) => {
-      browserHost.placeDownload(source, item);
+      // Decided before the server's path is set: placing it consumes the guid.
+      const human = browserHost.humanStartedDownload(source);
+      if (!browserHost.placeDownload(source, item) || !human) return;
+      // The server keeps its copy for agents; the person who clicked gets theirs.
+      item.once("done", (_doneEvent, state) => {
+        if (state !== "completed") return;
+        runForkDownload(
+          copyToDownloads(item.getSavePath(), item.getFilename()).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("preview download copy failed", { cause: error }),
+            ),
+          ),
+        );
+      });
     });
   };
 
