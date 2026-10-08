@@ -73,7 +73,11 @@ export function ThreadFindBar({
   const occurrence = current?.occurrence;
   const target = useMemo<ThreadFindTarget | null>(
     () =>
-      messageId !== undefined && occurrence !== undefined && settledQuery
+      // Matches for an older query must not move the view while the new one debounces.
+      query.trim() === settledQuery &&
+      messageId !== undefined &&
+      occurrence !== undefined &&
+      settledQuery
         ? {
             messageId,
             occurrence,
@@ -81,7 +85,7 @@ export function ThreadFindBar({
             key: `${session}\u0000${settledQuery}\u0000${messageId}\u0000${occurrence}\u0000${navigation}`,
           }
         : null,
-    [messageId, navigation, occurrence, session, settledQuery],
+    [messageId, navigation, occurrence, query, session, settledQuery],
   );
   useEffect(() => onTarget(target), [onTarget, target]);
   useEffect(() => () => onTarget(null), [onTarget]);

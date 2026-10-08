@@ -19,6 +19,8 @@ const MATCH_HIGHLIGHT = "t3-thread-find";
 const ACTIVE_MATCH_HIGHLIGHT = "t3-thread-find-active";
 const MESSAGE_BODY_SELECTOR = "[data-user-message-body], [data-assistant-citation-source]";
 const MAX_SCROLL_ATTEMPTS = 8;
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+const EDITABLE_SELECTOR = "input, textarea, [contenteditable=true]";
 
 function clearHighlights() {
   if (typeof CSS === "undefined" || !CSS.highlights) return;
@@ -102,6 +104,7 @@ export function useThreadFindTarget({
   ]);
 
   // A user scroll at any point, even while older pages load, ends find's navigation.
+  // Scroll keys count unless they are typed into a field such as the find input.
   // The match stays highlighted.
   useEffect(() => {
     if (!target || !viewport) return;
@@ -115,13 +118,24 @@ export function useThreadFindTarget({
         void list.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
       }
     };
+    const onScrollKey = (event: KeyboardEvent) => {
+      if (
+        SCROLL_KEYS.has(event.key) &&
+        !(event.target instanceof Element && event.target.closest(EDITABLE_SELECTOR))
+      ) {
+        stop();
+      }
+    };
+    const ownerDocument = viewport.ownerDocument;
     viewport.addEventListener("wheel", stop, { passive: true });
     viewport.addEventListener("touchmove", stop, { passive: true });
     viewport.addEventListener("pointerdown", stop, { passive: true });
+    ownerDocument.addEventListener("keydown", onScrollKey);
     return () => {
       viewport.removeEventListener("wheel", stop);
       viewport.removeEventListener("touchmove", stop);
       viewport.removeEventListener("pointerdown", stop);
+      ownerDocument.removeEventListener("keydown", onScrollKey);
     };
   }, [listRef, settle, target, viewport]);
 
