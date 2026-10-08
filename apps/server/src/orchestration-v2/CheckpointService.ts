@@ -19,7 +19,7 @@ import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { parseTurnDiffFilesFromNumstat } from "../checkpointing/Diffs.ts";
+import { isGitImport, parseTurnDiffFilesFromNumstat } from "../checkpointing/Diffs.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 
@@ -440,47 +440,50 @@ export const layer: Layer.Layer<
                 }).pipe(Effect.as(false)),
               ),
             );
+          const refs = {
+            cwd: input.scope.cwd,
+            fromCheckpointRef: previousCheckpointRef,
+            toCheckpointRef: checkpointRef,
+          };
+          // A pull or rebase can change thousands of files the turn did not write.
+          // Clients group those files under "Updated via Git".
           const files = previousExists
-            ? yield* checkpointStore
-                .diffCheckpoints({
-                  cwd: input.scope.cwd,
-                  fromCheckpointRef: previousCheckpointRef,
-                  toCheckpointRef: checkpointRef,
+            ? yield* Effect.all([
+                checkpointStore.diffCheckpoints({
+                  ...refs,
                   fallbackFromToHead: false,
                   ignoreWhitespace: false,
                   format: "numstat",
-                })
-                .pipe(
-                  Effect.map((diff) =>
-                    parseTurnDiffFilesFromNumstat(diff).map((file) => ({
-                      path: file.path,
-                      kind: "modified",
-                      additions: file.additions,
-                      deletions: file.deletions,
-                    })),
-                  ),
+                }),
+                checkpointStore.listAuthoredPaths(refs).pipe(
                   Effect.catch((cause) =>
-                    Effect.logWarning("orchestration V2 checkpoint diff summary failed", {
+                    Effect.logWarning("orchestration V2 checkpoint authored paths failed", {
                       scopeId: input.scope.id,
                       checkpointRef,
                       cause: String(cause),
-                    }).pipe(Effect.as([])),
+                    }).pipe(Effect.as(null)),
                   ),
-                )
+                ),
+              ]).pipe(
+                Effect.map(([diff, authoredPaths]) =>
+                  parseTurnDiffFilesFromNumstat(diff).map((file) => ({
+                    ...(isGitImport(file, authoredPaths) ? { origin: "git" as const } : {}),
+                    path: file.path,
+                    kind: "modified",
+                    additions: file.additions,
+                    deletions: file.deletions,
+                  })),
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("orchestration V2 checkpoint diff summary failed", {
+                    scopeId: input.scope.id,
+                    checkpointRef,
+                    cause: String(cause),
+                  }).pipe(Effect.as([])),
+                ),
+              )
             : [];
 
-          const gitPaths =
-            files.length === 0
-              ? []
-              : yield* checkpointStore
-                  .getGitChangedPaths({
-                    cwd: input.scope.cwd,
-                    fromCheckpointRef: previousCheckpointRef,
-                    toCheckpointRef: checkpointRef,
-                    ignoreWhitespace: false,
-                  })
-                  .pipe(Effect.catch(() => Effect.succeed([])));
-          const imported = new Set(gitPaths);
           return makeCheckpoint({
             id: checkpointId,
             scope: input.scope,
@@ -491,9 +494,7 @@ export const layer: Layer.Layer<
             appRunOrdinal: input.appRunOrdinal,
             ref: checkpointRef,
             status: "ready",
-            files: files.map((file) =>
-              imported.has(file.path) ? { ...file, origin: "git" as const } : file,
-            ),
+            files,
             capturedAt: input.capturedAt,
           });
         }),

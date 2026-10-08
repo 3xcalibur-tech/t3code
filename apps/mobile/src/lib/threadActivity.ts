@@ -1,4 +1,3 @@
-import { partitionCheckpointFiles } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
@@ -456,7 +455,6 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
     item.type === "thread_created" ||
     item.type === "system_notice" ||
     // An answerable card: it must stand alone and never fold away with the run.
-    item.type === "checkpoint" ||
     item.type === "secret_request"
   );
 }
@@ -673,14 +671,10 @@ function itemPreview(item: OrchestrationV2TurnItem): string | null {
       return item.prompt ?? null;
     case "user_input_request":
       return item.questions.map((question) => question.question).join(" · ") || null;
-    case "checkpoint": {
-      const groups = partitionCheckpointFiles(item.files);
-      if (groups.gitFiles.length > 0)
-        return `${groups.workspaceFiles.length} changed file${groups.workspaceFiles.length === 1 ? "" : "s"} · ${groups.gitFiles.length} updated via Git`;
+    case "checkpoint":
       return item.files.length === 1
         ? (item.files[0]?.path ?? null)
         : `${item.files.length} changed files`;
-    }
     case "run_interrupt_request":
     case "run_interrupt_result":
     case "system_notice":
@@ -765,7 +759,7 @@ function toWorkLogEntry(
         toolData: item,
       };
     case "checkpoint":
-      return { ...common, ...(detail ? { detail } : {}), toolData: item };
+      return { ...common, changedFiles: item.files.map((file) => file.path), toolData: item };
     case "approval_request":
       return {
         ...common,
@@ -789,11 +783,6 @@ export function formatItemFullDetail(
   row: OrchestrationV2ProjectedTurnItem,
   item: OrchestrationV2TurnItem,
 ): string {
-  if (item.type === "checkpoint") {
-    return item.files
-      .map((file) => `${file.path}${file.origin === "git" ? " (updated via Git)" : ""}`)
-      .join("\n");
-  }
   return JSON.stringify(
     {
       visibility: row.visibility,
@@ -1765,8 +1754,7 @@ export function buildThreadFeed(
   for (const row of visibleTurnItems) {
     const item = row.item;
     if (turnItemIsWorkspacePreparation(item)) continue;
-    if (item.type === "todo_list" || (item.type === "checkpoint" && item.files.length === 0))
-      continue;
+    if (item.type === "todo_list" || item.type === "checkpoint") continue;
     if (item.type === "user_message" && foldedAnswerMessageIds.has(item.messageId)) continue;
     // Match the web timeline: only the terminal interrupt result is useful to
     // users; the preceding request is transient bookkeeping.

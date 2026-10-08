@@ -31,7 +31,7 @@ import {
   type CheckpointServiceError,
 } from "./Errors.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
-import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import { isGitImport, parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 
 /** Service tag for checkpoint diff queries. */
 export class CheckpointDiffQuery extends Context.Service<
@@ -190,65 +190,24 @@ export const make = Effect.gen(function* () {
         fallbackFromToHead: false,
         ignoreWhitespace,
       };
-      // Capture attributes only the previous checkpoint in this scope, not arbitrary turn ranges.
-      const fromScopeId =
-        input.fromTurnCount === 0
-          ? projection.checkpointScopes.find((scope) => scope.kind === "root_run")?.id
-          : readyCheckpoints.find((checkpoint) => checkpoint.appRunOrdinal === input.fromTurnCount)
-              ?.scopeId;
-      const summary =
-        input.includeGitChanges !== undefined &&
-        input.toTurnCount === input.fromTurnCount + 1 &&
-        fromScopeId === toScope.id
-          ? yield* threads
-              .getThreadRecords(input.threadId, ["checkpoints"], {
-                checkpointRefs: [toCheckpoint.ref],
-              })
-              .pipe(
-                Effect.map(({ checkpoints }) =>
-                  checkpoints.find(
-                    (checkpoint) =>
-                      checkpoint.status === "ready" &&
-                      checkpoint.scopeId === toScope.id &&
-                      checkpoint.appRunOrdinal === input.toTurnCount &&
-                      checkpoint.ref === toCheckpoint.ref &&
-                      checkpoint.ordinalWithinScope > 0 &&
-                      checkpointRefForScopeOrdinal({
-                        scopeId: checkpoint.scopeId,
-                        ordinalWithinScope: checkpoint.ordinalWithinScope - 1,
-                      }) === fromCheckpointRef &&
-                      checkpointRefForScopeOrdinal({
-                        scopeId: checkpoint.scopeId,
-                        ordinalWithinScope: checkpoint.ordinalWithinScope,
-                      }) === toCheckpoint.ref,
-                  ),
-                ),
-                Effect.orElseSucceed(() => undefined),
-              )
-          : undefined;
-      const storedGitPaths = summary?.files
-        .filter((file) => file.origin === "git")
-        .map((file) => file.path);
-      const gitPaths =
+      // Older clients omit includeGitChanges and keep the complete diff.
+      const authoredPaths =
         input.includeGitChanges === undefined
-          ? []
-          : storedGitPaths && storedGitPaths.length > 0
-            ? storedGitPaths
-            : yield* checkpointStore
-                .getGitChangedPaths(comparison)
-                .pipe(Effect.catch(() => Effect.succeed([])));
+          ? null
+          : yield* checkpointStore
+              .listAuthoredPaths(comparison)
+              .pipe(Effect.orElseSucceed(() => null));
       const files =
-        gitPaths.length === 0
+        authoredPaths === null
           ? []
           : parseTurnDiffFilesFromNumstat(
               yield* checkpointStore.diffCheckpoints({ ...comparison, format: "numstat" }),
             );
-      const imported = new Set(gitPaths);
-      const gitFileCount = files.filter((file) => imported.has(file.path)).length;
+      const gitFileCount = files.filter((file) => isGitImport(file, authoredPaths)).length;
       const filePaths =
-        input.includeGitChanges === false && gitPaths.length > 0
+        input.includeGitChanges === false && gitFileCount > 0
           ? files
-              .filter((file) => !imported.has(file.path))
+              .filter((file) => !isGitImport(file, authoredPaths))
               .flatMap((file) =>
                 file.previousPath === undefined ? [file.path] : [file.previousPath, file.path],
               )

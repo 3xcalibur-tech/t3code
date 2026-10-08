@@ -5,13 +5,14 @@ repositories, create pull requests, and review changes.
 
 ## Review turn changes
 
-A turn's changed-files summary separates recognized upstream merge changes from other workspace
-changes. Show Git changes to include those imported files in the turn diff. The complete saved
-workspace remains available for restore.
+When a turn pulls, merges, or rebases, the files that Git brought in show under **Updated via Git**,
+apart from the turn's own changes. They are hidden by default. Select **Show Git files** in the
+changed-files card, or **Show Git changes** in the diff panel, to see them. Restore still uses the
+complete saved workspace.
 
-Attribution is conservative: edits to imported files, overlapping merge changes, older checkpoints,
-and ambiguous Git rewrites remain in the ordinary file list. Use the branch comparison to review
-cumulative changes against your base branch.
+A file stays in the main list when the turn edited it, committed it, or fixed a conflict in it.
+Commits made after the turn started count as the turn's own work. Turns from before this update show
+every changed file in one list.
 
 ## Connect an account
 

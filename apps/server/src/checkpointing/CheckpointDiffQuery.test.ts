@@ -54,7 +54,6 @@ function layerFor(input: {
       Layer.mergeAll(
         Layer.mock(ThreadManagement.ThreadManagementService)({
           getCheckpointContext: () => input.projection,
-          getThreadRecords: () => Effect.fail(new OrchestratorProjectionError({ threadId })),
         }),
         Layer.mock(CheckpointStore.CheckpointStore)({
           diffCheckpoints: input.diffCheckpoints ?? (() => Effect.succeed("diff")),
