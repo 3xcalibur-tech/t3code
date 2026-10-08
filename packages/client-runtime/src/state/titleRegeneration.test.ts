@@ -1,5 +1,5 @@
 import { CommandId, EnvironmentId } from "@t3tools/contracts";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it } from "vite-plus/test";
 
 import { scopeThreadShell, type EnvironmentThreadShell } from "./models.ts";

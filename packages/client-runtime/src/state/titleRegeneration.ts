@@ -1,5 +1,5 @@
-// @effect-diagnostics globalTimers:off - Promise helper for UI callers, outside an Effect runtime.
-import type { Atom, AtomRegistry } from "effect/unstable/reactivity";
+// @effect-diagnostics globalTimers:off -- Promise helper for UI callers, outside an Effect runtime.
+import type { Atom, AtomRegistry } from "effect/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
 
@@ -50,9 +50,10 @@ export function waitForTitleRegenerationFailure(input: {
       }
     };
 
-    unsubscribe = input.registry.subscribe(input.atom, inspect);
+    const stop = input.registry.subscribe(input.atom, inspect);
+    unsubscribe = stop;
     if (settled) {
-      unsubscribe();
+      stop();
       return;
     }
     inspect(input.registry.get(input.atom));
