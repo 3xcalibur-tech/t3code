@@ -1598,6 +1598,7 @@ export default function ChatView(props: ChatViewProps) {
     readonly focusRequest: number;
   } | null>(null);
   const [findTarget, setFindTarget] = useState<ThreadFindTarget | null>(null);
+  if (threadFind !== null && threadFind.threadKey !== routeThreadKey) setThreadFind(null);
   const threadFindOpen = routeKind === "server" && threadFind?.threadKey === routeThreadKey;
   const openThreadFindBar = useCallback(() => {
     if (routeKind !== "server") return;
@@ -3974,6 +3975,12 @@ export default function ChatView(props: ChatViewProps) {
   const timelineMessages = useMemo(
     () => timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
     [timelineEntries],
+  );
+  // Find refreshes when a message arrives or finishes streaming, not on every token.
+  const threadFindRevision = useMemo(
+    () =>
+      `${timelineMessages.length}:${timelineMessages.filter((message) => message.streaming).length}`,
+    [timelineMessages],
   );
   const displayedTimeline = resolveThreadSwitchTimeline({
     loading: timelineEntries.length === 0 && threadSyncPhase !== null,
@@ -11441,7 +11448,7 @@ export default function ChatView(props: ChatViewProps) {
                 <ThreadFindBar
                   key={routeThreadKey}
                   threadRef={routeThreadRef}
-                  revision={displayedTimeline.entries.length}
+                  revision={threadFindRevision}
                   focusRequest={threadFind.focusRequest}
                   onTarget={setFindTarget}
                   onClose={() => {

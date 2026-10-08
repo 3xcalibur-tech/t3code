@@ -95,6 +95,7 @@ export function useThreadFindTarget({
     const scrollNode = list?.getScrollableNode();
     if (!target || rowId === undefined || !list || !viewport) return;
     if (!(scrollNode instanceof HTMLElement)) return;
+    let disposed = false;
     let settled = false;
     let scrolling = false;
     let attempts = 0;
@@ -157,8 +158,9 @@ export function useThreadFindTarget({
         schedule();
       });
     };
+    // Pending list scrolls resolve after cleanup; they must not repaint an old target.
     const schedule = () => {
-      if (frame === null) frame = requestAnimationFrame(paint);
+      if (!disposed && frame === null) frame = requestAnimationFrame(paint);
     };
     // A user scroll takes over from find, which then only highlights.
     const stopScrolling = () => {
@@ -174,7 +176,9 @@ export function useThreadFindTarget({
     scrollNode.addEventListener("pointerdown", stopScrolling, { passive: true });
     schedule();
     return () => {
+      disposed = true;
       if (frame !== null) cancelAnimationFrame(frame);
+      if (scrolling) void list.scrollToOffset({ offset: scrollNode.scrollTop, animated: false });
       observer.disconnect();
       stopListening();
       scrollNode.removeEventListener("wheel", stopScrolling);

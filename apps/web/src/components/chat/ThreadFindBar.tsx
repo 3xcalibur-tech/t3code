@@ -25,8 +25,8 @@ export function ThreadFindBar({
   onClose,
 }: {
   threadRef: ScopedThreadRef;
-  /** Changes when the thread gains messages, so the results refresh. */
-  revision: number;
+  /** Changes when the thread's messages change, so the results refresh. */
+  revision: string;
   /** Changes on every Cmd+F, to focus and select the query again. */
   focusRequest: number;
   onTarget: (target: ThreadFindTarget | null) => void;
