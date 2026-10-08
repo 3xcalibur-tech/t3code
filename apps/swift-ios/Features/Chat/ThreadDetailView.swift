@@ -2886,9 +2886,8 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.onEditMessage = onEditMessage
         context.coordinator.canEditPendingMessage = canEditPendingMessage
         context.coordinator.onEditPendingMessage = onEditPendingMessage
-        context.coordinator.inspectionChanged = context.coordinator.currentV2Inspection?.retryableRunIDs != v2Inspection?.retryableRunIDs
+        let inspectionChanged = context.coordinator.currentV2Inspection?.retryableRunIDs != v2Inspection?.retryableRunIDs
             || context.coordinator.currentV2Inspection?.providers != v2Inspection?.providers
-        context.coordinator.inspectionChanged = context.coordinator.inspectionChanged
             || context.coordinator.currentEmbeddedContext?.canEnterFullscreen != embeddedContext?.canEnterFullscreen
             || context.coordinator.currentSecretContext?.canAnswer != secretContext?.canAnswer
         context.coordinator.currentV2Inspection = v2Inspection
@@ -2899,6 +2898,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         context.coordinator.update(
             threadID: threadID,
             environmentID: environmentID,
+            inspectionChanged: inspectionChanged,
             messages: messages,
             imageContext: imageContext,
             attachmentContext: attachmentContext,
@@ -2968,7 +2968,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         var currentV2Inspection: FeatureV2ItemInspectionContext?
         var currentSecretContext: FeatureSecretRequestContext?
         var currentEmbeddedContext: FeatureEmbeddedContentContext?
-        var inspectionChanged = false
         var onFork: ((FeatureThreadWorkflowSource) -> Void)?
         var onOpenThread: ((String) -> Void)?
         private var currentWorkflows: FeatureThreadWorkflows = .unavailable
@@ -3107,6 +3106,7 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
         func update(
             threadID: String,
             environmentID: String?,
+            inspectionChanged: Bool,
             messages: [FeatureMessage],
             imageContext: MarkdownImageContext?,
             attachmentContext: FeatureAttachmentContext?,
@@ -3137,12 +3137,19 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             let imageContextChanged = currentImageContext != imageContext
                 || currentAttachmentContext != attachmentContext
             let skillsChanged = currentSkills != skills
-            let inspectionContextChanged = currentEnvironmentID != environmentID || inspectionChanged
-            inspectionChanged = false
-            let workflowChangedIDs = workflowState.update(
-                messages: messages, workflows: workflows,
-                environmentID: environmentID, isWorkflowBusy: isWorkflowBusy
-            )
+            let environmentChanged = currentEnvironmentID != environmentID
+            let inspectionContextChanged = environmentChanged || inspectionChanged
+            let revisionChanged = currentDetailRevision != renderUpdate?.revision
+            let turnFoldsChanged = currentExpandedTurnFoldIDs != expandedTurnFoldIDs
+            // The scan walks every row, so run it only when one of its inputs changed.
+            let workflowInputsChanged = threadChanged || revisionChanged || turnFoldsChanged || environmentChanged
+                || currentWorkflows != workflows || currentIsWorkflowBusy != isWorkflowBusy
+            let workflowChangedIDs = workflowInputsChanged
+                ? workflowState.update(
+                    messages: messages, workflows: workflows,
+                    environmentID: environmentID, isWorkflowBusy: isWorkflowBusy
+                )
+                : []
             // Keep future cell configurations current even when no displayed row changed.
             currentWorkflows = workflows
             currentIsWorkflowBusy = isWorkflowBusy
@@ -3150,8 +3157,6 @@ private struct FeatureTranscriptCollectionView: UIViewRepresentable {
             currentPresentationDismissal = presentationDismissal
             let typeSizeChanged = currentDynamicTypeSize != dynamicTypeSize
                 || currentCodeSizeSteps != codeSizeSteps
-            let revisionChanged = currentDetailRevision != renderUpdate?.revision
-            let turnFoldsChanged = currentExpandedTurnFoldIDs != expandedTurnFoldIDs
             let workingChanged = currentIsWorking != isWorking
             let workingDetailChanged = currentIsCompacting != isCompacting
                 || currentActiveSubagentCount != activeSubagentCount
