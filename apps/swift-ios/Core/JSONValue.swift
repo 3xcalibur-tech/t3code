@@ -13,9 +13,18 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
     case object([String: JSONValue])
 
     public init(from decoder: any Decoder) throws {
+        // JSON token types never overlap, so try the common string and
+        // container cases first: each failed `try?` builds a DecodingError.
+        // Integers must still come before Double so large values stay exact.
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
         } else if let value = try? container.decode(Int64.self) {
@@ -26,14 +35,8 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
             self = UInt64(exactly: double) == value
                 ? .number(double)
                 : .unsignedInteger(value)
-        } else if let value = try? container.decode(Double.self) {
-            self = .number(value)
-        } else if let value = try? container.decode(String.self) {
-            self = .string(value)
-        } else if let value = try? container.decode([JSONValue].self) {
-            self = .array(value)
         } else {
-            self = .object(try container.decode([String: JSONValue].self))
+            self = .number(try container.decode(Double.self))
         }
     }
 
