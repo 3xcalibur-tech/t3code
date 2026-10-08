@@ -17,9 +17,30 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { readCustomModelEntries } from "@t3tools/shared/model";
-import { isWindowsCommandNotFound } from "../processRunner.ts";
-import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
-import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { createProviderVersionAdvisory } from "./maintenanceResolver.ts";
+import { collectUint8StreamText } from "./collectStreamText.ts";
+
+// Localized cmd.exe "not recognized" messages for a missing executable.
+const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
+  /is not recognized as an internal or external command/i,
+  /n.o . reconhecido como um comando interno/i,
+  /non . riconosciuto come comando interno o esterno/i,
+  /n.est pas reconnu en tant que commande interne/i,
+  /no se reconoce como un comando interno o externo/i,
+  /wird nicht als interner oder externer befehl/i,
+] as const;
+
+/** Whether a Windows exit means the command was not found rather than that it failed. */
+export const isWindowsCommandNotFound = Effect.fn("isWindowsCommandNotFound")(function* (
+  code: number | null,
+  stderr: string,
+) {
+  const platform = yield* HostProcessPlatform;
+  if (platform !== "win32") return false;
+  if (code === 9009) return true;
+  return WINDOWS_COMMAND_NOT_FOUND_PATTERNS.some((pattern) => pattern.test(stderr));
+});
 
 export const DEFAULT_TIMEOUT_MS = 4_000;
 // Auth status checks involve disk/network lookups and can be slow on first run (especially Windows)

@@ -26,7 +26,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { randomUuidV4 } from "./RandomUuid.ts";
+import { randomUuidV4 } from "./randomUuid.ts";
 
 export const IdAllocatorV2Kind = Schema.Literals([
   "command",
@@ -186,7 +186,7 @@ export interface IdAllocatorV2Shape {
 }
 
 export class IdAllocatorV2 extends Context.Service<IdAllocatorV2, IdAllocatorV2Shape>()(
-  "t3/orchestration-v2/IdAllocator/IdAllocatorV2",
+  "@t3tools/provider-core/server/ids/IdAllocatorV2",
 ) {}
 
 const encodePart = (part: string | number): string => encodeURIComponent(String(part));

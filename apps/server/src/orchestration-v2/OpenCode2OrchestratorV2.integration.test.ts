@@ -36,7 +36,7 @@ import {
   decodeProviderReplayNdjson,
   readProviderReplayTranscript,
 } from "@t3tools/provider-testing/replayTranscript";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 
 const SESSION = "ses_f148ca2deffeJcwCnRQtb0YFNX";
 /** Held until the scenario releases it, so the turn is still running meanwhile. */

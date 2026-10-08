@@ -16,10 +16,10 @@ import { ChildProcessSpawner } from "effect/process";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
-import * as ProviderMaintenance from "../providerMaintenance.ts";
+import * as ProviderMaintenance from "@t3tools/provider-core/server/maintenanceResolver";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import {
   OPENCODE_2_RESPONSES,

@@ -29,7 +29,7 @@ import {
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
-} from "./ProviderAdapterDriver.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 
 const driver = ProviderDriverKind.make("codex");

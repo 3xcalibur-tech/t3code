@@ -5,7 +5,7 @@ import {
   t3AcpPromptWithInstructions,
   t3OrchestrationPromptForFirstRun,
   t3OrchestrationSystemPrompt,
-} from "./T3OrchestrationInstructions.ts";
+} from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
   it("distinguishes delegated subagents from ordinary top-level threads", () => {

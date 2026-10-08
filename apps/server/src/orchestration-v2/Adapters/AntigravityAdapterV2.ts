@@ -34,7 +34,7 @@ import {
   makeAntigravityUserInputResponse,
   normalizeAntigravityToolCall,
 } from "../../provider/acp/AntigravityProtocol.ts";
-import type { IdAllocatorV2 } from "../IdAllocator.ts";
+import type { IdAllocatorV2 } from "@t3tools/provider-core/server/ids";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,

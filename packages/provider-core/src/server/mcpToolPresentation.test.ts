@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { mcpToolPresentation } from "./McpToolPresentation.ts";
+import { mcpToolPresentation } from "./mcpToolPresentation.ts";
 
 describe("mcpToolPresentation", () => {
   it("uses supplied names and logos while retaining the server identity", () => {

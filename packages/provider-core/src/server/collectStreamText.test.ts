@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
-import { collectUint8StreamText } from "./collectUint8StreamText.ts";
+import { collectUint8StreamText } from "./collectStreamText.ts";
 
 const encoder = new TextEncoder();
 

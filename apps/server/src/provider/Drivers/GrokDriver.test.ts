@@ -15,7 +15,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as ProviderEventLoggers from "../ProviderEventLoggers.ts";
 import { GrokDriver } from "./GrokDriver.ts";
 
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 
 const layerTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-grok-driver-update-",

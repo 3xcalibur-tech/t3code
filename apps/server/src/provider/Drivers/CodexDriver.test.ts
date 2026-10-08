@@ -32,10 +32,10 @@ import {
   createProviderVersionAdvisory,
   ProviderVersionCache,
   resolveLatestProviderVersion,
-} from "../providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import { CodexDriver } from "./CodexDriver.ts";
 import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
-import * as IdAllocator from "../../orchestration-v2/IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/adapter";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
 

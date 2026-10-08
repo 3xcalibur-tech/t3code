@@ -8,10 +8,10 @@
  */
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
-import { limitTitleMessage } from "./ThreadTitleContext.ts";
+import { limitTitleMessage } from "./threadTitleContext.ts";
 import type { BranchNamingOptions, ChatAttachment } from "@t3tools/contracts";
 
-import { limitSection } from "./TextGenerationUtils.ts";
+import { limitSection } from "./textGenerationUtils.ts";
 import type { TextGenerationPolicy } from "@t3tools/provider-core/server/textGenerationPolicy";
 
 const EARLIER_CONTENT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";

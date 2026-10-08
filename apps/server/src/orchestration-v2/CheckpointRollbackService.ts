@@ -20,7 +20,7 @@ import {
 } from "./CheckpointRestoreSafety.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import { IdAllocatorV2 } from "./IdAllocator.ts";
+import { IdAllocatorV2 } from "@t3tools/provider-core/server/ids";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type { ProviderAdapterV2RollbackTarget } from "@t3tools/provider-core/server/adapter";

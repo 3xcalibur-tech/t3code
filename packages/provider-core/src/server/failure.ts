@@ -13,8 +13,18 @@ import type {
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 
-import type { IdAllocatorV2Shape } from "./IdAllocator.ts";
-import { ContextHandoffBudgetError } from "./ContextHandoffDelivery.ts";
+import type { IdAllocatorV2Shape } from "./ids.ts";
+import * as Schema from "effect/Schema";
+
+/** Raised when portable history does not fit the target provider's context window. */
+export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
+  "ContextHandoffBudgetError",
+  {},
+) {
+  override get message() {
+    return "Insufficient context allowance for the provider handoff. Compact the target conversation or use a larger-context model; the current request has not been truncated.";
+  }
+}
 
 export const MAX_PROVIDER_FAILURE_MESSAGE_LENGTH = 4_096;
 export const MAX_PROVIDER_FAILURE_CODE_LENGTH = 128;

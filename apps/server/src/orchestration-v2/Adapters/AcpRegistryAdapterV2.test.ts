@@ -23,7 +23,7 @@ import type {
 import * as AcpRegistrySupport from "../../provider/acp/AcpRegistrySupport.ts";
 import { ACP_SESSION_MODE_OPTION_ID } from "../../provider/acp/AcpSessionConfig.ts";
 import * as AcpSessionRuntime from "../../provider/acp/AcpSessionRuntime.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 import {
   decodeAcpReplayTranscript,
   makeAcpReplayCompletenessAssertion,

@@ -35,8 +35,8 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 
 import * as ServerConfig from "../../config.ts";
 import * as ProviderContinuationRequests from "../ProviderContinuationRequests.ts";
-import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import * as IdAllocator from "../IdAllocator.ts";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
+import * as IdAllocator from "@t3tools/provider-core/server/ids";
 import {
   ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2Event,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formatThreadTitleContext, limitTitleMessage } from "./ThreadTitleContext.ts";
+import { formatThreadTitleContext, limitTitleMessage } from "./threadTitleContext.ts";
 
 describe("thread title context", () => {
   it("keeps a user's scope change despite long assistant output", () => {

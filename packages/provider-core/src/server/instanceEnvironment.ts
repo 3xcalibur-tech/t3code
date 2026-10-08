@@ -1,6 +1,6 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "./pathExpansion.ts";
 
 export function mergeProviderInstanceEnvironment(
   environment: ProviderInstanceEnvironment | undefined,

@@ -17,7 +17,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import {
   ProviderAdapterDriverCreateError,
   type AnyProviderAdapterDriver,
-} from "./ProviderAdapterDriver.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapter from "@t3tools/provider-core/server/adapter";
 
 const isProviderSetupError = Schema.is(ProviderSetupError);
