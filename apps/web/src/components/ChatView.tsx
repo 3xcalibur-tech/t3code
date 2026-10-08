@@ -11019,6 +11019,7 @@ export default function ChatView(props: ChatViewProps) {
               : 0
           }
           onOpenFile={openFileSurface}
+          onSendRenderMessage={isServerThread ? sendAppMessage : undefined}
           onPendingChange={handleFilePendingChange}
           selectedFilePending={
             renderedRightPanelSurface.kind === "file" &&
