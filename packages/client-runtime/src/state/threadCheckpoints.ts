@@ -16,7 +16,6 @@ export interface ThreadCheckpointSummary {
   readonly checkpointRef: CheckpointRef;
   readonly status: "ready" | "missing" | "error" | "stale";
   readonly files: ReadonlyArray<{
-    readonly origin?: "git";
     readonly path: string;
     readonly kind: string;
     readonly additions: number;
@@ -50,14 +49,4 @@ export function deriveThreadCheckpointSummaries(
       },
     ];
   });
-}
-
-/** Keeps ambiguous and legacy file changes visible; only known Git imports form the second group. */
-export function partitionCheckpointFiles<
-  T extends { readonly path: string; readonly origin?: "git" },
->(files: ReadonlyArray<T>) {
-  const workspaceFiles: T[] = [];
-  const gitFiles: T[] = [];
-  for (const file of files) (file.origin === "git" ? gitFiles : workspaceFiles).push(file);
-  return { workspaceFiles, gitFiles };
 }

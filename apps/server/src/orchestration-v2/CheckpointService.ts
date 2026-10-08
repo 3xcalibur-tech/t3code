@@ -446,7 +446,7 @@ export const layer: Layer.Layer<
             toCheckpointRef: checkpointRef,
           };
           // A pull or rebase can change thousands of files the turn did not write.
-          // Clients group those files under "Updated via Git".
+          // Keep only the files the turn's own work touched.
           const files = previousExists
             ? yield* Effect.all([
                 checkpointStore.diffCheckpoints({
@@ -466,13 +466,14 @@ export const layer: Layer.Layer<
                 ),
               ]).pipe(
                 Effect.map(([diff, authoredPaths]) =>
-                  parseTurnDiffFilesFromNumstat(diff).map((file) => ({
-                    ...(isGitImport(file, authoredPaths) ? { origin: "git" as const } : {}),
-                    path: file.path,
-                    kind: "modified",
-                    additions: file.additions,
-                    deletions: file.deletions,
-                  })),
+                  parseTurnDiffFilesFromNumstat(diff)
+                    .filter((file) => !isGitImport(file, authoredPaths))
+                    .map((file) => ({
+                      path: file.path,
+                      kind: "modified",
+                      additions: file.additions,
+                      deletions: file.deletions,
+                    })),
                 ),
                 Effect.catch((cause) =>
                   Effect.logWarning("orchestration V2 checkpoint diff summary failed", {

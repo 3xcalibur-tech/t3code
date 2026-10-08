@@ -22,7 +22,6 @@ export const ThreadTurnDiff = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
     diff: Schema.String,
-    gitFileCount: Schema.optionalKey(NonNegativeInt),
   }),
   { unsafePreserveChecks: true },
 );
@@ -31,7 +30,6 @@ export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
     ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
-    includeGitChanges: Schema.optionalKey(Schema.Boolean),
   }),
   { unsafePreserveChecks: true },
 );
@@ -44,7 +42,6 @@ export const OrchestrationGetFullThreadDiffInput = Schema.Struct({
   threadId: ThreadId,
   toTurnCount: NonNegativeInt,
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
-  includeGitChanges: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationGetFullThreadDiffInput = typeof OrchestrationGetFullThreadDiffInput.Type;
 

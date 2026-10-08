@@ -1,9 +1,6 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import type { ChangeTypes, FileDiffMetadata } from "@pierre/diffs/types";
-import {
-  partitionCheckpointFiles,
-  type ThreadCheckpointSummary,
-} from "@t3tools/client-runtime/state/thread-checkpoints";
+import type { ThreadCheckpointSummary } from "@t3tools/client-runtime/state/thread-checkpoints";
 import type { ReviewDiffPreviewSource } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
@@ -106,10 +103,7 @@ function checkpointSubtitle(checkpoint: ThreadCheckpointSummary): string {
   if (checkpoint.status !== "ready") {
     return `Diff ${checkpoint.status}`;
   }
-  const groups = partitionCheckpointFiles(checkpoint.files);
-  return groups.gitFiles.length > 0
-    ? `${groups.workspaceFiles.length} changed file${groups.workspaceFiles.length === 1 ? "" : "s"} · ${groups.gitFiles.length} updated via Git`
-    : `${fileCount} file${fileCount === 1 ? "" : "s"} changed`;
+  return `${fileCount} file${fileCount === 1 ? "" : "s"} changed`;
 }
 
 function compareCheckpointTurnCountDescending(

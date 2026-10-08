@@ -193,14 +193,11 @@ export const make = Effect.gen(function* () {
         fallbackFromToHead: false,
         ignoreWhitespace,
       };
-      // Older clients omit includeGitChanges and keep the complete diff.
-      const authoredPaths =
-        input.includeGitChanges === undefined
-          ? null
-          : yield* checkpointStore
-              .listAuthoredPaths(comparison)
-              .pipe(Effect.orElseSucceed(() => null));
-      // Grouping is optional. When the summary fails, the complete diff still loads.
+      // Leave out files that a pull, merge, or rebase brought in, matching the turn's file summary.
+      // Filtering is optional: when it cannot run, the complete diff still loads.
+      const authoredPaths = yield* checkpointStore
+        .listAuthoredPaths(comparison)
+        .pipe(Effect.orElseSucceed(() => null));
       const files =
         authoredPaths === null
           ? []
@@ -212,12 +209,11 @@ export const make = Effect.gen(function* () {
       const retainedPaths = retainedFiles.flatMap((file) =>
         file.previousPath === undefined ? [file.path] : [file.previousPath, file.path],
       );
-      // Retained paths become pathspecs. Skip grouping when they would not fit on a command line.
+      // Retained paths become pathspecs. Skip filtering when they would not fit on a command line.
       const fitsCommandLine =
         retainedPaths.reduce((length, path) => length + path.length + 16, 0) <= MAX_PATHSPEC_CHARS;
-      const gitFileCount = fitsCommandLine ? files.length - retainedFiles.length : 0;
       const filePaths =
-        input.includeGitChanges === false && gitFileCount > 0 ? retainedPaths : undefined;
+        fitsCommandLine && retainedFiles.length < files.length ? retainedPaths : undefined;
       // Select retained paths before generating a patch, so imported bulk cannot exhaust its output limit.
       const diff = yield* checkpointStore
         .diffCheckpoints({
@@ -226,11 +222,7 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.withSpan("checkpoint.turnDiff.diffCheckpoints"));
 
-      // Older clients keep the complete diff. Updated clients explicitly choose the grouped view.
-      const turnDiff = {
-        ...buildTurnDiffResult(input, diff),
-        ...(gitFileCount > 0 ? { gitFileCount } : {}),
-      };
+      const turnDiff = buildTurnDiffResult(input, diff);
       if (!isTurnDiffResult(turnDiff)) {
         return yield* new CheckpointDiffResultInvalidError({
           operation,
@@ -278,9 +270,6 @@ export const make = Effect.gen(function* () {
       fromTurnCount: 0,
       toTurnCount: input.toTurnCount,
       ignoreWhitespace,
-      ...(input.includeGitChanges === undefined
-        ? {}
-        : { includeGitChanges: input.includeGitChanges }),
     });
     if (!isTurnDiffResult(turnDiff)) {
       return yield* new CheckpointDiffResultInvalidError({

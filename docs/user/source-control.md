@@ -5,14 +5,10 @@ repositories, create pull requests, and review changes.
 
 ## Review turn changes
 
-When a turn pulls, merges, or rebases, the files that Git brought in show under **Updated via Git**,
-apart from the turn's own changes. They are hidden by default. Select **Show Git files** in the
-changed-files card, or **Show Git changes** in the diff panel, to see them. Restore still uses the
-complete saved workspace.
-
-A file stays in the main list when the turn edited it, committed it, or fixed a conflict in it.
-Commits made after the turn started count as the turn's own work. Turns from before this update show
-every changed file in one list.
+A turn's changed files and diff show only the turn's own work. When a turn pulls, merges, or
+rebases, the files Git brought in are left out. A file stays in the list when the turn edited it,
+committed it, or fixed a conflict in it. Use the branch comparison to review everything that changed
+against your base branch. Restore still returns the complete saved workspace.
 
 ## Connect an account
 

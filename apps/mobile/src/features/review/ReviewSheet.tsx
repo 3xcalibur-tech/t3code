@@ -478,9 +478,6 @@ export function ReviewSheet(props: ReviewSheetProps) {
     selectSection,
     isSelectedSectionPending,
     diffPreviewRevision,
-    gitFileCount,
-    includeGitChanges,
-    toggleGitChanges,
   } = useReviewSections({
     enabled: isEnvironmentReady,
     environmentId,
@@ -702,31 +699,12 @@ export function ReviewSheet(props: ReviewSheetProps) {
       children.push(<ReviewNotice key="review-notice" notice={parsedDiffNotice} />);
     }
 
-    if (gitFileCount > 0) {
-      children.push(
-        <View
-          key="review-git-changes"
-          className="flex-row flex-wrap items-center gap-2 border-b border-border px-4 py-2"
-        >
-          <Text className="text-xs text-muted-foreground">
-            {gitFileCount} {gitFileCount === 1 ? "file" : "files"} updated via Git{" "}
-            {includeGitChanges ? "shown" : "hidden"}.
-          </Text>
-          <Pressable accessibilityRole="button" onPress={toggleGitChanges}>
-            <Text className="text-sm text-primary">
-              {includeGitChanges ? "Hide Git changes" : "Show Git changes"}
-            </Text>
-          </Pressable>
-        </View>,
-      );
-    }
-
     if (children.length === 0) {
       return null;
     }
 
     return <>{children}</>;
-  }, [error, parsedDiffNotice, gitFileCount, includeGitChanges, toggleGitChanges]);
+  }, [error, parsedDiffNotice]);
   const headerSubtitle = [
     headerDiffSummary.additions,
     headerDiffSummary.deletions,

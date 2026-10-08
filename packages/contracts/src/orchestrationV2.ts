@@ -1190,7 +1190,6 @@ export const OrchestrationV2PlanArtifact = Schema.Union([
 export type OrchestrationV2PlanArtifact = typeof OrchestrationV2PlanArtifact.Type;
 
 export const OrchestrationV2CheckpointFileSummary = Schema.Struct({
-  origin: Schema.optionalKey(Schema.Literal("git")),
   path: TrimmedNonEmptyString,
   kind: TrimmedNonEmptyString,
   additions: NonNegativeInt,
