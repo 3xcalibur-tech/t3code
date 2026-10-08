@@ -10083,7 +10083,10 @@ extension NativeFeatureClient {
     private func saveReadHistory(
         _ snapshot: OrchestrationThreadDetailSnapshot, environmentID: String, lease: ClientReadCache.Lease?
     ) {
-        guard let lease, readCacheLeases[environmentID] == lease else { return }
+        // The cache drops running threads anyway. Check here so streaming
+        // updates do not queue a write task per item.
+        guard let lease, readCacheLeases[environmentID] == lease,
+              snapshot.thread.deletedAt != nil || ClientReadCache.isEligible(snapshot) else { return }
         let threadID = FeatureScopedID.thread(environmentID: environmentID, wireID: snapshot.thread.id)
         let expanded = expandedHistoryIDs.contains(threadID)
         let previous = cacheWriteTask
