@@ -50,7 +50,12 @@ struct FeatureToolActivityIcon: View {
         .frame(width: 16, height: 16)
         .accessibilityHidden(true)
         .task(id: key) {
-            guard let key, Self.images.object(forKey: key as NSString) == nil else { return }
+            guard let key else { return }
+            // NSCache is not observable, so adopt an icon another cell cached after this body ran.
+            if let cached = Self.images.object(forKey: key as NSString) {
+                loaded = (key, cached)
+                return
+            }
             var nativeURL: URL?
             if let context, let app = presentation?.nativeApp {
                 nativeURL = try? await context.resolver.nativeAppIconURL(threadID: context.threadID, app: app)
