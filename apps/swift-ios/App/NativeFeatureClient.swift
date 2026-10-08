@@ -1781,7 +1781,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             environmentName: environment.label,
             title: threadTitle,
             providerID: model.instanceId,
-            providerName: providerDisplayName(model.instanceId),
+            providerName: UsageLimitsPresentation.providerLabel(driver: model.instanceId),
             modelID: model.model
         )
     }
@@ -1977,7 +1977,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             branch: workspaceMode == .worktree ? pending.worktreeBranchName : branch,
             worktreePath: worktreePath,
             providerID: model.instanceId,
-            providerName: providerDisplayName(model.instanceId),
+            providerName: UsageLimitsPresentation.providerLabel(driver: model.instanceId),
             modelID: model.model,
             modelOptions: mapOptionSelections(model.options),
             runtimeMode: runtimeMode,
@@ -6585,7 +6585,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
                     // Match threadProviderName's first matching instance.
                     if names[provider.instanceId] == nil {
                         names[provider.instanceId] = provider.displayName
-                            ?? providerDisplayName(provider.driver)
+                            ?? UsageLimitsPresentation.providerLabel(driver: provider.driver)
                     }
                 }
             let live = projection.mapThreads(
@@ -8117,7 +8117,7 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         return modelsByProvider.keys.sorted().map { providerID in
             FeatureProvider(
                 id: providerID,
-                name: providerDisplayName(providerID),
+                name: UsageLimitsPresentation.providerLabel(driver: providerID),
                 driver: providerID,
                 models: (modelsByProvider[providerID] ?? []).sorted().map {
                     FeatureModel(id: $0, name: $0)
@@ -8332,18 +8332,6 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         }
     }
 
-    private func providerDisplayName(_ id: String) -> String {
-        switch id {
-        case "codex": "Codex"
-        case "claudeAgent", "claude": "Claude"
-        case "cursor": "Cursor"
-        case "grok": "Grok"
-        case "opencode": "OpenCode"
-        case "antigravity": "Antigravity"
-        default: id
-        }
-    }
-
     private func threadProviderName(
         session: OrchestrationSession?,
         modelSelection: ModelSelection,
@@ -8357,9 +8345,9 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         if let provider = serverConfigsByEnvironmentID[environmentID]?.providers.first(where: {
             $0.instanceId == providerID
         }) {
-            return provider.displayName ?? providerDisplayName(provider.driver)
+            return provider.displayName ?? UsageLimitsPresentation.providerLabel(driver: provider.driver)
         }
-        return providerDisplayName(providerID)
+        return UsageLimitsPresentation.providerLabel(driver: providerID)
     }
 
     private func cachedAttachmentURL(
