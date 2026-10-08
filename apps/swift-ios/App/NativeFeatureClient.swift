@@ -6923,17 +6923,33 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         _ thread: OrchestrationThread,
         environment: Environment
     ) -> FeatureThread {
+        mapThread(
+            thread,
+            environment: environment,
+            shell: shellsByEnvironmentID[environment.id]?.threads.first { $0.id == thread.id },
+            controlLifecycle: thread.orchestrationV2Control.flatMap {
+                try? $0["lifecycle"]?.decode(OrchestrationV2ThreadLifecycle.self)
+            }
+        )
+    }
+
+    /// mapDetail passes its own shell lookup and lifecycle decode so each detail
+    /// flush does them once.
+    private func mapThread(
+        _ thread: OrchestrationThread,
+        environment: Environment,
+        shell: OrchestrationThreadShell?,
+        controlLifecycle: OrchestrationV2ThreadLifecycle?
+    ) -> FeatureThread {
         let backgroundLiveness = backgroundLiveness(
             threadID: thread.id,
-            environmentID: environment.id
+            environmentID: environment.id,
+            shellThread: shell
         )
         let backgroundWorkIsActive = backgroundLiveness == .working
         let capabilities = threadCapabilities(for: environment)
-        let shell = shellsByEnvironmentID[environment.id]?.threads.first { $0.id == thread.id }
         // mapDetail applies shell authority only after comparing snapshot sequences.
-        let lifecycle = thread.orchestrationV2Control.flatMap {
-            try? $0["lifecycle"]?.decode(OrchestrationV2ThreadLifecycle.self)
-        } ?? shell?.v2Lifecycle
+        let lifecycle = controlLifecycle ?? shell?.v2Lifecycle
         return FeatureThread(
             id: FeatureScopedID.thread(environmentID: environment.id, wireID: thread.id),
             wireID: thread.id,
@@ -7120,10 +7136,22 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             assertionFailure("Initialized detail caches require an incremental mutation")
         }
 
-        var mappedThread = mapThread(thread, environment: environment)
+        let shell = shellsByEnvironmentID[environment.id]
+        let shellThread = shell?.threads.first { $0.id == thread.id }
+        // Thread state uses the control lifecycle only; mapThread adds the shell fallback.
+        let controlLifecycle = thread.orchestrationV2Control.flatMap {
+            try? $0["lifecycle"]?.decode(OrchestrationV2ThreadLifecycle.self)
+        }
+        var mappedThread = mapThread(
+            thread,
+            environment: environment,
+            shell: shellThread,
+            controlLifecycle: controlLifecycle
+        )
         let backgroundLiveness = backgroundLiveness(
             threadID: thread.id,
-            environmentID: environment.id
+            environmentID: environment.id,
+            shellThread: shellThread
         )
         let backgroundWorkIsActive = backgroundLiveness == .working
         let sessionIsLive = thread.session?.status == "starting"
@@ -7142,18 +7170,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             hasApprovals: !cache.approvals.isEmpty || mappedThread.settlementFacts?.hasPendingApprovals == true,
             hasUserInput: !cache.userInputs.isEmpty || mappedThread.settlementFacts?.hasPendingUserInput == true,
             backgroundLiveness: backgroundLiveness,
-            v2Lifecycle: thread.orchestrationV2Control.flatMap {
-                try? $0["lifecycle"]?.decode(OrchestrationV2ThreadLifecycle.self)
-            }
+            v2Lifecycle: controlLifecycle
         )
         if var facts = mappedThread.settlementFacts {
             facts.hasPendingApprovals = !cache.approvals.isEmpty || facts.hasPendingApprovals
             facts.hasPendingUserInput = !cache.userInputs.isEmpty || facts.hasPendingUserInput
             mappedThread.settlementFacts = facts
         }
-        if let shell = shellsByEnvironmentID[environment.id],
-           let shellThread = shell.threads.first(where: { $0.id == thread.id }),
-           shell.snapshotSequence >= sourceSequence {
+        if let shell, let shellThread, shell.snapshotSequence >= sourceSequence {
             applyShellMetadataAuthority(from: shellThread, to: &mappedThread)
         }
         return FeatureThreadDetail(
@@ -7182,12 +7206,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         threadID: String,
         environmentID: String
     ) -> OrchestrationBackgroundLiveness? {
-        if let live = shellsByEnvironmentID[environmentID]?.threads
-            .first(where: { $0.id == threadID })?.backgroundLiveness {
-            return live
-        }
-        return archivedShellThreadsByEnvironmentID[environmentID]?[threadID]?
-            .backgroundLiveness
+        backgroundLiveness(
+            threadID: threadID,
+            environmentID: environmentID,
+            shellThread: shellsByEnvironmentID[environmentID]?.threads.first { $0.id == threadID }
+        )
+    }
+
+    /// Use when the caller already looked up the live shell thread.
+    private func backgroundLiveness(
+        threadID: String,
+        environmentID: String,
+        shellThread: OrchestrationThreadShell?
+    ) -> OrchestrationBackgroundLiveness? {
+        shellThread?.backgroundLiveness
+            ?? archivedShellThreadsByEnvironmentID[environmentID]?[threadID]?.backgroundLiveness
     }
 
     private func markThreadCacheRecentlyUsed(_ threadID: String) {
