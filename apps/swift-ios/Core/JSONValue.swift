@@ -89,9 +89,15 @@ public enum JSONValue: Codable, Equatable, Hashable, Sendable {
         _ type: T.Type,
         decoder: JSONDecoder = .t3
     ) throws -> T {
+        // Streams and requests often ask for JSONValue itself. Wire values are
+        // already normalized, so the byte round trip would return an equal value.
+        // The exact type check keeps wrappers such as `JSONValue?` on the slow path.
+        if T.self == JSONValue.self, let value = self as? T {
+            return value
+        }
         // The intermediate bytes are discarded immediately, so skip the
         // deterministic-output formatting the wire encoder pays for.
-        try decoder.decode(type, from: JSONEncoder.t3Intermediate.encode(self))
+        return try decoder.decode(type, from: JSONEncoder.t3Intermediate.encode(self))
     }
 }
 

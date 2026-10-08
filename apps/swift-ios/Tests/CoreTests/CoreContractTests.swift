@@ -31,6 +31,8 @@ final class CoreContractTests: XCTestCase {
                 "j": .string("1"),
             ]),
         ]))
+        XCTAssertEqual(try value.decode(JSONValue.self), value)
+        XCTAssertNil(try JSONValue.null.decode(JSONValue?.self))
     }
 
     func testDirectAndHostedPairingURLsResolveLikeExistingClients() throws {
