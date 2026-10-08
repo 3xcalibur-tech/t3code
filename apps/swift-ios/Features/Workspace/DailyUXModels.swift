@@ -1347,10 +1347,6 @@ extension FeatureThread {
         return nil
     }
 
-    func hasSettlementActivityBlock(at now: Date) -> Bool {
-        FeatureThreadLifecyclePolicy.hasSettlementActivityBlock(self, at: now)
-    }
-
     var hasHardSettlementActivityBlock: Bool {
         FeatureThreadLifecyclePolicy.hasHardSettlementActivityBlock(self)
     }
