@@ -530,27 +530,21 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
         guard try await route.client.orchestrationVersion() == .v2 else {
             throw FeatureCapabilityUnavailable("Queue controls")
         }
-        var command: [String: JSONValue] = [
-            "commandId": .string(UUID().uuidString), "threadId": .string(route.wireID),
-        ]
+        let threadID = route.wireID
+        let command: JSONValue
         switch action {
         case let .cancel(runID):
-            command["type"] = .string("queued-run.cancel")
-            command["runId"] = .string(runID)
+            command = OrchestrationV2Commands.cancelQueuedRun(threadID: threadID, runID: runID)
         case let .reorder(runID, beforeRunID):
-            command["type"] = .string("queued-run.reorder")
-            command["runId"] = .string(runID)
-            command["beforeRunId"] = beforeRunID.map(JSONValue.string) ?? .null
+            command = OrchestrationV2Commands.reorderQueuedRun(threadID: threadID, runID: runID, beforeRunID: beforeRunID)
         case let .promoteToSteer(queuedRunID, targetRunID):
-            command["type"] = .string("queued-message.promote-to-steer")
-            command["queuedRunId"] = .string(queuedRunID)
-            command["targetRunId"] = .string(targetRunID)
+            command = OrchestrationV2Commands.promoteQueuedRun(
+                threadID: threadID, queuedRunID: queuedRunID, targetRunID: targetRunID
+            )
         case .resume:
-            command["type"] = .string("queue.resume")
+            command = OrchestrationV2Commands.resumeQueue(threadID: threadID)
         case let .edit(runID, text):
-            command["type"] = .string("queued-run.edit")
-            command["runId"] = .string(runID)
-            command["text"] = .string(text)
+            command = OrchestrationV2Commands.editQueuedRun(threadID: threadID, runID: runID, text: text)
         case let .replace(edit):
             let before = try await route.client.threadSnapshot(id: route.wireID)
             try Self.validateQueuedEdit(edit, control: before.thread.orchestrationV2Control)
@@ -574,18 +568,14 @@ final class NativeFeatureClient: FeatureClient, FeatureDeviceManaging,
             let current = try await route.client.threadSnapshot(id: route.wireID)
             try Self.validateQueuedEdit(edit, control: current.thread.orchestrationV2Control)
             let payload = try edit.replacementPayload(uploads: uploads, preparedAttachments: prepared)
-            command["type"] = .string("queued-run.edit")
-            command["runId"] = .string(edit.runID)
-            command["messageId"] = .string(edit.messageID)
-            command["text"] = .string(payload.text)
-            command["attachments"] = .array(payload.attachments)
-            command["context"] = payload.context
+            command = OrchestrationV2Commands.editQueuedRun(
+                threadID: threadID, runID: edit.runID, text: payload.text, messageID: edit.messageID,
+                attachments: payload.attachments, context: payload.context
+            )
         case let .interrupt(runID, holdQueue):
-            command["type"] = .string("run.interrupt")
-            command["runId"] = .string(runID)
-            command["holdQueue"] = .bool(holdQueue)
+            command = OrchestrationV2Commands.interruptRun(threadID: threadID, runID: runID, holdQueue: holdQueue)
         }
-        _ = try await route.client.dispatch(.object(command))
+        _ = try await route.client.dispatch(command)
         await refreshThreadUnlessLive(id: route.uiID, client: route.client)
     }
 
