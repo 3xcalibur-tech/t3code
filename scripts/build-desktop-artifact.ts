@@ -4,7 +4,8 @@
 import * as NodeFSP from "node:fs/promises";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
-import { parse as parsePlist } from "plist";
+// plist is CommonJS; Node cannot load its named exports from an ES module.
+import Plist from "plist";
 
 import {
   createPackageWithOptions,
@@ -1340,7 +1341,7 @@ const readProfileEntitlements = (provisioningProfile: string) => {
   const end = provisioningProfile.indexOf("</plist>", start);
   if (start === -1 || end === -1) return undefined;
   try {
-    const profile: unknown = parsePlist(provisioningProfile.slice(start, end + "</plist>".length));
+    const profile: unknown = Plist.parse(provisioningProfile.slice(start, end + "</plist>".length));
     return isProvisioningProfilePlist(profile) ? profile.Entitlements : undefined;
   } catch {
     return undefined;
