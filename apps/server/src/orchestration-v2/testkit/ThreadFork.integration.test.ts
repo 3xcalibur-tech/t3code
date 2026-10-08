@@ -31,7 +31,7 @@ import { runOrchestratorV2ProviderReplayScenario } from "./ProviderReplayHarness
 import {
   decodeProviderReplayNdjson,
   materializeReplayTranscriptWorkspace,
-} from "./ReplayTranscriptNdjson.ts";
+} from "@t3tools/provider-testing/replayTranscript";
 
 const CODEX_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("codex"),

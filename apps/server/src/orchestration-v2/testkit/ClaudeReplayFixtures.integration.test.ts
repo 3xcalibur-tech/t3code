@@ -19,7 +19,7 @@ import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
 import { subagentInput } from "./fixtures/subagent/input.ts";
 import { runOrchestratorV2Scenario } from "./OrchestratorScenario.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
-import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayTranscriptNdjson.ts";
+import { materializeReplayTranscriptRuntimeInstructions } from "./ReplayRuntimeInstructions.ts";
 import { CLAUDE_MODEL_SELECTION, materializeFixtureInput } from "./fixtures/shared.ts";
 import {
   THREAD_FORK_NATIVE_CONTINUE_FORK_MARKER,
@@ -33,7 +33,7 @@ import {
   THREAD_MERGE_BACK_SIBLINGS_SOURCE_MARKER,
   THREAD_MERGE_BACK_SOURCE_MARKER,
 } from "./fixtures/shared.ts";
-import { readProviderReplayTranscript } from "./ReplayTranscriptNdjson.ts";
+import { readProviderReplayTranscript } from "@t3tools/provider-testing/replayTranscript";
 
 const readTranscript = Effect.fn("readClaudeReplayFixture")(function* (file: URL) {
   return yield* readProviderReplayTranscript(file);

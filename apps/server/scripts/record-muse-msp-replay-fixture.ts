@@ -39,11 +39,11 @@ import { provideDeterministicTestRuntime } from "../src/orchestration-v2/testkit
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "../src/orchestration-v2/testkit/fixtures/index.ts";
 import { materializeFixtureInput } from "../src/orchestration-v2/testkit/fixtures/shared.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../src/orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { materializeReplayTranscriptWorkspace } from "../src/orchestration-v2/testkit/ReplayTranscriptNdjson.ts";
+import { materializeReplayTranscriptWorkspace } from "@t3tools/provider-testing/replayTranscript";
 import {
   checkpointWorkspace,
   makeCheckpointWorkspace,
-} from "../src/orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
+} from "@t3tools/provider-testing/replayWorkspace";
 
 const CLOCK_TICK = Duration.millis(20);
 

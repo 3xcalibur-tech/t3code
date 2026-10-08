@@ -38,7 +38,7 @@ import { runOrchestratorV2ProviderReplayScenario } from "../src/orchestration-v2
 import {
   checkpointWorkspace,
   makeCheckpointWorkspace,
-} from "../src/orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
+} from "@t3tools/provider-testing/replayWorkspace";
 
 /**
  * Keeps the user's skills, templates and context files out of the recording.

@@ -42,7 +42,7 @@ import { materializeFixtureInput } from "../src/orchestration-v2/testkit/fixture
 import { runOrchestratorV2Scenario } from "../src/orchestration-v2/testkit/OrchestratorScenario.ts";
 import { makeReplayServerConfig } from "../src/orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as ProviderReplayHarness from "../src/orchestration-v2/testkit/ProviderReplayHarness.ts";
-import { checkpointWorkspace } from "../src/orchestration-v2/testkit/ReplayFixtureWorkspace.ts";
+import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import { makeGrokAcpRuntime } from "../src/provider/acp/GrokAcpSupport.ts";
 import { buildRuntimeInstructions } from "../src/provider/RuntimeInstructions.ts";
 
