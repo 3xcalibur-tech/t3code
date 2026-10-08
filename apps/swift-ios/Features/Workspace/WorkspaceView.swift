@@ -1485,13 +1485,8 @@ struct FeatureThreadRow: View {
     }
 
     var body: some View {
+        // HomeCollectionCell hides this row from accessibility and provides its own element.
         row(at: now)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(thread.title)
-            .accessibilityValue(accessibilityValue(at: now))
-            .accessibilityHint("Opens task")
-            .accessibilityIdentifier("thread-\(thread.id)")
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
             .task(id: pullRequestObservationID) {
                 await observePullRequest()
             }
@@ -1681,12 +1676,6 @@ struct FeatureThreadRow: View {
         }
     }
 
-    private var isConnectionStale: Bool {
-        context.connectionState == .connecting
-            || context.connectionState == .reconnecting
-            || context.connectionState == .disconnected
-    }
-
     private var branchLabel: String {
         if let branch = thread.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
            !branch.isEmpty {
@@ -1807,29 +1796,6 @@ struct FeatureThreadRow: View {
             size: size,
             accountBadge: context.providerBadge
         )
-    }
-
-    private func accessibilityValue(at now: Date) -> String {
-        let status = thread.homeRowAccessibilityStatus(rich: style == .rich, at: now)
-        var values = [status, "Project \(context.projectName)"]
-        values.append("Harness \(context.providerName)")
-        if let duration = thread.homeWorkingDuration(at: now) {
-            values.append("for \(duration)")
-        }
-        values.append("Branch \(branchLabel)")
-        if let pullRequest {
-            values.append(pullRequest.accessibilityLabel)
-        }
-        if let environmentLabel {
-            values.append("on \(environmentLabel)")
-        }
-        if isConnectionStale {
-            values.append("last known state")
-        }
-        if thread.isRegeneratingTitle {
-            values.append("Regenerating title")
-        }
-        return values.joined(separator: ". ")
     }
 
 }
