@@ -305,7 +305,8 @@ public struct ThreadDetailView: View {
     private var observedThreadContent: AnyView {
         let content = loadedThreadContent
         .onChange(of: thread.id) { v2TimelineState.reset() }
-        .onChange(of: draft) { scheduleDraftSave() }
+        // A child observes the text so keystrokes do not re-run this body.
+        .background(FeatureDraftTextObserver(text: $draft, onChange: scheduleDraftSave))
         .onChange(of: selection) { scheduleDraftSave() }
         .onChange(of: draftRuntimeMode) { scheduleDraftSave() }
         .onChange(of: draftInteractionMode) { scheduleDraftSave() }
@@ -2539,6 +2540,17 @@ enum ThreadRefreshPresentation: Equatable {
         case .needsPairing: return .needsPairing
         case .connected, nil: return nil
         }
+    }
+}
+
+/// Runs `onChange` when the draft text changes. Only this view depends on
+/// the text, so typing does not re-evaluate the whole thread view.
+private struct FeatureDraftTextObserver: View {
+    @Binding var text: String
+    let onChange: () -> Void
+
+    var body: some View {
+        Color.clear.onChange(of: text) { onChange() }
     }
 }
 
