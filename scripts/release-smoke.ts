@@ -28,6 +28,7 @@ const workspaceFiles = [
   "packages/shared/package.json",
   "packages/ssh/package.json",
   "packages/tailscale/package.json",
+  "packages/provider-core/package.json",
   "packages/effect-acp/package.json",
   "packages/effect-codex-app-server/package.json",
   "scripts/package.json",
