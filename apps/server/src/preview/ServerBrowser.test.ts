@@ -158,7 +158,7 @@ let clipboardBinding: ClipboardBinding | null = null;
 let contextFailure: Error | null = null;
 /** Server tabs the fake desktop renders, and the endpoints the server connected to. */
 let desktopRendersNext = false;
-/** Pages the fake desktop takes back; the channel's detached stream emits them. */
+/** Pages the fake desktop takes back or returns; the channel's streams emit them. */
 const desktopDetaches = new NodeEvents.EventEmitter();
 const desktopTabs = new Set<string>();
 const desktopRenders = (tabId: string) => {
@@ -212,6 +212,17 @@ const dependencies = Layer.mergeAll(
           return onDetach;
         }),
         (onDetach) => Effect.sync(() => desktopDetaches.off("detach", onDetach)),
+      ),
+    ),
+    attached: Stream.callback<{ threadId: string; tabId: string }>((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const onAttach = (key: { threadId: string; tabId: string }) =>
+            Queue.offerUnsafe(queue, key);
+          desktopDetaches.on("attach", onAttach);
+          return onAttach;
+        }),
+        (onAttach) => Effect.sync(() => desktopDetaches.off("attach", onAttach)),
       ),
     ),
     isAttached: (key) => Effect.sync(() => desktopRenders(key.tabId)),
@@ -1504,6 +1515,27 @@ it.live("an agent tab keeps throwaway storage when no client reported profiles",
     Effect.gen(function* () {
       yield* ready;
       expect(contextRequests).toEqual([{ profileId: "default", isolated: true }]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.live("a desktop page that comes back reconnects without waiting for a viewer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const manager = yield* Manager.PreviewManager;
+      yield* ServerBrowser.ServerBrowser;
+      yield* Effect.yieldNow;
+      desktopRendersNext = true;
+      const opened = yield* manager.open({ threadId: scope.thread.threadId, runtime: "server" });
+      while (desktopConnections.length === 0) yield* Effect.yieldNow;
+      while (desktopDetaches.listenerCount("detach") === 0) yield* Effect.yieldNow;
+      // DevTools opened, then closed: the desktop withdraws the page and returns it.
+      desktopDetaches.emit("detach", { threadId: scope.thread.threadId, tabId: opened.tabId });
+      while (releasedDesktopTabs.length === 0) yield* Effect.yieldNow;
+      desktopDetaches.emit("attach", { threadId: scope.thread.threadId, tabId: opened.tabId });
+      // Without a viewer or agent, the server drives the page again, so its URL keeps reaching clients.
+      while (desktopConnections.length < 2) yield* Effect.yieldNow;
+      expect(desktopConnections).toHaveLength(2);
     }),
   ).pipe(Effect.provide(layer)),
 );
