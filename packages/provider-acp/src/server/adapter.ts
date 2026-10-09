@@ -1065,6 +1065,22 @@ function toolStatus(
 
 type ProjectedToolStatus = ReturnType<typeof toolStatus> | "interrupted";
 
+/**
+ * A terminal projection is the caller's decision that the tool ended.
+ * Grok's normalize forces a `BackgroundTaskStarted` shell back to inProgress;
+ * storing that leaves deferred finalize holding the turn after `task_completed`.
+ * `interrupted` stays off the stored status: turn teardown already projects it,
+ * and the ACP tool state has no interrupted variant.
+ */
+export function applyTerminalProjectedToolStatus(
+  toolCall: AcpToolCallState,
+  projectedStatus: ProjectedToolStatus | undefined,
+): AcpToolCallState {
+  if (projectedStatus !== "completed" && projectedStatus !== "failed") return toolCall;
+  if (toolCall.status === projectedStatus) return toolCall;
+  return { ...toolCall, status: projectedStatus };
+}
+
 function nodeStatus(status: ProjectedToolStatus): OrchestrationV2ExecutionNode["status"] {
   return status === "pending" ? "running" : status;
 }
@@ -3100,7 +3116,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* closeTextStream(context, "user");
           const previous = context.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
-          const toolCall = flavor.normalizeToolCall?.(merged) ?? merged;
+          const toolCall = applyTerminalProjectedToolStatus(
+            flavor.normalizeToolCall?.(merged) ?? merged,
+            projectedStatus,
+          );
           context.tools.set(toolCall.toolCallId, toolCall);
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(toolCall);
           if (backgroundTaskId !== undefined) {
@@ -3209,7 +3228,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         backgroundCompletion.appendOutput,
                       )
                   : { ...target, status: nextStatus };
-              yield* emitTool(context, hydrated);
+              yield* emitTool(
+                context,
+                hydrated,
+                // Empty TaskOutput keeps the start-ACK rawOutput, and normalize
+                // would put the shell back to inProgress. The poll's terminal
+                // status has to stick or the row spins after the command ended.
+                nextStatus === "failed" || nextStatus === "completed" ? nextStatus : undefined,
+              );
             }
           }
 
