@@ -194,7 +194,9 @@ function resolveProjectOverrides(
  * from just a name (a folder directly inside `ServerConfig.newProjectsRoot`)
  * has only its first commit, so until it has a thread, a new thread works in
  * the project checkout even when the environment default is a new worktree.
- * A project override or t3.json still wins.
+ * Only that environment default is replaced: a project override still wins,
+ * and so does a t3.json when the environment sets no default (the usual
+ * precedence; the scaffold writes no t3.json).
  */
 export function resolveNewThreadEnvMode(input: {
   readonly projectSettings: ResolvedProjectSettings<ResolvedServerSettings>;
