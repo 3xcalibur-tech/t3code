@@ -177,6 +177,53 @@ describe("PreviewPasskeys", () => {
       });
       assert.deepStrictEqual(unsupported, { success: false, error: "NotSupportedError" });
       assert.strictEqual(webauthn.createCredential.mock.calls.length, 1);
+
+      // A malformed algorithm list is the page's error, not a cue to pick ES256.
+      const malformed = yield* call(PASSKEY_CREATE_CHANNEL, {
+        ...publicKey,
+        pubKeyCredParams: { type: "public-key", alg: -7 },
+      });
+      assert.deepStrictEqual(malformed, { success: false, error: "TypeError" });
+      assert.strictEqual(webauthn.createCredential.mock.calls.length, 1);
+    }).pipe(Effect.provide(bridgeLayer)),
+  );
+
+  it.effect("answers only with a credential the site allowed", () =>
+    Effect.gen(function* () {
+      const passkeys = yield* PreviewPasskeys.PreviewPasskeys;
+      const { guest, call } = makeGuest();
+      passkeys.attachGuest(guest);
+      const assertion = (credentialId: string) => ({
+        success: true,
+        data: {
+          credentialId,
+          clientDataJSON: "Ag",
+          authenticatorData: "Aw",
+          signature: "BA",
+          userHandle: "BQ",
+        },
+      });
+      const publicKey = {
+        challenge: new Uint8Array([1]),
+        rpId: "example.com",
+        allowCredentials: [{ type: "public-key", id: new Uint8Array([1]) }],
+      };
+
+      // macOS applies the allow list to passkeys but not to security keys.
+      webauthn.getCredential.mockResolvedValueOnce(assertion("Ag"));
+      const other = yield* call(PASSKEY_GET_CHANNEL, publicKey);
+      assert.deepStrictEqual(other, { success: false, error: "NotAllowedError" });
+
+      webauthn.getCredential.mockResolvedValueOnce(assertion("AQ"));
+      assert.deepInclude(yield* call(PASSKEY_GET_CHANNEL, publicKey), { success: true });
+
+      // With no allow list, any of the site's credentials will do.
+      webauthn.getCredential.mockResolvedValueOnce(assertion("Ag"));
+      const discoverable = yield* call(PASSKEY_GET_CHANNEL, {
+        challenge: new Uint8Array([1]),
+        rpId: "example.com",
+      });
+      assert.deepInclude(discoverable, { success: true });
     }).pipe(Effect.provide(bridgeLayer)),
   );
 
@@ -189,6 +236,10 @@ describe("PreviewPasskeys", () => {
       const lan = makeGuest("http://192.168.1.5:3000");
       passkeys.attachGuest(lan.guest);
       assert.deepStrictEqual(yield* lan.call(PASSKEY_GET_CHANNEL, publicKey), notAllowed);
+      // macOS refuses `*.localhost`, so the page hears no rather than a native error.
+      const subdomain = makeGuest("http://app.localhost:3000");
+      passkeys.attachGuest(subdomain.guest);
+      assert.deepStrictEqual(yield* subdomain.call(PASSKEY_GET_CHANNEL, publicKey), notAllowed);
 
       const page = makeGuest();
       passkeys.attachGuest(page.guest);

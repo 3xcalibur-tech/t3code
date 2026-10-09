@@ -1,17 +1,16 @@
 // @effect-diagnostics globalTimers:off - Ceremonies settle inside IPC handlers, outside an Effect runtime.
 import type { IpcMainInvokeEvent, Session, WebContents, WebFrameMain } from "electron";
 import { app, BrowserWindow, dialog, webContents as electronWebContents } from "electron";
-import type { WebauthnGetRequestOptions } from "electron-webauthn";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { getPublicSuffix } from "tldts";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PASSKEY_CREATE_CHANNEL, PASSKEY_GET_CHANNEL } from "./GuestProtocol.ts";
-import { authenticatorDataFromAttestation } from "./PasskeyAttestation.ts";
+import type { PasskeyBackend, PasskeyCeremonyContext } from "./PasskeyBackend.ts";
+import { macPasskeyBackend } from "./PasskeyBackendMac.ts";
 import type { PasskeyCeremonyResult } from "./PasskeyBridge.ts";
 
 const PasskeyPackageMetadata = Schema.Struct({
@@ -69,11 +68,6 @@ export class PreviewPasskeys extends Context.Service<
 
 const notAllowed: PasskeyCeremonyResult = { success: false, error: "NotAllowedError" };
 
-// WebAuthn rejects RP IDs that are public suffixes, private registries
-// included, so one github.io site cannot mint passkeys for every other one.
-const isPublicSuffix = (domain: string) =>
-  domain !== "localhost" && getPublicSuffix(domain, { allowPrivateDomains: true }) === domain;
-
 const accountLabel = (account: Electron.WebAuthnAccount) =>
   account.displayName && account.name && account.displayName !== account.name
     ? `${account.displayName} (${account.name})`
@@ -105,13 +99,6 @@ const chooseAccount = async (details: Electron.SelectWebauthnAccountDetails) => 
   return details.accounts[response]?.credentialId;
 };
 
-type WebAuthn = typeof import("electron-webauthn");
-type Ceremony = (
-  webauthn: WebAuthn,
-  options: WebauthnGetRequestOptions,
-) => Promise<PasskeyCeremonyResult>;
-
-const ES256 = -7;
 const NATIVE_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const NATIVE_MAX_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -130,64 +117,25 @@ const withDeadline = (ceremony: Promise<PasskeyCeremonyResult>, milliseconds: nu
   return Promise.race([ceremony, deadline]).finally(() => clearTimeout(timer));
 };
 
-// Secure contexts only, as in Chromium: https, or http on this machine.
+// Secure contexts only: https, or http on this machine. Chromium also trusts
+// `*.localhost`, but the macOS layer refuses it, so it is turned away here
+// instead of failing deeper with a less useful error.
 const isTrustworthyOrigin = (origin: string) => {
   if (!URL.canParse(origin)) return false;
   const { protocol, hostname } = new URL(origin);
   return (
     protocol === "https:" ||
     (protocol === "http:" &&
-      (hostname === "localhost" ||
-        hostname.endsWith(".localhost") ||
-        hostname === "127.0.0.1" ||
-        hostname === "[::1]"))
+      (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"))
   );
 };
 
-const createCeremony =
-  (publicKey: PublicKeyCredentialCreationOptions): Ceremony =>
-  async (webauthn, options) => {
-    // The native layer only converts P-256 keys and never settles for any
-    // other algorithm, so ES256 is the only one it may negotiate.
-    const params: unknown = publicKey.pubKeyCredParams;
-    const allowsEs256 =
-      !Array.isArray(params) ||
-      params.length === 0 ||
-      params.some(
-        (param: unknown) =>
-          typeof param === "object" && param !== null && "alg" in param && param.alg === ES256,
-      );
-    if (!allowsEs256) return { success: false, error: "NotSupportedError" };
-    const result = await webauthn.createCredential(
-      { ...publicKey, pubKeyCredParams: [{ type: "public-key", alg: ES256 }] },
-      options,
-    );
-    if (!result.success) return { success: false, error: result.error };
-    // The native layer reports parsed authenticator data as JSON and claims
-    // every credential is a synced platform passkey; neither is reliable.
-    const authData = authenticatorDataFromAttestation(
-      Buffer.from(result.data.attestationObject, "base64url"),
-    );
-    return {
-      success: true,
-      data: {
-        ...result.data,
-        authData: authData ? Buffer.from(authData).toString("base64url") : "",
-        transports: [],
-      },
-    };
-  };
-
-const getCeremony =
-  (publicKey: PublicKeyCredentialRequestOptions, origin: string): Ceremony =>
-  async (webauthn, options) => {
-    // WebAuthn defaults the RP ID to the caller's host; the native layer requires it.
-    const result = await webauthn.getCredential(
-      { ...publicKey, rpId: publicKey.rpId ?? new URL(origin).hostname },
-      options,
-    );
-    return result.success ? result : { success: false, error: result.error };
-  };
+/**
+ * The platform that serves preview pages' passkey ceremonies, or none. Windows
+ * needs none: Chromium already hands WebAuthn to Windows Hello there.
+ */
+const backendFor = (platform: NodeJS.Platform): PasskeyBackend | undefined =>
+  platform === "darwin" ? macPasskeyBackend : undefined;
 
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -204,7 +152,8 @@ const make = Effect.gen(function* () {
           )
       : undefined;
   const keychainAccessGroup = metadata?.touchIdKeychainAccessGroup;
-  const bridgeEnabled = metadata?.browserPasskeys === true;
+  const backend = metadata?.browserPasskeys === true ? backendFor(environment.platform) : undefined;
+  const bridgeEnabled = backend !== undefined;
   const sessionsWithHandlers = new WeakSet<Session>();
 
   return PreviewPasskeys.of({
@@ -228,12 +177,12 @@ const make = Effect.gen(function* () {
       });
     },
     attachGuest: (guest) => {
-      if (!bridgeEnabled) return () => {};
+      if (backend === undefined) return () => {};
       let ceremonyPending = false;
       const serve = async (
         event: IpcMainInvokeEvent,
         publicKey: { readonly timeout?: unknown } | undefined,
-        ceremony: (origin: string) => Ceremony,
+        ceremony: (context: PasskeyCeremonyContext) => Promise<PasskeyCeremonyResult>,
       ): Promise<PasskeyCeremonyResult> => {
         // Only the guest's main frame runs the bridge preload.
         const frame = event.senderFrame;
@@ -256,14 +205,8 @@ const make = Effect.gen(function* () {
 
         ceremonyPending = true;
         try {
-          const webauthn = await import("electron-webauthn");
           const result = await withDeadline(
-            ceremony(origin)(webauthn, {
-              currentOrigin: origin,
-              topFrameOrigin: origin,
-              nativeWindowHandle: host.getNativeWindowHandle(),
-              isPublicSuffix,
-            }),
+            ceremony({ origin, nativeWindowHandle: host.getNativeWindowHandle() }),
             ceremonyDeadline(publicKey.timeout),
           );
           // A credential minted for a document that navigated away belongs to nobody.
@@ -286,10 +229,10 @@ const make = Effect.gen(function* () {
       guest.ipc.handle(
         PASSKEY_CREATE_CHANNEL,
         (event, publicKey: PublicKeyCredentialCreationOptions) =>
-          serve(event, publicKey, () => createCeremony(publicKey)),
+          serve(event, publicKey, (context) => backend.create(publicKey, context)),
       );
       guest.ipc.handle(PASSKEY_GET_CHANNEL, (event, publicKey: PublicKeyCredentialRequestOptions) =>
-        serve(event, publicKey, (origin) => getCeremony(publicKey, origin)),
+        serve(event, publicKey, (context) => backend.get(publicKey, context)),
       );
       return detach;
     },
