@@ -1069,16 +1069,32 @@ type ProjectedToolStatus = ReturnType<typeof toolStatus> | "interrupted";
  * A terminal projection is the caller's decision that the tool ended.
  * Grok's normalize forces a `BackgroundTaskStarted` shell back to inProgress;
  * storing that leaves deferred finalize holding the turn after `task_completed`.
+ * A later unprojected update can do the same after the shell was already
+ * finished, so a stored completed/failed status is kept when normalize only
+ * demotes it to pending or inProgress. An explicit projection still wins, and
+ * a later update that normalizes to its own terminal status is left alone.
  * `interrupted` stays off the stored status: turn teardown already projects it,
  * and the ACP tool state has no interrupted variant.
  */
 export function applyTerminalProjectedToolStatus(
   toolCall: AcpToolCallState,
   projectedStatus: ProjectedToolStatus | undefined,
+  previous?: AcpToolCallState,
 ): AcpToolCallState {
-  if (projectedStatus !== "completed" && projectedStatus !== "failed") return toolCall;
-  if (toolCall.status === projectedStatus) return toolCall;
-  return { ...toolCall, status: projectedStatus };
+  const demoted =
+    toolCall.status === undefined ||
+    toolCall.status === "pending" ||
+    toolCall.status === "inProgress";
+  const preserved =
+    projectedStatus === undefined &&
+    demoted &&
+    (previous?.status === "completed" || previous?.status === "failed")
+      ? previous.status
+      : undefined;
+  const status = projectedStatus ?? preserved;
+  if (status !== "completed" && status !== "failed") return toolCall;
+  if (toolCall.status === status) return toolCall;
+  return { ...toolCall, status };
 }
 
 function nodeStatus(status: ProjectedToolStatus): OrchestrationV2ExecutionNode["status"] {
@@ -3119,6 +3135,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const toolCall = applyTerminalProjectedToolStatus(
             flavor.normalizeToolCall?.(merged) ?? merged,
             projectedStatus,
+            previous,
           );
           context.tools.set(toolCall.toolCallId, toolCall);
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(toolCall);

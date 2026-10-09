@@ -28,4 +28,22 @@ describe("applyTerminalProjectedToolStatus", () => {
     expect(applyTerminalProjectedToolStatus(backgroundShell, "interrupted")).toBe(backgroundShell);
     expect(applyTerminalProjectedToolStatus(backgroundShell, "running")).toBe(backgroundShell);
   });
+
+  it("keeps a finished shell finished when a later update is only running", () => {
+    const finished: AcpToolCallState = { ...backgroundShell, status: "failed" };
+    expect(applyTerminalProjectedToolStatus(backgroundShell, undefined, finished).status).toBe(
+      "failed",
+    );
+    const completed: AcpToolCallState = { ...backgroundShell, status: "completed" };
+    expect(applyTerminalProjectedToolStatus(backgroundShell, undefined, completed).status).toBe(
+      "completed",
+    );
+    // An explicit projection still wins over the stored status.
+    expect(applyTerminalProjectedToolStatus(backgroundShell, "completed", finished).status).toBe(
+      "completed",
+    );
+    // A later update that is itself terminal is not rewritten back.
+    const laterFailure: AcpToolCallState = { ...backgroundShell, status: "failed" };
+    expect(applyTerminalProjectedToolStatus(laterFailure, undefined, completed)).toBe(laterFailure);
+  });
 });

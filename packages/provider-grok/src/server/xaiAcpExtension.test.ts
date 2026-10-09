@@ -34,6 +34,7 @@ import {
   xAiSubagentFinishedNotice,
   XAiAskUserQuestionRequest,
 } from "./xaiAcpExtension.ts";
+import { applyTerminalProjectedToolStatus } from "@t3tools/provider-acp/server/adapter";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   type AcpToolCallState,
@@ -751,6 +752,14 @@ describe("XAiAcpExtension", () => {
     ]);
     // A shell poll must not open a phantom subagent for the tool-call id.
     expect(extractXAiAcpSubagentUpdate(polled)).toBeUndefined();
+    // The start ACK is what Grok re-sends. After the shell is failed, normalize
+    // would reopen it; the stored terminal status has to survive that replay.
+    const failedShell = { ...started, status: "failed" as const };
+    const replayed = normalizeXAiAcpToolCallState(mergeToolCallState(failedShell, started));
+    expect(replayed.status).toBe("inProgress");
+    expect(applyTerminalProjectedToolStatus(replayed, undefined, failedShell).status).toBe(
+      "failed",
+    );
     expect(
       extractXAiBackgroundTaskCompletion({
         ...polled,
