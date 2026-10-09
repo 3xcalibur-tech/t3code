@@ -9,7 +9,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeOS from "node:os";
 
 function logPathHydrationWarning(message: string, error?: unknown): void {
@@ -18,30 +17,24 @@ function logPathHydrationWarning(message: string, error?: unknown): void {
   );
 }
 
-const hydratePosixPath = Effect.fn("hydratePosixPath")(function* (
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-) {
+function hydratePosixPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): void {
   let shellPath: string | undefined;
   for (const shell of listLoginShellCandidates(platform, env.SHELL)) {
-    shellPath = yield* readPathFromLoginShell(shell).pipe(
-      Effect.catch((error) =>
-        Effect.sync(() => {
-          logPathHydrationWarning(`Failed to read PATH from login shell ${shell}.`, error);
-          return undefined;
-        }),
-      ),
-    );
+    try {
+      shellPath = readPathFromLoginShell(shell);
+    } catch (error) {
+      logPathHydrationWarning(`Failed to read PATH from login shell ${shell}.`, error);
+    }
+
     if (shellPath) break;
   }
 
-  const launchctlPath =
-    platform === "darwin" && !shellPath ? yield* readPathFromLaunchctl() : undefined;
+  const launchctlPath = platform === "darwin" && !shellPath ? readPathFromLaunchctl() : undefined;
   const mergedPath = mergePathEntries(shellPath ?? launchctlPath, env.PATH, platform);
   if (mergedPath) {
     env.PATH = mergedPath;
   }
-});
+}
 
 export function hydratePosixHome(
   env: NodeJS.ProcessEnv,
@@ -55,23 +48,11 @@ export function hydratePosixHome(
   }
 }
 
-/**
- * Repairs the environment of a process launched without a login shell, such as
- * a GUI app or a service. `shellEnvironmentPrepared` means the parent already
- * merged the user's shell PATH into this process environment, so only the
- * HOME fallback still runs on POSIX. Windows keeps its Node availability
- * check and registry/profile repair.
- */
 export const fixPath = Effect.fn("fixPath")(function* (options?: {
   readonly shellEnvironmentPrepared?: boolean | undefined;
-}): Effect.fn.Return<
-  void,
-  never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> {
+}): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
   const platform = yield* HostProcessPlatform;
   const env = yield* HostProcessEnvironment;
-  const shellEnvironmentPrepared = options?.shellEnvironmentPrepared === true;
 
   if (platform === "win32") {
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
@@ -99,8 +80,8 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
       }),
     ),
   );
-  if (shellEnvironmentPrepared) return;
-  yield* hydratePosixPath(env, platform).pipe(
+  if (options?.shellEnvironmentPrepared === true) return;
+  yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
     Effect.catchDefect((defect) =>
       Effect.sync(() => {
         logPathHydrationWarning("Failed to hydrate PATH from the user environment.", defect);
