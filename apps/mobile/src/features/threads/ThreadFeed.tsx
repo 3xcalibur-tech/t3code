@@ -57,7 +57,7 @@ import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../../native/NativeWorkspaceColumns";
+import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import {
   createContext,
   memo,
@@ -1545,6 +1545,7 @@ function renderFeedEntry(
     readonly reviewCommentColors: ReviewCommentColors;
     readonly reviewCommentBubbleWidth: number;
     readonly themeAppearance: "light" | "dark";
+    readonly usesNativeWorkspaceColumns: boolean;
     readonly userBubbleMaxWidth: number;
     /** Width assistant markdown lays out in, so images can size their frame before layout. */
     readonly markdownContentWidth: number;
@@ -1733,7 +1734,7 @@ function renderFeedEntry(
             style={{
               backgroundColor: userBubbleColor,
               maxWidth:
-                NATIVE_WORKSPACE_COLUMNS_SUPPORTED && Platform.OS === "ios" && !Platform.isPad
+                props.usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad
                   ? "85%"
                   : props.userBubbleMaxWidth,
               ...(hasReviewCommentContext
@@ -1741,9 +1742,7 @@ function renderFeedEntry(
                 : hasWideBlock
                   ? {
                       width:
-                        NATIVE_WORKSPACE_COLUMNS_SUPPORTED &&
-                        Platform.OS === "ios" &&
-                        !Platform.isPad
+                        props.usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad
                           ? "85%"
                           : props.userBubbleMaxWidth,
                     }
@@ -2186,6 +2185,7 @@ function ThreadFeedPlaceholder(props: {
 }
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+  const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const navigation = useNavigation();
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3045,6 +3045,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             reviewCommentColors,
             reviewCommentBubbleWidth,
             themeAppearance,
+            usesNativeWorkspaceColumns,
             userBubbleMaxWidth,
             markdownContentWidth,
             contentWidth,
@@ -3082,6 +3083,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       reviewCommentColors,
       reviewCommentBubbleWidth,
       themeAppearance,
+      usesNativeWorkspaceColumns,
       userBubbleMaxWidth,
       markdownContentWidth,
       contentWidth,
@@ -3138,7 +3140,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // Let UIKit adjust the scrolling axis without shifting content sideways.
             contentInsetAdjustmentBehavior={
               usesNativeAutomaticInsets
-                ? NATIVE_WORKSPACE_COLUMNS_SUPPORTED &&
+                ? usesNativeWorkspaceColumns &&
                   Platform.OS === "ios" &&
                   !Platform.isPad &&
                   props.layoutVariant === "split"

@@ -6,6 +6,7 @@ import UIKit
 final class T3LayoutMetricsView: ExpoView {
   let onMetricsChange = EventDispatcher()
   private var lastMetrics: NSDictionary?
+  private var hasHinge: Bool? = false
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -15,6 +16,15 @@ final class T3LayoutMetricsView: ExpoView {
     }
     #if compiler(>=6.4)
     if #available(iOS 27.1, *) {
+      hasHinge = nil
+      addInteraction(UIHingeInteraction { [weak self] _, update in
+        guard let self, self.window != nil else { return }
+        // Capability survives temporary detachment and does not follow the hinge angle.
+        let hasHinge = self.hasHinge == true || update.hinge != nil
+        guard self.hasHinge != hasHinge else { return }
+        self.hasHinge = hasHinge
+        self.publishMetrics()
+      })
       registerForTraitChanges(UITraitCollection.systemTraitsAffectingVerticalBarEdge) { (view: T3LayoutMetricsView, _: UITraitCollection) in
         view.publishMetrics()
       }
@@ -39,7 +49,10 @@ final class T3LayoutMetricsView: ExpoView {
   }
 
   private func publishMetrics() {
-    guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
+    guard let window, bounds.width > 0, bounds.height > 0, let hasHinge else { return }
+    if hasHinge {
+      T3WorkspaceOrientationSubscriber.allowHingeOrientations(in: window)
+    }
     var verticalBarEdge = "none"
     var regions: [[String: Any]] = []
     #if compiler(>=6.4)
@@ -65,6 +78,7 @@ final class T3LayoutMetricsView: ExpoView {
     #endif
     let metrics: [String: Any] = [
       "width": bounds.width, "height": bounds.height,
+      "hasHinge": hasHinge,
       "horizontalSizeClass": traitCollection.horizontalSizeClass == .regular ? "regular" : "compact",
       "verticalBarEdge": verticalBarEdge,
       "safeArea": [

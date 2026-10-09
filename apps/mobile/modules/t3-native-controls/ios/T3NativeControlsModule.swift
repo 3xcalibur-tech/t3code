@@ -15,7 +15,6 @@ public final class T3NativeControlsModule: Module {
       if #available(iOS 26.0, *) {
         return [
           "supportsWorkspaceColumns": NSClassFromString("RNSSplitHostComponentView") != nil,
-          "duoEnabled": Bundle.main.object(forInfoDictionaryKey: "T3DuoEnabled") as? Bool ?? false,
         ]
       }
       return ["supportsWorkspaceColumns": false]

@@ -9,6 +9,7 @@ export interface ReservedRegion {
 export interface NativeLayoutMetrics {
   readonly width: number;
   readonly height: number;
+  readonly hasHinge?: boolean;
   readonly horizontalSizeClass: "compact" | "regular";
   readonly verticalBarEdge: "none" | "left" | "right";
   readonly safeArea: {

@@ -2,7 +2,7 @@ import { StackActions, useNavigation } from "@react-navigation/native";
 import { useMemo } from "react";
 import { Platform } from "react-native";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
-import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../../native/NativeWorkspaceColumns";
+import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -14,9 +14,6 @@ import {
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
 
-const usesDuoHeader =
-  NATIVE_WORKSPACE_COLUMNS_SUPPORTED && Platform.OS === "ios" && !Platform.isPad;
-
 export function useThreadHeaderOptions(props: {
   readonly title: string;
   readonly subtitle: string;
@@ -25,6 +22,8 @@ export function useThreadHeaderOptions(props: {
   readonly gitControls: Parameters<typeof ThreadGitControls>[0];
   readonly onReturnToThread?: () => void;
 }) {
+  const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
+  const usesDuoHeader = usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad;
   const navigation = useNavigation();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const threadCenterHeaderItems = useThreadGitCenterHeaderItems(props.gitControls);
@@ -53,7 +52,7 @@ export function useThreadHeaderOptions(props: {
           ]
         : []),
       withNativeGlassHeaderItem({
-        axisBehavior: NATIVE_WORKSPACE_COLUMNS_SUPPORTED ? "horizontalOnly" : undefined,
+        axisBehavior: usesNativeWorkspaceColumns ? "horizontalOnly" : undefined,
         accessibilityLabel: panes.primarySidebarVisible
           ? "Maximize content"
           : "Show thread sidebar",
@@ -79,7 +78,14 @@ export function useThreadHeaderOptions(props: {
           ]
         : []),
     ],
-    [panes.primarySidebarVisible, props.onReturnToThread, navigation, togglePrimarySidebar],
+    [
+      panes.primarySidebarVisible,
+      props.onReturnToThread,
+      navigation,
+      togglePrimarySidebar,
+      usesDuoHeader,
+      usesNativeWorkspaceColumns,
+    ],
   );
   // Deep links / cold starts land with Thread as the ONLY route, where the
   // native back button does not render. Provide an explicit Home escape for
@@ -177,6 +183,7 @@ export function useThreadHeaderOptions(props: {
       threadCenterHeaderItems,
       compactRightHeaderItems,
       duoRightHeaderItems,
+      usesDuoHeader,
       environmentId,
       threadId,
       gitStatus?.isDefaultRef,

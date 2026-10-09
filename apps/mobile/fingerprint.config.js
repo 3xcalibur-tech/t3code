@@ -16,14 +16,5 @@ if (!majorVersion) {
 module.exports = {
   // Hash the pinned Screens fork's native source, rather than only its version.
   nativeModuleSourceType: "files",
-  extraSources: [
-    { type: "contents", id: "appMajorVersion", contents: majorVersion },
-    // Expo's config hash may omit the native opt-in. Duo binaries have different
-    // orientation and navigator capabilities, so their OTAs need a distinct runtime.
-    {
-      type: "contents",
-      id: "iosDuoBuild",
-      contents: process.env.T3CODE_IOS_DUO_BUILD === "1" ? "1" : "0",
-    },
-  ],
+  extraSources: [{ type: "contents", id: "appMajorVersion", contents: majorVersion }],
 };

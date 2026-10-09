@@ -4,7 +4,7 @@ import { ActivityIndicator, Platform, View } from "react-native";
 import { createNativeHeaderMenu } from "./nativeHeaderMenu.ios";
 import { ScreenHeaderButton } from "./ScreenHeaderButton";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../native/StackHeader";
-import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../native/NativeWorkspaceColumns";
+import { useNativeWorkspaceColumnsSupported } from "../native/NativeWorkspaceColumns";
 import { useAdaptiveWorkspaceLayout } from "../features/layout/AdaptiveWorkspaceLayout";
 import {
   createNativeMailSearchToolbarItem,
@@ -35,6 +35,7 @@ function mailMenuItems(items: ReadonlyArray<ScreenHeaderMenuItem>): MailMenu["it
 }
 
 export function ScreenHeader(props: ScreenHeaderProps) {
+  const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const headerId = useId();
   const { layout, panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const { themeVariables } = useAppearancePreferences();
@@ -120,11 +121,11 @@ export function ScreenHeader(props: ScreenHeaderProps) {
             />
           ) : null}
           {props.sidebar !== false &&
-          (!NATIVE_WORKSPACE_COLUMNS_SUPPORTED ||
+          (!usesNativeWorkspaceColumns ||
             (Platform.OS === "ios" && Platform.isPad) ||
             !panes.primarySidebarVisible) ? (
             <ScreenHeaderButton
-              axisBehavior={NATIVE_WORKSPACE_COLUMNS_SUPPORTED ? "horizontalOnly" : undefined}
+              axisBehavior={usesNativeWorkspaceColumns ? "horizontalOnly" : undefined}
               accessibilityLabel={
                 panes.primarySidebarVisible
                   ? `Maximize ${props.title.toLowerCase()}`

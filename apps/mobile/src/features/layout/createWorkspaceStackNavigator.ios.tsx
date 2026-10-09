@@ -33,7 +33,10 @@ import {
   V5CardStackView,
   V5StackView,
 } from "../../native/createV5StackNavigator.ios";
-import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../../native/NativeWorkspaceColumns";
+import {
+  useNativeWorkspaceColumnsReady,
+  useNativeWorkspaceColumnsSupported,
+} from "../../native/NativeWorkspaceColumns";
 import { V5StackHeader } from "../../native/V5StackHeader.ios";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -114,6 +117,8 @@ function WorkspaceColumns(
   const inspector = use(NativeWorkspaceInspectorContext);
   const hostRef = useRef<SplitHostCommands>(null);
   const activeDetailKey = props.detail.at(-1)?.key;
+  const compactColumn = activeDetailKey ? "secondary" : "primary";
+  const shownCompactColumn = useRef(compactColumn);
   const threadParams = props.detail.findLast((route) => route.name === "Thread")?.params;
   const selectedThreadKey =
     threadParams &&
@@ -138,9 +143,12 @@ function WorkspaceColumns(
   useEffect(() => {
     // In compact size classes UIKit exposes one column. Selecting a thread
     // changes the visible column without rebuilding either navigation stack.
-    if (layout.usesSplitView) return;
-    hostRef.current?.show(activeDetailKey ? "secondary" : "primary");
-  }, [activeDetailKey, layout.usesSplitView]);
+    // The initial column is a native prop, so it is applied before the host
+    // attaches. Commands only handle later navigation changes.
+    if (layout.usesSplitView || shownCompactColumn.current === compactColumn) return;
+    shownCompactColumn.current = compactColumn;
+    hostRef.current?.show(compactColumn);
+  }, [compactColumn, layout.usesSplitView]);
 
   const primary = props.descriptors[props.primary.key];
   if (!primary) return null;
@@ -149,6 +157,7 @@ function WorkspaceColumns(
       ref={hostRef}
       testID="adaptive-workspace-layout"
       preferredSplitBehavior="tile"
+      topColumnForCollapsing={compactColumn}
       preferredDisplayMode={
         panes.primarySidebarVisible || !activeDetailKey ? "oneBesideSecondary" : "secondaryOnly"
       }
@@ -331,6 +340,8 @@ function WorkspaceStackNavigator({
   UNSTABLE_router,
   ...rest
 }: NativeStackNavigatorProps) {
+  const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
+  const nativeWorkspaceColumnsReady = useNativeWorkspaceColumnsReady();
   const { state, describe, descriptors, navigation, NavigationContent } = useNavigationBuilder<
     StackNavigationState<ParamListBase>,
     StackRouterOptions,
@@ -348,9 +359,10 @@ function WorkspaceStackNavigator({
     screenLayout,
     UNSTABLE_router,
   });
-  const WorkspaceView = NATIVE_WORKSPACE_COLUMNS_SUPPORTED ? WorkspaceStackView : V5StackView;
+  if (!nativeWorkspaceColumnsReady) return null;
+  const WorkspaceView = usesNativeWorkspaceColumns ? WorkspaceStackView : V5StackView;
   return (
-    <NativeWorkspaceModeContext value={NATIVE_WORKSPACE_COLUMNS_SUPPORTED}>
+    <NativeWorkspaceModeContext value={usesNativeWorkspaceColumns}>
       <NavigationContent>
         <WorkspaceView
           {...rest}
