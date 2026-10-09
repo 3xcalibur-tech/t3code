@@ -59,7 +59,8 @@ export function hydratePosixHome(
  * Repairs the environment of a process launched without a login shell, such as
  * a GUI app or a service. `shellEnvironmentPrepared` means the parent already
  * merged the user's shell PATH into this process environment, so only the
- * HOME fallback still runs.
+ * HOME fallback still runs on POSIX. Windows keeps its Node availability
+ * check and registry/profile repair.
  */
 export const fixPath = Effect.fn("fixPath")(function* (options?: {
   readonly shellEnvironmentPrepared?: boolean | undefined;
@@ -73,7 +74,6 @@ export const fixPath = Effect.fn("fixPath")(function* (options?: {
   const shellEnvironmentPrepared = options?.shellEnvironmentPrepared === true;
 
   if (platform === "win32") {
-    if (shellEnvironmentPrepared) return;
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
       Effect.catchDefect((defect) =>
         Effect.sync(() => {
