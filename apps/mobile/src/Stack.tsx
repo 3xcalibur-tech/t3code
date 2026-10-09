@@ -128,6 +128,7 @@ import {
 } from "./features/sharing/incoming-share-presentation";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { deriveLayout } from "./lib/layout";
+import { useNativeLayoutMetrics } from "./native/native-layout-metrics";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { FORM_SHEET_PRESENTATION_OPTIONS } from "./native/sheet-surface";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
@@ -957,8 +958,9 @@ function ScreenRenderFallback(props: RenderFailureProps & { readonly routeName: 
 
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
   const { width, height } = useWindowDimensions();
+  const nativeMetrics = useNativeLayoutMetrics();
   const usesWorkspaceFlowScreens =
-    Platform.OS === "android" || deriveLayout({ width, height }).usesSplitView;
+    Platform.OS === "android" || deriveLayout({ width, height, nativeMetrics }).usesSplitView;
 
   return (
     <Navigator
