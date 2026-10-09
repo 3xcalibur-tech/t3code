@@ -6,10 +6,13 @@ import * as NodeFS from "node:fs";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { HostProcessEnvironment, HostProcessPlatform } from "./hostProcess.ts";
 import * as Context from "effect/Context";
@@ -178,27 +181,38 @@ export function listLoginShellCandidates(
   return candidates;
 }
 
-export function readPathFromLoginShell(
-  shell: string,
-  execFile: ExecFileSyncLike = NodeChildProcess.execFileSync,
-): string | undefined {
-  return readEnvironmentFromLoginShell(shell, ["PATH"], execFile).PATH;
-}
+const LOGIN_SHELL_TIMEOUT = Duration.seconds(5);
+const LAUNCHCTL_TIMEOUT = Duration.seconds(2);
+const PROBE_KILL_GRACE = Duration.seconds(1);
 
-export function readPathFromLaunchctl(
-  execFile: ExecFileSyncLike = NodeChildProcess.execFileSync,
-): string | undefined {
-  try {
-    return trimNonEmpty(
-      execFile("/bin/launchctl", ["getenv", "PATH"], {
-        encoding: "utf8",
-        timeout: 2000,
+// Runs a short-lived probe without blocking the event loop. The timeout
+// interrupts the effect, which signals the child and force-kills it after the
+// grace period.
+const runProbe = (command: string, args: ReadonlyArray<string>, timeout: Duration.Duration) =>
+  ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+    spawner.string(
+      ChildProcess.make(command, args, {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "ignore",
+        killSignal: "SIGTERM",
+        forceKillAfter: PROBE_KILL_GRACE,
       }),
-    );
-  } catch {
-    return undefined;
-  }
-}
+    ),
+  ).pipe(Effect.timeout(timeout));
+
+export const readPathFromLoginShell = Effect.fn("shell.readPathFromLoginShell")(function* (
+  shell: string,
+) {
+  return (yield* readEnvironmentFromLoginShell(shell, ["PATH"])).PATH;
+});
+
+export const readPathFromLaunchctl = Effect.fn("shell.readPathFromLaunchctl")(function* () {
+  return yield* runProbe("/bin/launchctl", ["getenv", "PATH"], LAUNCHCTL_TIMEOUT).pipe(
+    Effect.map(trimNonEmpty),
+    Effect.orElseSucceed(() => undefined),
+  );
+});
 
 export function mergePathEntries(
   preferredPath: string | undefined,
@@ -284,36 +298,29 @@ function extractEnvironmentValue(output: string, name: string): string | undefin
   return value.length > 0 ? value : undefined;
 }
 
-export type ShellEnvironmentReader = (
-  shell: string,
-  names: ReadonlyArray<string>,
-  execFile?: ExecFileSyncLike,
-) => Partial<Record<string, string>>;
+/**
+ * Reads variables from an interactive login shell. Fails when the shell cannot
+ * start, exits abnormally, or outlives the timeout.
+ */
+export const readEnvironmentFromLoginShell = Effect.fn("shell.readEnvironmentFromLoginShell")(
+  function* (shell: string, names: ReadonlyArray<string>) {
+    const environment: Partial<Record<string, string>> = {};
+    if (names.length === 0) return environment;
 
-export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
-  shell,
-  names,
-  execFile = NodeChildProcess.execFileSync,
-) => {
-  if (names.length === 0) {
-    return {};
-  }
-
-  const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(names)], {
-    encoding: "utf8",
-    timeout: 5000,
-  });
-
-  const environment: Partial<Record<string, string>> = {};
-  for (const name of names) {
-    const value = extractEnvironmentValue(output, name);
-    if (value !== undefined) {
-      environment[name] = value;
+    const output = yield* runProbe(
+      shell,
+      ["-ilc", buildEnvironmentCaptureCommand(names)],
+      LOGIN_SHELL_TIMEOUT,
+    );
+    for (const name of names) {
+      const value = extractEnvironmentValue(output, name);
+      if (value !== undefined) {
+        environment[name] = value;
+      }
     }
-  }
-
-  return environment;
-};
+    return environment;
+  },
+);
 
 export type WindowsShellEnvironmentReader = (
   names: ReadonlyArray<string>,

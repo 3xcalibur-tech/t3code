@@ -2,8 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -40,135 +47,189 @@ const withWindowsEnvironmentMocks = <A, E, R>(
     Effect.provideService(CommandAvailability, commandAvailable),
   );
 
+const textEncoder = new TextEncoder();
+
+// A spawner that records each command and answers with the handler's output.
+// A never-ending process stands in for a shell that hangs.
+const makeSpawnerLayer = (
+  handler: (command: ChildProcess.StandardCommand) => string | "hang" | "fail",
+  commands: Array<ChildProcess.StandardCommand> = [],
+) =>
+  Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) => {
+      if (command._tag !== "StandardCommand") return Effect.die("unexpected command");
+      commands.push(command);
+      const output = handler(command);
+      if (output === "fail") {
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            description: "ENOENT",
+          }),
+        );
+      }
+      const stdout =
+        output === "hang"
+          ? Stream.never
+          : output.length === 0
+            ? Stream.empty
+            : Stream.make(textEncoder.encode(output));
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          stdout,
+          stderr: Stream.empty,
+          all: stdout,
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        }),
+      );
+    }),
+  );
+
 describe("readPathFromLoginShell", () => {
-  it("uses a shell-agnostic printenv PATH probe", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() => "__T3CODE_ENV_PATH_START__\n/a:/b\n__T3CODE_ENV_PATH_END__\n");
+  effectIt.effect("uses a shell-agnostic printenv PATH probe", () =>
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.StandardCommand> = [];
 
-    expect(readPathFromLoginShell("/opt/homebrew/bin/fish", execFile)).toBe("/a:/b");
-    expect(execFile).toHaveBeenCalledTimes(1);
+      const path = yield* readPathFromLoginShell("/opt/homebrew/bin/fish").pipe(
+        Effect.provide(
+          makeSpawnerLayer(
+            () => "__T3CODE_ENV_PATH_START__\n/a:/b\n__T3CODE_ENV_PATH_END__\n",
+            commands,
+          ),
+        ),
+      );
 
-    const firstCall = execFile.mock.calls[0] as
-      | [string, ReadonlyArray<string>, { encoding: "utf8"; timeout: number }]
-      | undefined;
-    expect(firstCall).toBeDefined();
-    if (!firstCall) {
-      throw new Error("Expected execFile to be called");
-    }
+      expect(path).toBe("/a:/b");
+      expect(commands).toHaveLength(1);
+      const [command] = commands;
+      expect(command?.command).toBe("/opt/homebrew/bin/fish");
+      expect(command?.args).toHaveLength(2);
+      expect(command?.args[0]).toBe("-ilc");
+      expect(command?.args[1]).toContain("printenv PATH || true");
+      expect(command?.args[1]).toContain("__T3CODE_ENV_PATH_START__");
+      expect(command?.args[1]).toContain("__T3CODE_ENV_PATH_END__");
+    }),
+  );
 
-    const [shell, args, options] = firstCall;
-    expect(shell).toBe("/opt/homebrew/bin/fish");
-    expect(args).toHaveLength(2);
-    expect(args?.[0]).toBe("-ilc");
-    expect(args?.[1]).toContain("printenv PATH || true");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_START__");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_END__");
-    expect(options).toEqual({ encoding: "utf8", timeout: 5000 });
-  });
+  effectIt.effect("fails when the shell cannot be started", () =>
+    Effect.gen(function* () {
+      const error = yield* readPathFromLoginShell("/bin/missing").pipe(
+        Effect.provide(makeSpawnerLayer(() => "fail")),
+        Effect.flip,
+      );
+
+      expect(error._tag).toBe("PlatformError");
+    }),
+  );
+
+  effectIt.effect("gives up on a shell that never exits after five seconds", () =>
+    Effect.gen(function* () {
+      const fiber = yield* readPathFromLoginShell("/bin/zsh").pipe(
+        Effect.provide(makeSpawnerLayer(() => "hang")),
+        Effect.flip,
+        Effect.forkChild,
+      );
+
+      yield* TestClock.adjust("4999 millis");
+      expect(fiber.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      const error = yield* Fiber.join(fiber);
+      expect(error._tag).toBe("TimeoutError");
+    }),
+  );
 });
 
 describe("readPathFromLaunchctl", () => {
-  it("returns a trimmed PATH value from launchctl", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() => "  /opt/homebrew/bin:/usr/bin  \n");
+  effectIt.effect("returns a trimmed PATH value from launchctl", () =>
+    Effect.gen(function* () {
+      const commands: Array<ChildProcess.StandardCommand> = [];
 
-    expect(readPathFromLaunchctl(execFile)).toBe("/opt/homebrew/bin:/usr/bin");
-    expect(execFile).toHaveBeenCalledWith("/bin/launchctl", ["getenv", "PATH"], {
-      encoding: "utf8",
-      timeout: 2000,
-    });
-  });
+      const path = yield* readPathFromLaunchctl().pipe(
+        Effect.provide(makeSpawnerLayer(() => "  /opt/homebrew/bin:/usr/bin  \n", commands)),
+      );
 
-  it("returns undefined when launchctl is unavailable", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() => {
-      throw new Error("spawn /bin/launchctl ENOENT");
-    });
+      expect(path).toBe("/opt/homebrew/bin:/usr/bin");
+      expect(commands[0]?.command).toBe("/bin/launchctl");
+      expect(commands[0]?.args).toEqual(["getenv", "PATH"]);
+    }),
+  );
 
-    expect(readPathFromLaunchctl(execFile)).toBeUndefined();
-  });
+  effectIt.effect("returns undefined when launchctl is unavailable", () =>
+    Effect.gen(function* () {
+      const path = yield* readPathFromLaunchctl().pipe(
+        Effect.provide(makeSpawnerLayer(() => "fail")),
+      );
+
+      expect(path).toBeUndefined();
+    }),
+  );
 });
 
 describe("readEnvironmentFromLoginShell", () => {
-  it("extracts multiple environment variables from a login shell command", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() =>
-      [
-        "__T3CODE_ENV_PATH_START__",
-        "/a:/b",
-        "__T3CODE_ENV_PATH_END__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
-        "/tmp/secretive.sock",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
-      ].join("\n"),
+  const readFrom = (output: string, names: ReadonlyArray<string>) =>
+    readEnvironmentFromLoginShell("/bin/zsh", names).pipe(
+      Effect.provide(makeSpawnerLayer(() => output)),
     );
 
-    expect(readEnvironmentFromLoginShell("/bin/zsh", ["PATH", "SSH_AUTH_SOCK"], execFile)).toEqual({
-      PATH: "/a:/b",
-      SSH_AUTH_SOCK: "/tmp/secretive.sock",
-    });
-    expect(execFile).toHaveBeenCalledTimes(1);
-  });
+  effectIt.effect("extracts multiple environment variables from a login shell command", () =>
+    Effect.gen(function* () {
+      const environment = yield* readFrom(
+        [
+          "__T3CODE_ENV_PATH_START__",
+          "/a:/b",
+          "__T3CODE_ENV_PATH_END__",
+          "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
+          "/tmp/secretive.sock",
+          "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
+        ].join("\n"),
+        ["PATH", "SSH_AUTH_SOCK"],
+      );
 
-  it("omits environment variables that are missing or empty", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() =>
-      [
-        "__T3CODE_ENV_PATH_START__",
-        "/a:/b",
-        "__T3CODE_ENV_PATH_END__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
-        "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
-      ].join("\n"),
-    );
+      expect(environment).toEqual({ PATH: "/a:/b", SSH_AUTH_SOCK: "/tmp/secretive.sock" });
+    }),
+  );
 
-    expect(readEnvironmentFromLoginShell("/bin/zsh", ["PATH", "SSH_AUTH_SOCK"], execFile)).toEqual({
-      PATH: "/a:/b",
-    });
-  });
+  effectIt.effect("omits environment variables that are missing or empty", () =>
+    Effect.gen(function* () {
+      const environment = yield* readFrom(
+        [
+          "__T3CODE_ENV_PATH_START__",
+          "/a:/b",
+          "__T3CODE_ENV_PATH_END__",
+          "__T3CODE_ENV_SSH_AUTH_SOCK_START__",
+          "__T3CODE_ENV_SSH_AUTH_SOCK_END__",
+        ].join("\n"),
+        ["PATH", "SSH_AUTH_SOCK"],
+      );
 
-  it("preserves surrounding whitespace in captured values", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() =>
-      ["__T3CODE_ENV_CUSTOM_VAR_START__", "  padded value  ", "__T3CODE_ENV_CUSTOM_VAR_END__"].join(
-        "\n",
-      ),
-    );
+      expect(environment).toEqual({ PATH: "/a:/b" });
+    }),
+  );
 
-    expect(readEnvironmentFromLoginShell("/bin/zsh", ["CUSTOM_VAR"], execFile)).toEqual({
-      CUSTOM_VAR: "  padded value  ",
-    });
-  });
+  effectIt.effect("preserves surrounding whitespace in captured values", () =>
+    Effect.gen(function* () {
+      const environment = yield* readFrom(
+        [
+          "__T3CODE_ENV_CUSTOM_VAR_START__",
+          "  padded value  ",
+          "__T3CODE_ENV_CUSTOM_VAR_END__",
+        ].join("\n"),
+        ["CUSTOM_VAR"],
+      );
+
+      expect(environment).toEqual({ CUSTOM_VAR: "  padded value  " });
+    }),
+  );
 });
 
 describe("listLoginShellCandidates", () => {
