@@ -2062,6 +2062,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // single continuation beats failing closed to a dead thread.
         const endedBackgroundTaskIds = yield* Ref.make<ReadonlySet<string>>(new Set());
         const endedBackgroundTaskIdLimit = 128;
+        // Grok 1.0.50 emits task_completed on the session update while the
+        // prompt RPC is still open. finishRegisteredBackgroundTool only applies
+        // once the prompt has settled, so the completion is kept until then.
+        const preSettleBackgroundCompletions = yield* Ref.make(
+          new Map<
+            string,
+            {
+              readonly taskId: string;
+              readonly status: "completed" | "failed";
+              readonly output?: string;
+            }
+          >(),
+        );
 
         const setBackgroundTaskRunning = (taskId: string, running: boolean) =>
           Effect.gen(function* () {
@@ -3903,22 +3916,44 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         // A structured task end (Grok `task_completed`) is authoritative for the
         // tool that registered the task: its own updates only ever say running.
         // Finish the row while deferred finalize holds a settled root turn open
-        // for it, so the turn can settle. While the prompt is still open the
-        // agent reports the end itself (TaskOutput hydration), and an unreported
-        // end must keep its post-finalize continuation offer.
+        // for it, so the turn can settle. A completion that arrives before the
+        // prompt RPC returns is applied at settle: leaving the shell in progress
+        // there holds the turn open with no later event to close it. While the
+        // prompt is still open the agent may also report the end itself
+        // (TaskOutput hydration). An end that never arrives keeps its
+        // post-finalize continuation offer.
         const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
           readonly taskId: string;
           readonly status: "completed" | "failed";
           readonly output?: string;
         }) {
           const context = yield* Ref.get(activeTurn);
-          if (context === null || context.finalized || !context.promptSettled) return;
+          if (context === null || context.finalized) return;
+          if (!context.promptSettled) {
+            yield* Ref.update(preSettleBackgroundCompletions, (current) => {
+              const next = new Map(current);
+              next.set(mutation.taskId, mutation);
+              return next;
+            });
+            return;
+          }
           const toolCallId = context.toolCallIdsByBackgroundTaskId.get(mutation.taskId);
           const tool = toolCallId === undefined ? undefined : context.tools.get(toolCallId);
           if (tool === undefined) return;
           const status = toolStatus(tool.status);
           if (status !== "pending" && status !== "running") return;
           context.awaitingBackgroundHydration.delete(mutation.taskId);
+          // The structured end is now part of this turn, so finalize must not
+          // treat it as an unreported completion and open a continuation.
+          yield* Ref.update(handledBackgroundTaskIdsInActiveTurn, (current) =>
+            new Set(current).add(mutation.taskId),
+          );
+          yield* Ref.update(midTurnUnreportedCompletedTaskIds, (current) => {
+            if (!current.has(mutation.taskId)) return current;
+            const next = new Set(current);
+            next.delete(mutation.taskId);
+            return next;
+          });
           const finished = { ...tool, status: mutation.status };
           yield* emitTool(
             context,
@@ -3926,6 +3961,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             mutation.status,
           );
           yield* rearmDeferredFinalize(context);
+        });
+
+        const flushPreSettleBackgroundCompletions = Effect.fnUntraced(function* () {
+          const pending = yield* Ref.getAndSet(preSettleBackgroundCompletions, new Map());
+          for (const mutation of pending.values()) {
+            yield* finishRegisteredBackgroundTool(mutation);
+          }
         });
 
         const bufferPostSettleWake = Effect.fnUntraced(function* (
@@ -6959,6 +7001,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
             yield* Ref.set(suppressPostSettleMonitorPrompt, false);
             yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
+            yield* Ref.set(preSettleBackgroundCompletions, new Map());
             // Continuation turns attach to wake traffic the agent already produced
             // after the prior root turn settled; do not re-prompt the ACP session.
             const isContinuationTurn =
@@ -7213,21 +7256,27 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         : "completed";
                     // Grok monitors (and async subagents) keep working after the root
                     // prompt RPC returns. Defer finalize so their later updates and
-                    // wake-turn traffic still project onto this run.
-                    if (
-                      flavor.deferFinalizeForBackgroundWork === true &&
-                      !context.interrupted &&
-                      hasDeferredBackgroundWork(context)
-                    ) {
-                      context.promptSettled = true;
-                      context.promptSettledStatus = status;
-                      // The agent finished this prompt's reply. Background work
-                      // holds the run open, not the text it already sent.
-                      yield* closeTextStreams(context);
-                      yield* (
-                        options.testHooks?.afterPromptSettledWithBackgroundWork?.() ?? Effect.void
-                      );
-                      return;
+                    // wake-turn traffic still project onto this run. A shell whose
+                    // task_completed already arrived is finished first, so that
+                    // notice can close the turn instead of leaving it held.
+                    if (flavor.deferFinalizeForBackgroundWork === true && !context.interrupted) {
+                      const pendingBackgroundCompletion =
+                        (yield* Ref.get(preSettleBackgroundCompletions)).size > 0;
+                      if (pendingBackgroundCompletion || hasDeferredBackgroundWork(context)) {
+                        context.promptSettled = true;
+                        context.promptSettledStatus = status;
+                        yield* flushPreSettleBackgroundCompletions();
+                        if (hasDeferredBackgroundWork(context)) {
+                          // The agent finished this prompt's reply. Background work
+                          // holds the run open, not the text it already sent.
+                          yield* closeTextStreams(context);
+                          yield* (
+                            options.testHooks?.afterPromptSettledWithBackgroundWork?.() ??
+                              Effect.void
+                          );
+                          return;
+                        }
+                      }
                     }
                     yield* finalizeTurn(context, status);
                   }),
@@ -7959,6 +8008,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                             yield* Ref.set(endedBackgroundTaskIds, new Set());
                             yield* Ref.set(midTurnUnreportedCompletedTaskIds, new Set());
                             yield* Ref.set(handledBackgroundTaskIdsInActiveTurn, new Set());
+                            yield* Ref.set(preSettleBackgroundCompletions, new Map());
                             yield* Ref.set(carryoverSubagents, null);
                             yield* Ref.set(suppressPostSettleMonitorPrompt, false);
                             yield* Ref.set(lastTurnRoute, null);
