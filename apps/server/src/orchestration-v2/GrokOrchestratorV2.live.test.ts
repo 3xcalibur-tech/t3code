@@ -1,4 +1,6 @@
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -247,8 +249,12 @@ describe.runIf(process.env.T3_GROK_LIVE_ORCHESTRATOR === "1")("Grok V2 live orch
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         yield* EffectWorker.runDaemonWithOptions({ concurrency: 2 }).pipe(Effect.forkScoped);
-        const worktreePath = "/tmp/t3-grok-live-background-shell";
-        NodeFS.mkdirSync(worktreePath, { recursive: true });
+        const worktreePath = NodeFS.mkdtempSync(
+          NodePath.join(NodeOS.tmpdir(), "t3-grok-live-background-shell-"),
+        );
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(worktreePath, { recursive: true, force: true })),
+        );
         const projectId = ProjectId.make("project:grok-live-background-shell");
         const threadId = ThreadId.make("thread:grok-live-background-shell");
         const marker = `LIVE_SHELL_${Date.now().toString(36)}`;
