@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import { beforeEach, vi } from "vite-plus/test";
+import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 const electron = vi.hoisted(() => ({
   configureWebAuthn: vi.fn(),
@@ -92,6 +92,10 @@ describe("PreviewPasskeys", () => {
       isDestroyed: () => false,
       getNativeWindowHandle: () => Buffer.from([1]),
     });
+  });
+  // Restored here so a failing fake-timer test cannot leak fake timers into the next one.
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.effect("pins each guest ceremony to the origin of the frame that asked", () =>
@@ -185,6 +189,16 @@ describe("PreviewPasskeys", () => {
       });
       assert.deepStrictEqual(malformed, { success: false, error: "TypeError" });
       assert.strictEqual(webauthn.createCredential.mock.calls.length, 1);
+
+      // Without authenticator data the site cannot verify the passkey.
+      webauthn.createCredential.mockResolvedValueOnce({
+        success: true,
+        data: { credentialId: "AQ", attestationObject: Buffer.from([0x00]).toString("base64url") },
+      });
+      assert.deepStrictEqual(yield* call(PASSKEY_CREATE_CHANNEL, publicKey), {
+        success: false,
+        error: "NotAllowedError",
+      });
     }).pipe(Effect.provide(bridgeLayer)),
   );
 
@@ -273,7 +287,6 @@ describe("PreviewPasskeys", () => {
         call(PASSKEY_GET_CHANNEL, { challenge: new Uint8Array([1]), timeout: 1_000 }),
       );
       yield* Effect.promise(() => vi.advanceTimersByTimeAsync(6_000));
-      vi.useRealTimers();
 
       assert.deepStrictEqual(yield* Fiber.join(pending), {
         success: false,

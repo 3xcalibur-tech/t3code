@@ -63,11 +63,14 @@ export const macPasskeyBackend: PasskeyBackend = {
     const authData = authenticatorDataFromAttestation(
       Buffer.from(result.data.attestationObject, "base64url"),
     );
+    // Sites verify the new credential from its authenticator data; without it
+    // the passkey is unusable, so say so now rather than let sign-up fail later.
+    if (!authData) return { success: false, error: "NotAllowedError" };
     return {
       success: true,
       data: {
         ...result.data,
-        authData: authData ? Buffer.from(authData).toString("base64url") : "",
+        authData: Buffer.from(authData).toString("base64url"),
         transports: [],
       },
     };
