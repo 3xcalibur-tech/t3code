@@ -11680,12 +11680,14 @@ describe("AcpAdapterV2", () => {
   );
 
   it.effect.each([
-    { defer: false, status: "completed" as const },
-    { defer: true, status: "completed" as const },
-    { defer: true, status: "failed" as const },
+    { defer: false, status: "completed" as const, replayAck: false },
+    { defer: true, status: "completed" as const, replayAck: false },
+    { defer: true, status: "failed" as const, replayAck: false },
+    { defer: true, status: "completed" as const, replayAck: true },
+    { defer: true, status: "failed" as const, replayAck: true },
   ])(
-    "mid-turn unhandled background completion offers once after finalize: $defer / $status",
-    ({ defer, status }) =>
+    "mid-turn unhandled background completion offers once after finalize: $defer / $status / replay=$replayAck",
+    ({ defer, status, replayAck }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -11700,6 +11702,7 @@ describe("AcpAdapterV2", () => {
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         const promptGate = yield* Deferred.make<EffectAcpSchema.PromptResponse>();
+        const promptHeld = yield* Deferred.make<void>();
         const capturedMutation: {
           current:
             | ((mutation: {
@@ -11714,6 +11717,10 @@ describe("AcpAdapterV2", () => {
         const instanceId = ProviderInstanceId.make("acp-test");
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
+          testHooks: {
+            afterPromptSettledWithBackgroundWork: () =>
+              Deferred.succeed(promptHeld, undefined).pipe(Effect.asVoid),
+          },
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
@@ -11721,7 +11728,11 @@ describe("AcpAdapterV2", () => {
             deferFinalizeForBackgroundWork: defer,
             ...(defer ? { normalizeToolCall: normalizeXAiAcpToolCallState } : {}),
             extractBackgroundTaskId: (toolCall) =>
-              toolCall.toolCallId === "tool-call-monitor-late" ? "task-monitor-late" : undefined,
+              toolCall.toolCallId === "tool-call-monitor-late"
+                ? "task-monitor-late"
+                : toolCall.toolCallId === "tool-call-blocker"
+                  ? "task-blocker"
+                  : undefined,
             registerExtensions: (context) =>
               Effect.sync(() => {
                 capturedMutation.current = context.applyBackgroundTaskMutation;
@@ -11812,6 +11823,20 @@ describe("AcpAdapterV2", () => {
               : {}),
           },
         });
+        if (replayAck) {
+          // Keep the settled root open while the completed command's ACK is replayed.
+          yield* sessionUpdateHandler!({
+            sessionId: "mock-session-1",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "tool-call-blocker",
+              title: "Another background command",
+              kind: "execute",
+              status: "in_progress",
+              rawInput: {},
+            },
+          });
+        }
         yield* applyMutation({
           sessionId: "mock-session-1",
           taskId: "task-monitor-late",
@@ -11831,6 +11856,25 @@ describe("AcpAdapterV2", () => {
         );
 
         yield* Deferred.succeed(promptGate, { stopReason: "end_turn" });
+        if (replayAck) {
+          yield* Deferred.await(promptHeld);
+          yield* sessionUpdateHandler!({
+            sessionId: "mock-session-1",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tool-call-monitor-late",
+              status: "completed",
+              rawOutput: { type: "BackgroundTaskStarted", task_id: "task-monitor-late" },
+            },
+          });
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "task-blocker",
+            status: "completed",
+            report: { kind: "command" },
+          });
+          yield* TestClock.adjust("3 seconds");
+        }
         const providerTurnId = idAllocator.derive.providerTurn({
           driver: ACP_TEST_DRIVER,
           nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),

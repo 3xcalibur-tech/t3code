@@ -3119,7 +3119,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const toolCall =
             completion !== undefined &&
             (normalized.status === "pending" || normalized.status === "inProgress")
-              ? { ...normalized, status: completion.status }
+              ? {
+                  ...(completion.output === undefined
+                    ? normalized
+                    : setToolOutputText(normalized, completion.output)),
+                  status: completion.status,
+                }
               : normalized;
           context.tools.set(toolCall.toolCallId, toolCall);
           if (backgroundTaskId !== undefined) {
