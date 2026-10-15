@@ -337,6 +337,8 @@ export interface AcpAdapterV2Flavor {
    * (e.g. monitor task uuid) so later synthetic text events can update it.
    */
   readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
+  /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
+  readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
   /**
    * Optional parse of root-session synthetic text (monitor-event lines, monitor
    * ended reminders). Returns every task mutation in the chunk so coalesced
@@ -1163,6 +1165,7 @@ interface ActiveAcpTurn {
   readonly pendingSubagentNotifications: Map<string, Array<EffectAcpSchema.SessionNotification>>;
   /** Background monitor/task id → toolCallId for synthetic root text updates. */
   readonly toolCallIdsByBackgroundTaskId: Map<string, string>;
+  readonly backgroundCommandTaskIds: Set<string>;
   /** Command ends retained until prompt settlement, without marking them reported. */
   readonly backgroundCommandCompletions: Map<
     string,
@@ -3129,6 +3132,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context.tools.set(toolCall.toolCallId, toolCall);
           if (backgroundTaskId !== undefined) {
             context.toolCallIdsByBackgroundTaskId.set(backgroundTaskId, toolCall.toolCallId);
+            if (flavor.isBackgroundCommandTool?.(normalized) === true) {
+              context.backgroundCommandTaskIds.add(backgroundTaskId);
+            }
             if (flavor.isPersistentBackgroundTool?.(toolCall) === true) {
               context.persistentBackgroundTaskIds.add(backgroundTaskId);
             }
@@ -5997,14 +6003,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
                     if (mutation.status !== "running") {
-                      if (mutation.report?.kind === "command") {
-                        const context = yield* Ref.get(activeTurn);
-                        if (context !== null && !context.finalized) {
-                          context.backgroundCommandCompletions.set(mutation.taskId, {
-                            status: mutation.status,
-                            ...(mutation.output === undefined ? {} : { output: mutation.output }),
-                          });
-                        }
+                      const context = yield* Ref.get(activeTurn);
+                      if (
+                        context !== null &&
+                        !context.finalized &&
+                        (mutation.report?.kind === "command" ||
+                          (mutation.report === undefined &&
+                            context.backgroundCommandTaskIds.has(mutation.taskId)))
+                      ) {
+                        context.backgroundCommandCompletions.set(mutation.taskId, {
+                          ...context.backgroundCommandCompletions.get(mutation.taskId),
+                          status: mutation.status,
+                          ...(mutation.output === undefined ? {} : { output: mutation.output }),
+                        });
                       }
                       yield* finishRegisteredBackgroundTool({
                         taskId: mutation.taskId,
@@ -7052,6 +7063,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               subagentsBySessionId: new Map(),
               pendingSubagentNotifications: new Map(),
               toolCallIdsByBackgroundTaskId: new Map(),
+              backgroundCommandTaskIds: new Set(),
               backgroundCommandCompletions: new Map(),
               persistentBackgroundTaskIds: new Set(),
               awaitingBackgroundHydration: new Set(),

@@ -94,7 +94,7 @@ import {
   type AcpAdapterV2SubagentUpdate,
 } from "@t3tools/provider-acp/server/adapter";
 
-import { makeGrokAdapterV2 } from "@t3tools/provider-grok/testing";
+import { makeGrokAdapterV2, makeGrokAcpAdapterFlavor } from "@t3tools/provider-grok/testing";
 import {
   acpRegistryPromptFailure,
   registerMistralVibeAcpExtensions,
@@ -11685,9 +11685,54 @@ describe("AcpAdapterV2", () => {
     { defer: true, status: "failed" as const, replayAck: false },
     { defer: true, status: "completed" as const, replayAck: true },
     { defer: true, status: "failed" as const, replayAck: true },
+    {
+      defer: true,
+      status: "completed" as const,
+      replayAck: true,
+      repeatTerminal: true,
+      repeatOutput: undefined,
+    },
+    {
+      defer: true,
+      status: "failed" as const,
+      replayAck: true,
+      repeatTerminal: true,
+      repeatOutput: undefined,
+    },
+    {
+      defer: true,
+      status: "completed" as const,
+      replayAck: true,
+      repeatTerminal: true,
+      repeatOutput: "",
+    },
+    {
+      defer: true,
+      status: "completed" as const,
+      replayAck: true,
+      repeatTerminal: true,
+      repeatOutput: "UPDATED_OUTPUT\n",
+    },
+    { defer: true, status: "completed" as const, replayAck: false, omitReport: true },
+    { defer: true, status: "failed" as const, replayAck: false, omitReport: true },
+    {
+      defer: true,
+      status: "completed" as const,
+      replayAck: true,
+      omitReport: true,
+      repeatTerminal: true,
+      repeatOutput: undefined,
+    },
+    {
+      defer: true,
+      status: "completed" as const,
+      replayAck: false,
+      omitReport: true,
+      replaceAck: true,
+    },
   ])(
-    "mid-turn unhandled background completion offers once after finalize: $defer / $status / replay=$replayAck",
-    ({ defer, status, replayAck }) =>
+    "mid-turn unhandled background completion offers once after finalize: $defer / $status / replay=$replayAck / repeat=$repeatTerminal:$repeatOutput / reportless=$omitReport / progress=$replaceAck",
+    ({ defer, status, replayAck, ...scenario }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -11715,6 +11760,16 @@ describe("AcpAdapterV2", () => {
             | null;
         } = { current: null };
         const instanceId = ProviderInstanceId.make("acp-test");
+        const grokFlavor = makeGrokAcpAdapterFlavor(
+          {
+            instanceId,
+            settings: DEFAULT_GROK_SETTINGS,
+            environment: {},
+            hostPlatform: yield* HostProcess.Platform,
+            selfInvocation,
+          },
+          yield* HostProcess.HomeDirectory,
+        );
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
           testHooks: {
@@ -11726,13 +11781,18 @@ describe("AcpAdapterV2", () => {
             capabilities: AcpProviderCapabilitiesV2,
             enablePostSettleContinuation: true,
             deferFinalizeForBackgroundWork: defer,
-            ...(defer ? { normalizeToolCall: normalizeXAiAcpToolCallState } : {}),
-            extractBackgroundTaskId: (toolCall) =>
-              toolCall.toolCallId === "tool-call-monitor-late"
-                ? "task-monitor-late"
-                : toolCall.toolCallId === "tool-call-blocker"
-                  ? "task-blocker"
-                  : undefined,
+            ...(defer
+              ? {
+                  normalizeToolCall: normalizeXAiAcpToolCallState,
+                  isBackgroundCommandTool: grokFlavor.isBackgroundCommandTool ?? (() => false),
+                }
+              : {}),
+            extractBackgroundTaskId: defer
+              ? (grokFlavor.extractBackgroundTaskId ?? (() => undefined))
+              : (toolCall) =>
+                  toolCall.toolCallId === "tool-call-monitor-late"
+                    ? "task-monitor-late"
+                    : undefined,
             registerExtensions: (context) =>
               Effect.sync(() => {
                 capturedMutation.current = context.applyBackgroundTaskMutation;
@@ -11834,6 +11894,7 @@ describe("AcpAdapterV2", () => {
               kind: "execute",
               status: "in_progress",
               rawInput: {},
+              rawOutput: { type: "BackgroundTaskStarted", task_id: "task-blocker" },
             },
           });
         }
@@ -11842,13 +11903,35 @@ describe("AcpAdapterV2", () => {
           taskId: "task-monitor-late",
           status: "running",
         });
+        if ("replaceAck" in scenario) {
+          yield* sessionUpdateHandler!({
+            sessionId: "mock-session-1",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "tool-call-monitor-late",
+              status: "in_progress",
+              rawOutput: { type: "Text", text: "Command progress" },
+            },
+          });
+        }
+        const report =
+          defer && !("omitReport" in scenario) ? { report: { kind: "command" as const } } : {};
         yield* applyMutation({
           sessionId: "mock-session-1",
           taskId: "task-monitor-late",
           status,
           output: "EARLY_BG_DONE\n",
-          ...(defer ? { report: { kind: "command" as const } } : {}),
+          ...report,
         });
+        if ("repeatOutput" in scenario) {
+          yield* applyMutation({
+            sessionId: "mock-session-1",
+            taskId: "task-monitor-late",
+            status,
+            ...report,
+            ...(scenario.repeatOutput === undefined ? {} : { output: scenario.repeatOutput }),
+          });
+        }
         assert.lengthOf(
           continuationRequests,
           0,
@@ -11900,7 +11983,12 @@ describe("AcpAdapterV2", () => {
             assert.equal(backgroundItem.turnItem.status, status);
             assert.equal(backgroundItem.turnItem.type, "command_execution");
             if (backgroundItem.turnItem.type === "command_execution") {
-              assert.include(backgroundItem.turnItem.output ?? "", "EARLY_BG_DONE");
+              assert.equal(
+                backgroundItem.turnItem.output ?? "",
+                "repeatOutput" in scenario && scenario.repeatOutput !== undefined
+                  ? scenario.repeatOutput
+                  : "EARLY_BG_DONE\n",
+              );
             }
           }
         }
