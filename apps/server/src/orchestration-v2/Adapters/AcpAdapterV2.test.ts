@@ -11679,9 +11679,13 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect(
-    "mid-turn unhandled background completion still offers exactly one continuation after finalize",
-    () =>
+  it.effect.each([
+    { defer: false, status: "completed" as const },
+    { defer: true, status: "completed" as const },
+    { defer: true, status: "failed" as const },
+  ])(
+    "mid-turn unhandled background completion offers once after finalize: $defer / $status",
+    ({ defer, status }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -11702,6 +11706,8 @@ describe("AcpAdapterV2", () => {
                 readonly sessionId: string;
                 readonly taskId: string;
                 readonly status: "running" | "completed" | "failed";
+                readonly output?: string;
+                readonly report?: { readonly kind: "command" };
               }) => Effect.Effect<void>)
             | null;
         } = { current: null };
@@ -11712,6 +11718,8 @@ describe("AcpAdapterV2", () => {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
             enablePostSettleContinuation: true,
+            deferFinalizeForBackgroundWork: defer,
+            ...(defer ? { normalizeToolCall: normalizeXAiAcpToolCallState } : {}),
             extractBackgroundTaskId: (toolCall) =>
               toolCall.toolCallId === "tool-call-monitor-late" ? "task-monitor-late" : undefined,
             registerExtensions: (context) =>
@@ -11799,6 +11807,9 @@ describe("AcpAdapterV2", () => {
             sessionUpdate: "tool_call_update",
             toolCallId: "tool-call-monitor-late",
             status: "in_progress",
+            ...(defer
+              ? { rawOutput: { type: "BackgroundTaskStarted", task_id: "task-monitor-late" } }
+              : {}),
           },
         });
         yield* applyMutation({
@@ -11809,7 +11820,9 @@ describe("AcpAdapterV2", () => {
         yield* applyMutation({
           sessionId: "mock-session-1",
           taskId: "task-monitor-late",
-          status: "completed",
+          status,
+          output: "EARLY_BG_DONE\n",
+          ...(defer ? { report: { kind: "command" as const } } : {}),
         });
         assert.lengthOf(
           continuationRequests,
@@ -11823,13 +11836,30 @@ describe("AcpAdapterV2", () => {
           nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
         });
         let terminalStatus: string | null = null;
+        let backgroundItem: ProviderAdapter.ProviderAdapterV2Event | undefined;
         while (terminalStatus === null) {
           const event = yield* Queue.take(events);
+          if (
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === "tool-call-monitor-late"
+          ) {
+            backgroundItem = event;
+          }
           if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
             terminalStatus = event.status;
           }
         }
         assert.equal(terminalStatus, "completed");
+        if (defer) {
+          assert.equal(backgroundItem?.type, "turn_item.updated");
+          if (backgroundItem?.type === "turn_item.updated") {
+            assert.equal(backgroundItem.turnItem.status, status);
+            assert.equal(backgroundItem.turnItem.type, "command_execution");
+            if (backgroundItem.turnItem.type === "command_execution") {
+              assert.include(backgroundItem.turnItem.output ?? "", "EARLY_BG_DONE");
+            }
+          }
+        }
         assert.lengthOf(
           continuationRequests,
           1,

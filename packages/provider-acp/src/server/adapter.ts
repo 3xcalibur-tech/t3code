@@ -1163,6 +1163,11 @@ interface ActiveAcpTurn {
   readonly pendingSubagentNotifications: Map<string, Array<EffectAcpSchema.SessionNotification>>;
   /** Background monitor/task id → toolCallId for synthetic root text updates. */
   readonly toolCallIdsByBackgroundTaskId: Map<string, string>;
+  /** Command ends retained until prompt settlement, without marking them reported. */
+  readonly backgroundCommandCompletions: Map<
+    string,
+    { readonly status: "completed" | "failed"; readonly output?: string }
+  >;
   /**
    * Persistent monitors registered this turn. Excluded from deferred-finalize
    * holds so the root turn can settle while they keep streaming post-settle.
@@ -3104,9 +3109,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           yield* closeTextStream(context, "user");
           const previous = context.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
-          const toolCall = flavor.normalizeToolCall?.(merged) ?? merged;
+          const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
+          const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
+          const completion =
+            context.promptSettled && backgroundTaskId !== undefined
+              ? context.backgroundCommandCompletions.get(backgroundTaskId)
+              : undefined;
+          // A start ACK can still normalize to running after the task ended.
+          const toolCall =
+            completion !== undefined &&
+            (normalized.status === "pending" || normalized.status === "inProgress")
+              ? { ...normalized, status: completion.status }
+              : normalized;
           context.tools.set(toolCall.toolCallId, toolCall);
-          const backgroundTaskId = flavor.extractBackgroundTaskId?.(toolCall);
           if (backgroundTaskId !== undefined) {
             context.toolCallIdsByBackgroundTaskId.set(backgroundTaskId, toolCall.toolCallId);
             if (flavor.isPersistentBackgroundTool?.(toolCall) === true) {
@@ -3863,10 +3878,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         // A structured task end (Grok `task_completed`) is authoritative for the
         // tool that registered the task: its own updates only ever say running.
-        // Finish the row while deferred finalize holds a settled root turn open
-        // for it, so the turn can settle. While the prompt is still open the
-        // agent reports the end itself (TaskOutput hydration), and an unreported
-        // end must keep its post-finalize continuation offer.
+        // Retain early ends until settlement: closing them via emitTool while
+        // the prompt is open would mark an unreported result as handled and
+        // suppress its post-finalize continuation.
         const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
           readonly taskId: string;
           readonly status: "completed" | "failed";
@@ -5978,6 +5992,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
                     if (mutation.status !== "running") {
+                      if (mutation.report?.kind === "command") {
+                        const context = yield* Ref.get(activeTurn);
+                        if (context !== null && !context.finalized) {
+                          context.backgroundCommandCompletions.set(mutation.taskId, {
+                            status: mutation.status,
+                            ...(mutation.output === undefined ? {} : { output: mutation.output }),
+                          });
+                        }
+                      }
                       yield* finishRegisteredBackgroundTool({
                         taskId: mutation.taskId,
                         status: mutation.status,
@@ -7024,6 +7047,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               subagentsBySessionId: new Map(),
               pendingSubagentNotifications: new Map(),
               toolCallIdsByBackgroundTaskId: new Map(),
+              backgroundCommandCompletions: new Map(),
               persistentBackgroundTaskIds: new Set(),
               awaitingBackgroundHydration: new Set(),
               pendingInjectedReport: new Set(),
@@ -7191,6 +7215,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                           ? "interrupted"
                           : "cancelled"
                         : "completed";
+                    if (flavor.deferFinalizeForBackgroundWork === true && !context.interrupted) {
+                      context.promptSettled = true;
+                      context.promptSettledStatus = status;
+                      for (const [taskId, completion] of context.backgroundCommandCompletions) {
+                        yield* finishRegisteredBackgroundTool({ taskId, ...completion });
+                      }
+                    }
                     // Grok monitors (and async subagents) keep working after the root
                     // prompt RPC returns. Defer finalize so their later updates and
                     // wake-turn traffic still project onto this run.
@@ -7199,8 +7230,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       !context.interrupted &&
                       hasDeferredBackgroundWork(context)
                     ) {
-                      context.promptSettled = true;
-                      context.promptSettledStatus = status;
                       // The agent finished this prompt's reply. Background work
                       // holds the run open, not the text it already sent.
                       yield* closeTextStreams(context);
