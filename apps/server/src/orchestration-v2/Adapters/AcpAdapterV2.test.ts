@@ -11879,6 +11879,15 @@ describe("AcpAdapterV2", () => {
           });
         yield* replayAck();
         yield* assertCommand(status, "EARLY_BG_DONE\n");
+        // Sparse ACP updates must retain the command result after projection replaces the ACK.
+        for (const sparseStatus of ["completed", "in_progress"] as const) {
+          yield* update({
+            sessionUpdate: "tool_call_update",
+            toolCallId: "early",
+            status: sparseStatus,
+          });
+          yield* assertCommand(status, "EARLY_BG_DONE\n");
+        }
         if (status === "completed") {
           for (const output of ["", "UPDATED_OUTPUT\n"]) {
             yield* complete("early", { output });
