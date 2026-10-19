@@ -999,11 +999,10 @@ interface ActiveAcpTurn {
   readonly subagentsBySessionId: Map<string, ActiveAcpSubagent>;
   readonly pendingSubagentNotifications: Map<string, Array<EffectAcpSchema.SessionNotification>>;
   readonly toolCallIdsByBackgroundTaskId: Map<string, string>;
-  readonly backgroundCommandTaskIds: Set<string>;
-  /** Command ends retained until prompt settlement, without marking them reported. */
-  readonly backgroundCommandCompletions: Map<
+  /** Command ACKs register null; terminal results wait here for prompt settlement. */
+  readonly backgroundCommands: Map<
     string,
-    { readonly status: "completed" | "failed"; readonly output?: string }
+    { readonly status: "completed" | "failed"; readonly output?: string } | null
   >;
   readonly persistentBackgroundTaskIds: Set<string>;
   /**
@@ -2861,27 +2860,30 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const merged = mergeToolCallState(previous, incoming);
           const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
+          if (
+            backgroundTaskId !== undefined &&
+            flavor.isBackgroundCommandTool?.(normalized) === true &&
+            !context.backgroundCommands.has(backgroundTaskId)
+          ) {
+            context.backgroundCommands.set(backgroundTaskId, null);
+          }
           const completion =
             context.promptSettled && backgroundTaskId !== undefined
-              ? context.backgroundCommandCompletions.get(backgroundTaskId)
+              ? (context.backgroundCommands.get(backgroundTaskId) ?? undefined)
               : undefined;
-          // A start ACK can still normalize to running after the task ended.
+          // Replayed start ACKs must not replace an authoritative terminal result.
           const toolCall =
-            completion !== undefined &&
-            (normalized.status === "pending" || normalized.status === "inProgress")
-              ? {
+            completion === undefined
+              ? normalized
+              : {
                   ...(completion.output === undefined
                     ? normalized
                     : setToolOutputText(normalized, completion.output)),
                   status: completion.status,
-                }
-              : normalized;
+                };
           context.tools.set(toolCall.toolCallId, toolCall);
           if (backgroundTaskId !== undefined) {
             context.toolCallIdsByBackgroundTaskId.set(backgroundTaskId, toolCall.toolCallId);
-            if (flavor.isBackgroundCommandTool?.(normalized) === true) {
-              context.backgroundCommandTaskIds.add(backgroundTaskId);
-            }
             if (flavor.isPersistentBackgroundTool?.(toolCall) === true) {
               context.persistentBackgroundTaskIds.add(backgroundTaskId);
             }
@@ -3572,11 +3574,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         });
 
-        // A structured task end (Grok `task_completed`) is authoritative for the
-        // tool that registered the task: its own updates only ever say running.
-        // Retain early ends until settlement: closing them via emitTool while
-        // the prompt is open would mark an unreported result as handled and
-        // suppress its post-finalize continuation.
+        // Structured task ends are authoritative, but emitting before prompt
+        // settlement marks the result handled and suppresses its continuation.
         const finishRegisteredBackgroundTool = Effect.fnUntraced(function* (mutation: {
           readonly taskId: string;
           readonly status: "completed" | "failed";
@@ -3588,7 +3587,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const tool = toolCallId === undefined ? undefined : context.tools.get(toolCallId);
           if (tool === undefined) return;
           const status = toolStatus(tool.status);
-          if (status !== "pending" && status !== "running") return;
+          if (
+            status !== "pending" &&
+            status !== "running" &&
+            !context.backgroundCommands.has(mutation.taskId)
+          ) {
+            return;
+          }
           context.awaitingBackgroundHydration.delete(mutation.taskId);
           const finished = { ...tool, status: mutation.status };
           yield* emitTool(
@@ -5544,12 +5549,37 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     yield* finishSubagentFromNotice(notice);
                   }),
                 ).pipe(Effect.asVoid),
-              applyBackgroundTaskMutation: (mutation) =>
+              applyBackgroundTaskMutation: (incoming) =>
                 runRuntimeCallbackAtGeneration(
                   handlerGeneration,
                   Effect.gen(function* () {
                     if (yield* Ref.get(stoppedRunQuarantine)) return;
-                    if ((yield* Ref.get(activeSessionId)) !== mutation.sessionId) return;
+                    if ((yield* Ref.get(activeSessionId)) !== incoming.sessionId) return;
+                    const context = yield* Ref.get(activeTurn);
+                    let mutation = incoming;
+                    if (
+                      incoming.status !== "running" &&
+                      context !== null &&
+                      !context.finalized &&
+                      (incoming.report?.kind === "command" ||
+                        context.backgroundCommands.has(incoming.taskId))
+                    ) {
+                      const previous = context.backgroundCommands.get(incoming.taskId);
+                      const toolCallId = context.toolCallIdsByBackgroundTaskId.get(incoming.taskId);
+                      const tool =
+                        toolCallId === undefined ? undefined : context.tools.get(toolCallId);
+                      const output =
+                        incoming.output ??
+                        previous?.output ??
+                        (tool === undefined ? undefined : toolOutputText(tool));
+                      // Missing exit codes decode as success; they cannot undo a known failure.
+                      const completion = {
+                        status: previous?.status === "failed" ? "failed" : incoming.status,
+                        ...(output === undefined ? {} : { output }),
+                      };
+                      context.backgroundCommands.set(incoming.taskId, completion);
+                      mutation = { ...incoming, ...completion };
+                    }
                     if (
                       mutation.status !== "running" &&
                       mutation.report !== undefined &&
@@ -5562,20 +5592,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     yield* applyLateBackgroundMutation(mutation.sessionId, mutation);
                     if (mutation.status !== "running") {
-                      const context = yield* Ref.get(activeTurn);
-                      if (
-                        context !== null &&
-                        !context.finalized &&
-                        (mutation.report?.kind === "command" ||
-                          (mutation.report === undefined &&
-                            context.backgroundCommandTaskIds.has(mutation.taskId)))
-                      ) {
-                        context.backgroundCommandCompletions.set(mutation.taskId, {
-                          ...context.backgroundCommandCompletions.get(mutation.taskId),
-                          status: mutation.status,
-                          ...(mutation.output === undefined ? {} : { output: mutation.output }),
-                        });
-                      }
                       yield* finishRegisteredBackgroundTool({
                         taskId: mutation.taskId,
                         status: mutation.status,
@@ -6576,8 +6592,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               subagentsBySessionId: new Map(),
               pendingSubagentNotifications: new Map(),
               toolCallIdsByBackgroundTaskId: new Map(),
-              backgroundCommandTaskIds: new Set(),
-              backgroundCommandCompletions: new Map(),
+              backgroundCommands: new Map(),
               persistentBackgroundTaskIds: new Set(),
               awaitingBackgroundHydration: new Set(),
               pendingInjectedReport: new Set(),
@@ -6735,7 +6750,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     if (flavor.deferFinalizeForBackgroundWork === true && !context.interrupted) {
                       context.promptSettled = true;
                       context.promptSettledStatus = status;
-                      for (const [taskId, completion] of context.backgroundCommandCompletions) {
+                      for (const [taskId, completion] of context.backgroundCommands) {
+                        if (completion === null) continue;
                         yield* finishRegisteredBackgroundTool({ taskId, ...completion });
                       }
                     }
