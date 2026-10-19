@@ -992,7 +992,7 @@ interface ActiveAcpTurn {
     | undefined;
   contextUsage: ThreadTokenUsageSnapshot | null;
   nativeMetadata: OrchestrationV2ProviderThreadNativeMetadata | null;
-  readonly tools: Map<string, AcpToolCallState>;
+  readonly tools: Map<string, AcpToolCallState & { readonly backgroundCommandTaskId?: string }>;
   readonly toolUpdatesSkipped: Map<string, number>;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
   readonly subagents: Map<string, ActiveAcpSubagent>;
@@ -2860,28 +2860,36 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const merged = mergeToolCallState(previous, incoming);
           const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
           const backgroundTaskId = flavor.extractBackgroundTaskId?.(normalized);
+          const backgroundCommandTaskId =
+            flavor.isBackgroundCommandTool?.(normalized) === true
+              ? backgroundTaskId
+              : previous?.backgroundCommandTaskId;
           if (
-            backgroundTaskId !== undefined &&
-            flavor.isBackgroundCommandTool?.(normalized) === true &&
-            !context.backgroundCommands.has(backgroundTaskId)
+            backgroundCommandTaskId !== undefined &&
+            !context.backgroundCommands.has(backgroundCommandTaskId)
           ) {
-            context.backgroundCommands.set(backgroundTaskId, null);
+            context.backgroundCommands.set(backgroundCommandTaskId, null);
           }
           const completion =
-            context.promptSettled && backgroundTaskId !== undefined
-              ? (context.backgroundCommands.get(backgroundTaskId) ?? undefined)
+            context.promptSettled && backgroundCommandTaskId !== undefined
+              ? (context.backgroundCommands.get(backgroundCommandTaskId) ?? undefined)
               : undefined;
-          // Replayed start ACKs must not replace an authoritative terminal result.
+          // Preserve hydrated output; only a replayed start ACK needs its output restored.
           const toolCall =
             completion === undefined
               ? normalized
               : {
-                  ...(completion.output === undefined
+                  ...(backgroundTaskId === undefined || completion.output === undefined
                     ? normalized
                     : setToolOutputText(normalized, completion.output)),
                   status: completion.status,
                 };
-          context.tools.set(toolCall.toolCallId, toolCall);
+          context.tools.set(
+            toolCall.toolCallId,
+            backgroundCommandTaskId === undefined
+              ? toolCall
+              : { ...toolCall, backgroundCommandTaskId },
+          );
           if (backgroundTaskId !== undefined) {
             context.toolCallIdsByBackgroundTaskId.set(backgroundTaskId, toolCall.toolCallId);
             if (flavor.isPersistentBackgroundTool?.(toolCall) === true) {
