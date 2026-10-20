@@ -418,8 +418,6 @@ export const ClientSettingsSchema = Schema.Struct({
   persistComposerContextStrip: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  // The thread details card opens on threads without an explicit choice.
-  // Off leaves that card closed until the user opens it.
   threadDetailsOpenByDefault: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 
   favorites: ModelFavorites.pipe(Schema.withDecodingDefault(Effect.succeed([]))),

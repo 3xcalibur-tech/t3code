@@ -31,10 +31,9 @@ applies to the web and desktop clients.
 
 ## Thread details
 
-The thread details card shows the workspace, scripts, and git actions at the top right of a thread.
-It opens for each thread until you choose otherwise. Turn off **Thread details** in **Settings →
-Appearance** to leave the card closed until you open it. The button at the top right, and its
-shortcut, still open and close the card. This preference applies to the web and desktop clients.
+Turn off **Thread details** in **Settings → Appearance** to leave the workspace card at the top
+right closed until you open it. The top-right button and its shortcut still toggle the card. This
+preference applies to the web and desktop clients.
 
 ## Math
 
