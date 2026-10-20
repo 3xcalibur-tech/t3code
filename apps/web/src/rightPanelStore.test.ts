@@ -798,6 +798,13 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().setThreadDetailsOpenByDefault(true);
     useRightPanelStore.getState().toggleThreadPanel(refB, "inline");
     expect(inline(refB, true)).toBe(false);
+
+    const refC = scopeThreadRef("env-1" as EnvironmentId, ThreadId.make("thread-C"));
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(true);
+    useRightPanelStore.getState().setThreadPanelOpen(refC, "inline", true);
+    await reloadRightPanelStore();
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(false);
+    expect(inline(refC, false)).toBe(true);
   });
 
   it("tracks inline and popover visibility independently", () => {

@@ -1098,7 +1098,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             state.threadDetailsOpenByDefault,
             (visibility) => {
               if (presentation === "inline") {
-                return visibility.inlineOpen === open
+                // Matching the inherited default is still an explicit choice.
+                return visibility.explicit && visibility.inlineOpen === open
                   ? visibility
                   : { ...visibility, inlineOpen: open, explicit: true };
               }
