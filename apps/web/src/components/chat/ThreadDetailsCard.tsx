@@ -47,10 +47,20 @@ export function ThreadDetailsCard({
   const mode = placement ? "inline" : "popover";
   const topInset = canvas?.detailsCardTopInset ?? 0;
   const inlineOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "inline"),
+    selectThreadPanelOpen(
+      state.threadPanelVisibilityByThreadKey,
+      threadRef,
+      "inline",
+      state.threadDetailsOpenByDefault,
+    ),
   );
   const popoverOpen = useRightPanelStore((state) =>
-    selectThreadPanelOpen(state.threadPanelVisibilityByThreadKey, threadRef, "popover"),
+    selectThreadPanelOpen(
+      state.threadPanelVisibilityByThreadKey,
+      threadRef,
+      "popover",
+      state.threadDetailsOpenByDefault,
+    ),
   );
   const [contentElement, setContentElement] = useState<HTMLDivElement | null>(null);
   const measurementKey = `${threadRef.environmentId}:${threadRef.threadId}:${preferredPlacement?.width ?? "popup"}`;

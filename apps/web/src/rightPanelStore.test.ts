@@ -25,6 +25,7 @@ beforeEach(() => {
   useRightPanelStore.setState({
     byThreadKey: {},
     threadPanelVisibilityByThreadKey: {},
+    threadDetailsOpenByDefault: true,
     userActionRevisionByThreadKey: {},
     closeRevisionByThreadKey: {},
   });
@@ -760,6 +761,63 @@ describe("rightPanelStore", () => {
         "env-1:thread-A": { inlineOpen: false, popoverOpen: false },
       },
     });
+  });
+
+  it("keeps an explicit open when new threads start with details closed", async () => {
+    const store = useRightPanelStore.getState();
+    store.setThreadDetailsOpenByDefault(false);
+
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+        "inline",
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refB,
+        "popover",
+        false,
+      ),
+    ).toBe(false);
+
+    store.setThreadPanelOpen(refA, "inline", true);
+    expect(
+      selectThreadPanelVisibility(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+        false,
+      ),
+    ).toEqual({ inlineOpen: true, popoverOpen: false });
+
+    await reloadRightPanelStore();
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(false);
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+        "inline",
+        false,
+      ),
+    ).toBe(true);
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refB,
+        "inline",
+        false,
+      ),
+    ).toBe(false);
+
+    useRightPanelStore.getState().setThreadPanelOpen(refA, "inline", false);
+    expect(
+      useRightPanelStore.getState().threadPanelVisibilityByThreadKey[
+        `${refA.environmentId}:${refA.threadId}`
+      ],
+    ).toBeUndefined();
   });
 
   it("tracks inline and popover visibility independently", () => {
