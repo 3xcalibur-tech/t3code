@@ -813,11 +813,42 @@ describe("rightPanelStore", () => {
     ).toBe(false);
 
     useRightPanelStore.getState().setThreadPanelOpen(refA, "inline", false);
+    const refAKey = `${refA.environmentId}:${refA.threadId}`;
+    expect(useRightPanelStore.getState().threadPanelVisibilityByThreadKey[refAKey]).toEqual({
+      inlineOpen: false,
+      popoverOpen: false,
+      inlineChosen: true,
+    });
+
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(true);
     expect(
-      useRightPanelStore.getState().threadPanelVisibilityByThreadKey[
-        `${refA.environmentId}:${refA.threadId}`
-      ],
-    ).toBeUndefined();
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+        "inline",
+        true,
+      ),
+    ).toBe(false);
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refB,
+        "inline",
+        true,
+      ),
+    ).toBe(true);
+
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(false);
+    useRightPanelStore.getState().open(refA, "diff");
+    useRightPanelStore.getState().setThreadDetailsOpenByDefault(true);
+    expect(
+      selectThreadPanelOpen(
+        useRightPanelStore.getState().threadPanelVisibilityByThreadKey,
+        refA,
+        "inline",
+        true,
+      ),
+    ).toBe(false);
   });
 
   it("tracks inline and popover visibility independently", () => {
